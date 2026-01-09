@@ -24,7 +24,7 @@ Key behaviors:
 
 ## Usage
 
-1. Open KOReader (no book required) or open the File Manager.
+1. Open KOReader.
 2. From the file cabinet menu select `Annotations`.
 3. Browse the list of annotations. Tap an item to view details and access actions:
    - Open book at annotation
