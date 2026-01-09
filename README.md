@@ -1,4 +1,4 @@
-# Annotations Viewer (All Notes) Plugin for KOReader
+# Annotations Viewer (All Notes & Highlights) Plugin for KOReader
 
 This plugin scans KOReader's stored annotations (highlights and notes) and provides a single unified interface to browse, filter and manage them across all books you've read.
 
