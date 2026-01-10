@@ -34,3 +34,7 @@ Key behaviors:
 
 Use the plugin Settings (accessible from the plugin menu) to adjust font sizes, margins, truncate length, justify text and other display preferences.
 
+## Screenshot
+
+![Annotations Viewer — All Notes & Highlights](Screenshots/Screenshot.png)
+
