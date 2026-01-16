@@ -2,6 +2,7 @@ local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
+local Event = require("ui/event")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
 local LeftContainer = require("ui/widget/container/leftcontainer")
@@ -1241,6 +1242,7 @@ function AllNotesViewer:updateHighlightStyle(note, new_style, parent_widget)
                 break
             end
         end
+        self.ui:handleEvent(Event:new("AnnotationsModified", { note }))
         parent_widget:refresh()
         UIManager:show(require("ui/widget/infomessage"):new{ text = _("Style updated."), timeout = 1 })
     end
@@ -1288,6 +1290,7 @@ function AllNotesViewer:updateHighlightColor(note, new_color, parent_widget)
                 break
             end
         end
+        self.ui:handleEvent(Event:new("AnnotationsModified", { note }))
         parent_widget:refresh()
         UIManager:show(require("ui/widget/infomessage"):new{ text = _("Color updated."), timeout = 1 })
     end
@@ -1348,6 +1351,7 @@ function AllNotesViewer:deleteAnnotation(note, parent_widget)
                 break
             end
         end
+        self.ui:handleEvent(Event:new("AnnotationsModified", { note }))
         parent_widget:refresh()
     end
 end
@@ -1426,6 +1430,7 @@ function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget)
                 break
             end
         end
+        self.ui:handleEvent(Event:new("AnnotationsModified", { note }))
         parent_widget:refresh()
         UIManager:show(require("ui/widget/infomessage"):new{ text = _("Note saved."), timeout = 1 })
     end
