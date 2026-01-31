@@ -28,53 +28,74 @@ local Device = require("device")
 local FontList = require("fontlist")
 local DocSettings = require("docsettings")
 local ReadHistory = require("readhistory")
-local G_reader_settings = require("luasettings"):open(require("datastorage"):getSettingsDir() .. "/settings.reader.lua")
+local G_reader_settings = require("luasettings"):open(require("datastorage"):getSettingsDir() .. "/settings.annotationsviewer.lua")
 local lfs = require("libs/libkoreader-lfs")
 local Font = require("ui/font")
 local Size = require("ui/size")
 local Geom = require("ui/geometry")
-local G_defaults = require("luadefaults"):open()
 local _ = require("gettext")
 local BD = require("ui/bidi")
-local DEFAULT_CONTENT_FONT_SIZE = 18
-local DEFAULT_TITLE_FONT_SIZE = 18
-local DEFAULT_INFO_FONT_SIZE = 15
-local DEFAULT_H_MARGIN = 30
-local DEFAULT_V_MARGIN = 20
+local DEFAULT_CONTENT_FONT_SIZE = 20
+local DEFAULT_TITLE_FONT_SIZE = 26
+local DEFAULT_INFO_FONT_SIZE = 17
+local DEFAULT_H_MARGIN = 50
 local DEFAULT_NOTE_SPACING = 30
 local DEFAULT_TEXT_MARGIN = 10
-local DEFAULT_TRUNCATE_WORDS = 60
+local DEFAULT_TRUNCATE_LINES = 5
 local DEFAULT_TITLE_MARGIN = 2
 local DEFAULT_INFO_MARGIN = 6
-local DEFAULT_CONTENT_MARGIN = 8
-local DEFAULT_TOP_PADDING = 0
+local DEFAULT_TOP_PADDING = 40
+local DEFAULT_PREVIEW_FUDGE = 5
 local function getSetting(key, default)
-    local val = G_reader_settings:readSetting("allnotesviewer_" .. key)
+    local val = G_reader_settings:readSetting("annotationsviewer_" .. key)
     if val == nil then return default end
+    if type(default) == "number" then
+        local nval = tonumber(val)
+        if nval == nil then return default end
+        return nval
+    end
     return val
 end
+
 local function setSetting(key, value)
-    G_reader_settings:saveSetting("allnotesviewer_" .. key, value)
+    G_reader_settings:saveSetting("annotationsviewer_" .. key, value)
     G_reader_settings:flush()
 end
-local function getContentFontSize() return getSetting("content_font_size", DEFAULT_CONTENT_FONT_SIZE) end
-local function getTitleFontSize() return getSetting("title_font_size", DEFAULT_TITLE_FONT_SIZE) end
-local function getInfoFontSize() return getSetting("info_font_size", DEFAULT_INFO_FONT_SIZE) end
+local function getContentFontSize()
+    local v = getSetting("content_font_size", DEFAULT_CONTENT_FONT_SIZE)
+    v = tonumber(v)
+    if not v or v <= 0 then return DEFAULT_CONTENT_FONT_SIZE end
+    return v
+end
+local function getTitleFontSize()
+    local v = getSetting("title_font_size", DEFAULT_TITLE_FONT_SIZE)
+    v = tonumber(v)
+    if not v or v <= 0 then return DEFAULT_TITLE_FONT_SIZE end
+    return v
+end
+local function getInfoFontSize()
+    local v = getSetting("info_font_size", DEFAULT_INFO_FONT_SIZE)
+    v = tonumber(v)
+    if not v or v <= 0 then return DEFAULT_INFO_FONT_SIZE end
+    return v
+end
 local function getHMargin() return Screen:scaleBySize(getSetting("h_margin", DEFAULT_H_MARGIN)) end
-local function getVMargin() return Screen:scaleBySize(getSetting("v_margin", DEFAULT_V_MARGIN)) end
 local function getNoteSpacing() return Screen:scaleBySize(getSetting("note_spacing", DEFAULT_NOTE_SPACING)) end
 local function getTextMargin() return Screen:scaleBySize(getSetting("text_margin", DEFAULT_TEXT_MARGIN)) end
-local function getTruncateWords() return getSetting("truncate_words", DEFAULT_TRUNCATE_WORDS) end
-local function getShowSeparator() return getSetting("show_separator", true) end
+local preview_truncate_lines = nil
+local function getTruncateLines()
+    if preview_truncate_lines then return preview_truncate_lines end
+    return getSetting("truncate_lines", DEFAULT_TRUNCATE_LINES)
+end
 local function getJustify() return getSetting("justify", false) end
 local function getTitleMargin() return Screen:scaleBySize(getSetting("title_margin", DEFAULT_TITLE_MARGIN)) end
 local function getInfoMargin() return Screen:scaleBySize(getSetting("info_margin", DEFAULT_INFO_MARGIN)) end
-local function getContentMargin() return Screen:scaleBySize(getSetting("content_margin", DEFAULT_CONTENT_MARGIN)) end
 local function getTitleFont() return getSetting("title_font", nil) end
 local function getInfoFont() return getSetting("info_font", nil) end
 local function getContentFont() return getSetting("content_font", nil) end
 local function getShowTotalNotes() return getSetting("show_total", true) end
 local function getTopPadding() return Screen:scaleBySize(getSetting("top_padding", DEFAULT_TOP_PADDING)) end
+local function getPreviewFudge() return tonumber(getSetting("preview_fudge", DEFAULT_PREVIEW_FUDGE)) end
 local HIGHLIGHT_COLORS = {
     yellow = Blitbuffer.colorFromString("#FFFF00"),
     green = Blitbuffer.colorFromString("#00FF00"),
@@ -196,14 +217,13 @@ function UnderlineWidget:init() self.dimen = Geom:new{ w = self.width, h = self.
 function UnderlineWidget:paintTo(bb, x, y)
     bb:paintRect(x, y + self.height - 2, self.width, 2, Blitbuffer.COLOR_BLACK)
 end
-local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_parent = nil, is_last = false }
+local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_parent = nil, is_last = false, is_preview = false, disable_tap = false }
 function NoteItemWidget:init()
     local h_margin = getHMargin()
     local text_margin = getTextMargin()
     local note_spacing = getNoteSpacing()
     local title_margin = getTitleMargin()
     local info_margin = getInfoMargin()
-    local content_margin = getContentMargin()
     local inner_width = self.width - h_margin * 2
     self.dimen = Geom:new{ w = self.width, h = 0 }
 
@@ -217,7 +237,7 @@ function NoteItemWidget:init()
     local title_text = self.note.book_title or "Unknown"
 
     local title_font = getTitleFont()
-    local title_face = title_font and Font:getFace(title_font, title_font_size) or Font:getFace("cfont", title_font_size)
+    local title_face = (title_font and title_font ~= "" and Font:getFace(title_font, title_font_size)) or Font:getFace("cfont", title_font_size)
     local title_widget = TextBoxWidget:new{
         text = title_text, face = title_face,
         width = content_width, alignment = "left", bold = true,
@@ -234,7 +254,7 @@ function NoteItemWidget:init()
     local info_text = table.concat(info_parts, " | ")
 
     local info_font = getInfoFont()
-    local info_face = info_font and Font:getFace(info_font, info_font_size) or Font:getFace("cfont", info_font_size)
+    local info_face = (info_font and info_font ~= "" and Font:getFace(info_font, info_font_size)) or Font:getFace("cfont", info_font_size)
     local date_widget = TextBoxWidget:new{
         text = info_text, face = info_face,
         width = content_width, alignment = "left",
@@ -255,14 +275,11 @@ function NoteItemWidget:init()
     end
 
     local content_font = getContentFont()
-    local content_face = content_font and Font:getFace(content_font, content_font_size) or Font:getFace("cfont", content_font_size)
+    local content_face = (content_font and content_font ~= "" and Font:getFace(content_font, content_font_size)) or Font:getFace("cfont", content_font_size)
     local text_content_width = content_width - text_margin * 2
     local line_width = text_content_width - Size.padding.small * 2
 
     local note_content = VerticalGroup:new{ align = "left" }
-    if not self.is_first then
-        table.insert(note_content, VerticalSpan:new{ width = note_spacing })
-    end
     table.insert(note_content, LeftContainer:new{
         dimen = Geom:new{ w = inner_width, h = title_widget:getSize().h },
         HorizontalGroup:new{ HorizontalSpan:new{ width = h_padding }, title_widget },
@@ -276,20 +293,58 @@ function NoteItemWidget:init()
     end
     table.insert(note_content, VerticalSpan:new{ width = info_margin })
 
-    -- Render highlight text with style
+    
     if self.note.highlighted_text and self.note.highlighted_text ~= "" then
-        local highlight_text = truncateText(self.note.highlighted_text, getTruncateWords())
-        local lines = wrapText(highlight_text, content_face, line_width)
-        local lines_group = VerticalGroup:new{ align = "left" }
+        
+        local full_lines = wrapText(self.note.highlighted_text or "", content_face, line_width)
+        local max_lines = getTruncateLines() or math.huge
+        local truncated = false
+        local lines = full_lines
+        local last_line_no_ell
+        local ell = "..."
+        if #full_lines > max_lines then
+            truncated = true
+            lines = {}
+            for i = 1, max_lines do lines[i] = full_lines[i] end
+            
+            local last = lines[#lines] or ""
+            local tw = TextWidget:new{ text = last .. ell, face = content_face }
+            while tw:getSize().w > line_width and #last > 0 do
+                tw:free()
+                last = last:sub(1, -2)
+                tw = TextWidget:new{ text = last .. ell, face = content_face }
+            end
+            tw:free()
+            last_line_no_ell = last
+        end
 
+        local lines_group = VerticalGroup:new{ align = "left" }
         for i, line in ipairs(lines) do
             local line_widget
-            if justify == true and i < #lines and #lines > 1 then
-                line_widget = createJustifiedLine(line, content_face, line_width, text_fgcolor)
+            local is_last = (i == #lines)
+            if is_last and truncated then
+                
+                if justify == true and (#lines > 1 or true) then
+                    
+                    local ell_meas = TextWidget:new{ text = ell, face = content_face }
+                    local ell_w = ell_meas:getSize().w
+                    ell_meas:free()
+                    if last_line_no_ell and #last_line_no_ell > 0 then
+                        local justified_part = createJustifiedLine(last_line_no_ell, content_face, math.max(0, line_width - ell_w), text_fgcolor)
+                        local ell_widget = TextWidget:new{ text = ell, face = content_face, fgcolor = text_fgcolor }
+                        line_widget = HorizontalGroup:new{ justified_part, ell_widget }
+                    else
+                        line_widget = TextWidget:new{ text = ell, face = content_face, fgcolor = text_fgcolor }
+                    end
+                else
+                    line_widget = TextWidget:new{ text = (last_line_no_ell or line) .. ell, face = content_face, fgcolor = text_fgcolor }
+                end
             else
-                line_widget = TextWidget:new{
-                    text = line, face = content_face, fgcolor = text_fgcolor,
-                }
+                if justify == true and i < #lines and #lines > 1 then
+                    line_widget = createJustifiedLine(line, content_face, line_width, text_fgcolor)
+                else
+                    line_widget = TextWidget:new{ text = line, face = content_face, fgcolor = text_fgcolor }
+                end
             end
             local line_size = line_widget:getSize()
             local v_pad = 1
@@ -307,20 +362,12 @@ function NoteItemWidget:init()
                     },
                 }
                 if show_strikeout then
-                    table.insert(overlap_items, StrikeoutLineWidget:new{
-                        width = total_w, height = total_h,
-                        y_offset = math.floor(total_h / 2),
-                    })
+                    table.insert(overlap_items, StrikeoutLineWidget:new{ width = total_w, height = total_h, y_offset = math.floor(total_h / 2) })
                 end
                 if show_underline then
-                    table.insert(overlap_items, UnderlineWidget:new{
-                        width = total_w, height = total_h,
-                    })
+                    table.insert(overlap_items, UnderlineWidget:new{ width = total_w, height = total_h })
                 end
-                line_container = OverlapGroup:new{
-                    dimen = Geom:new{ w = total_w, h = total_h },
-                    unpack(overlap_items),
-                }
+                line_container = OverlapGroup:new{ dimen = Geom:new{ w = total_w, h = total_h }, unpack(overlap_items) }
             else
                 line_container = FrameContainer:new{
                     padding = v_pad, padding_left = h_pad, padding_right = h_pad,
@@ -338,11 +385,10 @@ function NoteItemWidget:init()
         })
     end
 
-    -- Render note text with pen icon (using bookmark-style pencil character)
     if self.note.user_note and self.note.user_note ~= "" then
         table.insert(note_content, VerticalSpan:new{ width = Screen:scaleBySize(8) })
 
-        local note_icon_char = "\u{F040}" -- Font Awesome pencil icon (same as bookmark note prefix)
+        local note_icon_char = "\u{F040}"
         local icon_margin = Screen:scaleBySize(6)
         local note_icon = TextWidget:new{
             text = note_icon_char,
@@ -351,7 +397,6 @@ function NoteItemWidget:init()
         }
         local icon_size = note_icon:getSize().w
 
-        -- Calculate text width accounting for icon and margin
         local note_text_width = line_width - icon_size - icon_margin
         local note_lines = wrapText(self.note.user_note, content_face, note_text_width)
         local note_text_group = VerticalGroup:new{ align = "left" }
@@ -362,7 +407,7 @@ function NoteItemWidget:init()
             table.insert(note_text_group, line_widget)
         end
 
-        -- Icon on left, text on right
+                
         local note_row = HorizontalGroup:new{
             note_icon,
             HorizontalSpan:new{ width = icon_margin },
@@ -374,23 +419,17 @@ function NoteItemWidget:init()
         })
     end
 
-    table.insert(note_content, VerticalSpan:new{ width = content_margin })
-
-    table.insert(note_content, VerticalSpan:new{ width = note_spacing })
-    local separator = LineWidget:new{
-        dimen = Geom:new{ w = inner_width, h = Size.line.thin },
-        background = getShowSeparator() == true and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE,
-    }
-    table.insert(note_content, CenterContainer:new{
-        dimen = Geom:new{ w = inner_width, h = separator:getSize().h },
-        separator,
-    })
+    
 
     self.dimen.h = note_content:getSize().h
     self[1] = HorizontalGroup:new{
         HorizontalSpan:new{ width = h_margin }, note_content, HorizontalSpan:new{ width = h_margin },
     }
-    self.ges_events = { Tap = { GestureRange:new{ ges = "tap", range = self.dimen } } }
+
+    
+    if not self.is_preview and not self.disable_tap then
+        self.ges_events = { Tap = { GestureRange:new{ ges = "tap", range = self.dimen } } }
+    end
 end
 function NoteItemWidget:formatDate(datetime)
     if not datetime or datetime == "" then return nil end
@@ -416,7 +455,7 @@ function NotesListWidget:init()
     self.width = Screen:getWidth()
     self.height = Screen:getHeight()
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    -- Get actual titlebar height from a temp TitleBar with same settings
+    
     local temp_title = TitleBar:new{
         title = "temp",
         width = self.width,
@@ -431,11 +470,10 @@ function NotesListWidget:init()
         close_callback = function() end,
     }
     self.title_height = temp_title:getHeight()
-    -- Create temp page_info to get actual height like KeyValuePage
     local temp_button = Button:new{ icon = "chevron.first", bordersize = 0 }
     self.footer_height = temp_button:getSize().h
     temp_button:free()
-    self.content_height = self.height - self.title_height - self.footer_height - getVMargin() * 2 - getTopPadding()
+    self.content_height = self.height - self.title_height - self.footer_height
     self:applyFilter()
     self:calculatePages()
     self:updatePage()
@@ -457,9 +495,27 @@ function NotesListWidget:applyFilter()
     for _, note in ipairs(self.notes_list) do
         local match = true
         if self.active_filter then
-            if self.active_filter.type == "color" then
+            if self.active_filter.books and next(self.active_filter.books) ~= nil then
+                match = self.active_filter.books[note.book_title] == true
+            end
+            if match and self.active_filter.tags and next(self.active_filter.tags) ~= nil then
+                local note_tags = note.tags or note.keywords or ""
+                local found = false
+                if type(note_tags) == "string" then
+                    for tag in note_tags:gmatch("[^,;\n|\t]+") do
+                        tag = tag:match("^%s*(.-)%s*$")
+                        if self.active_filter.tags[tag] then found = true break end
+                    end
+                elseif type(note_tags) == "table" then
+                    for _, tag in ipairs(note_tags) do
+                        if self.active_filter.tags[tag] then found = true break end
+                    end
+                end
+                match = found
+            end
+            if match and self.active_filter.type == "color" then
                 match = note.color and note.color:lower() == self.active_filter.value
-            elseif self.active_filter.type == "style" then
+            elseif match and self.active_filter.type == "style" then
                 match = note.drawer and note.drawer:lower() == self.active_filter.value
             end
         end
@@ -468,13 +524,18 @@ function NotesListWidget:applyFilter()
 end
 function NotesListWidget:calculatePages()
     self.pages = {}
+    local note_spacing = getNoteSpacing()
     local current_page_notes, current_height = {}, 0
+    
+    local effective_content_height = self.content_height + getPreviewFudge()
     for i, note in ipairs(self.filtered_notes) do
         local temp_widget = NoteItemWidget:new{ width = self.width, note = note, show_parent = self }
         local item_height = temp_widget.dimen.h
-        if current_height + item_height <= self.content_height then
+        local spacing = (#current_page_notes > 0) and note_spacing or 0
+        local next_height = current_height + spacing + item_height
+        if next_height <= effective_content_height then
+            current_height = next_height
             table.insert(current_page_notes, i)
-            current_height = current_height + item_height
         else
             if #current_page_notes > 0 then table.insert(self.pages, current_page_notes) end
             current_page_notes = {i}
@@ -541,36 +602,65 @@ function NotesListWidget:createFooter()
         self.page_info_last_chev,
     }
 
-    -- ProjectTitle style: 98% width RightContainer inside BottomContainer
+
     local page_info_container = RightContainer:new{
         dimen = Geom:new{ w = math.floor(self.width * 0.98), h = self.page_info:getSize().h },
         self.page_info,
     }
 
+    local FrameContainer = require("ui/widget/container/framecontainer")
     return BottomContainer:new{
         dimen = Geom:new{ w = self.width, h = self.height },
-        page_info_container,
+        FrameContainer:new{
+            width = self.width,
+            height = page_info_container:getSize().h,
+            padding = 0,
+            margin = 0,
+            bordersize = 0,
+            background = Blitbuffer.COLOR_WHITE,
+            page_info_container,
+        },
     }
 end
 function NotesListWidget:updatePage()
-    local v_margin = getVMargin()
+    self.width = Screen:getWidth()
+    self.height = Screen:getHeight()
+    local temp_title = TitleBar:new{
+        title = "temp",
+        width = self.width,
+        fullscreen = true,
+        with_bottom_line = false,
+        title_top_padding = Screen:scaleBySize(10),
+        bottom_v_padding = 0,
+        left_icon_size_ratio = 1,
+        right_icon_size_ratio = 1,
+        button_padding = Screen:scaleBySize(5),
+        left_icon = "appbar.menu",
+        close_callback = function() end,
+    }
+    self.title_height = temp_title:getHeight()
+    local temp_button = Button:new{ icon = "chevron.first", bordersize = 0 }
+    self.footer_height = temp_button:getSize().h
+    temp_button:free()
+    self.content_height = self.height - self.title_height - self.footer_height
+    
     local filter_text = ""
     if self.active_filter then
-        if self.active_filter.type == "color" then
-            filter_text = " [" .. getColorName(self.active_filter.value) .. "]"
-        else
-            filter_text = " [" .. getStyleName(self.active_filter.value) .. "]"
+        if self.active_filter.type == "color" and self.active_filter.value then
+            filter_text = " [" .. (getColorName(self.active_filter.value) or tostring(self.active_filter.value)) .. "]"
+        elseif self.active_filter.type == "style" and self.active_filter.value then
+            filter_text = " [" .. (getStyleName(self.active_filter.value) or tostring(self.active_filter.value)) .. "]"
         end
     end
-    
+
     local title_text
     if getShowTotalNotes() == true then
-        title_text = string.format(_("Annotations (%d)%s"), #self.filtered_notes, filter_text)
+            title_text = string.format(_("Annotations (%d)%s"), #self.filtered_notes, filter_text)
     else
         title_text = _("Annotations") .. filter_text
     end
+
     
-    -- TitleBar with adjusted padding for proper height
     local title_bar = TitleBar:new{
         title = title_text,
         fullscreen = true,
@@ -592,27 +682,74 @@ function NotesListWidget:updatePage()
     if top_padding > 0 then
         table.insert(notes_group, VerticalSpan:new{ width = top_padding })
     end
-    table.insert(notes_group, VerticalSpan:new{ width = v_margin })
+    
+
     local page_indices = self.pages[self.current_page] or {}
-        for i, idx in ipairs(page_indices) do
-            local note = self.filtered_notes[idx]
-            if note then
-                local is_last = (i == #page_indices)
-                local is_first = (i == 1)
-                table.insert(notes_group, NoteItemWidget:new{ width = self.width, note = note, show_parent = self, is_last = is_last, is_first = is_first })
+    local last_note_widget = nil
+    local note_spacing = getNoteSpacing()
+    for i, idx in ipairs(page_indices) do
+        local note = self.filtered_notes[idx]
+        if note then
+            if i > 1 then
+                table.insert(notes_group, VerticalSpan:new{ width = note_spacing })
             end
+            local note_widget = NoteItemWidget:new{ width = self.width, note = note, show_parent = self }
+            table.insert(notes_group, note_widget)
+            if i == #page_indices then last_note_widget = note_widget end
+        end
     end
-    table.insert(notes_group, VerticalSpan:new{ width = v_margin })
+
     
+    if last_note_widget and self.current_page < self.total_pages then
+        local next_page_indices = self.pages[self.current_page + 1]
+        if next_page_indices and #next_page_indices > 0 then
+            local next_note_idx = next_page_indices[1]
+            local next_note = self.filtered_notes[next_note_idx]
+            if next_note then
+                local used_height = 0
+                for _, w in ipairs(notes_group) do
+                    if w.getSize then used_height = used_height + w:getSize().h end
+                end
+                local available_height = self.height - self.title_height - self.footer_height - used_height - 2
+                local preview_widget = NoteItemWidget:new{
+                    width = self.width,
+                    note = next_note,
+                    show_parent = self,
+                    is_preview = true,
+                    disable_tap = true
+                }
+                local FrameContainer = require("ui/widget/container/framecontainer")
+                local AlphaContainer = require("ui/widget/container/alphacontainer")
+                local bordered_preview = FrameContainer:new{
+                    width = self.width,
+                    height = available_height,
+                    padding = 0,
+                    margin = 0,
+                    bordersize = 0,
+                    preview_widget
+                }
+                local alpha_preview = AlphaContainer:new{
+                    alpha = 0.2,
+                    bordered_preview
+                }
+                -- Always add note_spacing before the preview
+                table.insert(notes_group, VerticalSpan:new{ width = note_spacing })
+                table.insert(notes_group, alpha_preview)
+            end
+        end
+    end
+
+    
+
     local footer = self:createFooter()
-    
+
     local content = OverlapGroup:new{
         allow_mirroring = false,
         dimen = Geom:new{ w = self.width, h = self.height },
         VerticalGroup:new{
             align = "left",
             title_bar,
-            TopContainer:new{ dimen = Geom:new{ w = self.width, h = self.content_height + v_margin * 2 + getTopPadding() }, notes_group },
+            TopContainer:new{ dimen = Geom:new{ w = self.width, h = self.content_height }, notes_group },
         },
         footer,
     }
@@ -640,8 +777,7 @@ function NotesListWidget:showMainMenu()
     UIManager:show(self.main_menu)
 end
 function NotesListWidget:showSettingsMenu()
-    local show_sep = getShowSeparator()
-    local sep_text = show_sep == true and "On" or "Off"
+    
     local justify_text = getJustify() == true and "On" or "Off"
     local show_total_text = getShowTotalNotes() == true and "On" or "Off"
     
@@ -662,19 +798,13 @@ function NotesListWidget:showSettingsMenu()
             UIManager:close(self.settings_dialog)
             self:showMarginMenu()
         end }},
-        {{ text = _("Truncate Words: ") .. getTruncateWords(), callback = function()
+        {{ text = _("Truncate Lines: ") .. getTruncateLines(), callback = function()
             UIManager:close(self.settings_dialog)
-            self:showSpinSetting(_("Truncate Words"), "truncate_words", DEFAULT_TRUNCATE_WORDS, 10, 200, 10, function() self:showSettingsMenu() end)
+            self:showSpinSetting(_("Truncate Lines"), "truncate_lines", DEFAULT_TRUNCATE_LINES, 1, 20, 1, function() self:showSettingsMenu() end)
         end }},
         {{ text = _("Justify Text: ") .. justify_text, callback = function()
             UIManager:close(self.settings_dialog)
             setSetting("justify", not (getJustify() == true))
-            self:refresh()
-            self:showSettingsMenu()
-        end }},
-        {{ text = _("Note Separator: ") .. sep_text, callback = function()
-            UIManager:close(self.settings_dialog)
-            setSetting("show_separator", not (show_sep == true))
             self:refresh()
             self:showSettingsMenu()
         end }},
@@ -803,10 +933,6 @@ function NotesListWidget:showSectionMarginMenu()
             UIManager:close(self.section_margin_dialog)
             self:showSpinSetting(_("Margin After Info"), "info_margin", DEFAULT_INFO_MARGIN, 0, 30, 1, function() self:showSectionMarginMenu() end)
         end }},
-        {{ text = _("After Content: ") .. getSetting("content_margin", DEFAULT_CONTENT_MARGIN), callback = function()
-            UIManager:close(self.section_margin_dialog)
-            self:showSpinSetting(_("Margin After Content"), "content_margin", DEFAULT_CONTENT_MARGIN, 0, 30, 1, function() self:showSectionMarginMenu() end)
-        end }},
         {{ text = _("Back"), callback = function()
             UIManager:close(self.section_margin_dialog)
             self:showSettingsMenu()
@@ -825,10 +951,6 @@ function NotesListWidget:showMarginMenu()
             UIManager:close(self.margin_dialog)
             self:showSpinSetting(_("Horizontal Margin"), "h_margin", DEFAULT_H_MARGIN, 5, 60, 5, function() self:showMarginMenu() end)
         end }},
-        {{ text = _("Vertical Margin: ") .. getSetting("v_margin", DEFAULT_V_MARGIN), callback = function()
-            UIManager:close(self.margin_dialog)
-            self:showSpinSetting(_("Vertical Margin"), "v_margin", DEFAULT_V_MARGIN, 5, 40, 5, function() self:showMarginMenu() end)
-        end }},
         {{ text = _("Note Spacing: ") .. getSetting("note_spacing", DEFAULT_NOTE_SPACING), callback = function()
             UIManager:close(self.margin_dialog)
             self:showSpinSetting(_("Note Spacing"), "note_spacing", DEFAULT_NOTE_SPACING, 5, 100, 2, function() self:showMarginMenu() end)
@@ -836,6 +958,10 @@ function NotesListWidget:showMarginMenu()
         {{ text = _("Text Margin: ") .. getSetting("text_margin", DEFAULT_TEXT_MARGIN), callback = function()
             UIManager:close(self.margin_dialog)
             self:showSpinSetting(_("Text Margin"), "text_margin", DEFAULT_TEXT_MARGIN, 0, 30, 2, function() self:showMarginMenu() end)
+        end }},
+        {{ text = _("Preview Fudge: ") .. getPreviewFudge(), callback = function()
+            UIManager:close(self.margin_dialog)
+            self:showSpinSetting(_("Preview Fudge"), "preview_fudge", DEFAULT_PREVIEW_FUDGE, 0, 40, 1, function() self:showMarginMenu() end)
         end }},
         {{ text = _("Back"), callback = function()
             UIManager:close(self.margin_dialog)
@@ -861,65 +987,213 @@ function NotesListWidget:showSpinSetting(title, key, default, min, max, step, ba
     })
 end
 function NotesListWidget:showFilterMenu()
+    local ButtonDialog = require("ui/widget/buttondialog")
     local RadioButtonWidget = require("ui/widget/radiobuttonwidget")
-    local colors, styles = {}, {}
-    for _, note in ipairs(self.notes_list) do
-        if note.color then colors[note.color:lower()] = true end
-        if note.drawer then styles[note.drawer:lower()] = true end
-    end
-    local color_map = {
-        { "yellow", _("Yellow"), "#FFFF00" },
-        { "green", _("Green"), "#00FF00" },
-        { "blue", _("Blue"), "#0000FF" },
-        { "pink", _("Pink"), "#FF00FF" },
-        { "orange", _("Orange"), "#FFA500" },
-        { "red", _("Red"), "#FF0000" },
-        { "cyan", _("Cyan"), "#00FFFF" },
-        { "purple", _("Purple"), "#800080" },
-        { "gray", _("Gray"), "#808080" },
-    }
-    local radio_buttons = {}
-    local curr_type = self.active_filter and self.active_filter.type or nil
-    local curr_val = self.active_filter and self.active_filter.value or nil
-    -- Add style options
-    for style, _ in pairs(styles) do
-        local name = getStyleName(style)
-        table.insert(radio_buttons, {
-            { text = name or style, checked = curr_type == "style" and curr_val == style,
-              provider = { type = "style", value = style } },
-        })
-    end
-    -- Add color options with actual colors
-    for _, c in ipairs(color_map) do
-        if colors[c[1]] then
-            table.insert(radio_buttons, {
-                { text = c[2], checked = curr_type == "color" and curr_val == c[1],
-                  bgcolor = Blitbuffer.colorFromString(c[3]),
-                  provider = { type = "color", value = c[1] } },
+    local function showBookFilter()
+        local books = {}
+        for _, note in ipairs(self.notes_list) do
+            if note.book_title then books[note.book_title] = true end
+        end
+        local curr_books = self.active_filter and self.active_filter.books or {}
+        local book_titles = {}
+        for title in pairs(books) do table.insert(book_titles, title) end
+        table.sort(book_titles)
+        local dialog
+        local function toggle_book(title)
+            if not self.active_filter or type(self.active_filter) ~= "table" then self.active_filter = {} end
+            if not self.active_filter.books then self.active_filter.books = {} end
+            if self.active_filter.books[title] then
+                self.active_filter.books[title] = nil
+            else
+                self.active_filter.books[title] = true
+            end
+            UIManager:close(dialog)
+            showBookFilter()
+        end
+        local book_buttons = {}
+        for _, title in ipairs(book_titles) do
+            local checked = curr_books and curr_books[title] or false
+            local mark = checked and "[x] " or "[ ] "
+            table.insert(book_buttons, {
+                { text = mark .. title, callback = function() toggle_book(title) end },
             })
         end
+        table.insert(book_buttons, {
+            { text = _( "Apply Book Filter" ), callback = function()
+                UIManager:close(dialog)
+                self:refresh()
+            end },
+        })
+        table.insert(book_buttons, {
+            { text = _( "Clear Book Filter" ), callback = function()
+                if not self.active_filter then self.active_filter = {} end
+                self.active_filter.books = nil
+                UIManager:close(dialog)
+                self:refresh()
+            end },
+        })
+        dialog = ButtonDialog:new{
+            title = _( "Filter by Book" ),
+            buttons = book_buttons,
+            width_factor = 0.7,
+        }
+        UIManager:show(dialog)
     end
-    -- Add clear option
-    table.insert(radio_buttons, {
-        { text = _("Clear Filter"), checked = curr_type == nil, provider = nil },
-    })
-    UIManager:show(RadioButtonWidget:new{
-        title_text = _("Filter Annotations"),
-        width_factor = 0.6,
-        radio_buttons = radio_buttons,
-        callback = function(radio)
-            self.active_filter = radio.provider
+
+    local function showTagsFilter()
+        local tags = {}
+        for _, note in ipairs(self.notes_list) do
+            local note_tags = note.tags or note.keywords or {}
+            if type(note_tags) == "string" then
+                for tag in note_tags:gmatch("[^,;\n|\t]+") do
+                    tag = tag:match("^%s*(.-)%s*$")
+                    if tag ~= "" then tags[tag] = true end
+                end
+            elseif type(note_tags) == "table" then
+                for _, tag in ipairs(note_tags) do
+                    if tag ~= "" then tags[tag] = true end
+                end
+            end
+        end
+        local curr_tags = self.active_filter and self.active_filter.tags or {}
+        local tag_list = {}
+        for tag in pairs(tags) do table.insert(tag_list, tag) end
+        table.sort(tag_list)
+        local dialog
+        local function toggle_tag(tag)
+            if not self.active_filter or type(self.active_filter) ~= "table" then self.active_filter = {} end
+            if not self.active_filter.tags then self.active_filter.tags = {} end
+            if self.active_filter.tags[tag] then
+                self.active_filter.tags[tag] = nil
+            else
+                self.active_filter.tags[tag] = true
+            end
+            UIManager:close(dialog)
+            showTagsFilter()
+        end
+        local tag_buttons = {}
+        for _, tag in ipairs(tag_list) do
+            local checked = curr_tags and curr_tags[tag] or false
+            local mark = checked and "[x] " or "[ ] "
+            table.insert(tag_buttons, {
+                { text = mark .. tag, callback = function() toggle_tag(tag) end },
+            })
+        end
+        table.insert(tag_buttons, {
+            { text = _( "Apply Tags Filter" ), callback = function()
+                UIManager:close(dialog)
+                self:refresh()
+            end },
+        })
+        table.insert(tag_buttons, {
+            { text = _( "Clear Tags Filter" ), callback = function()
+                if not self.active_filter then self.active_filter = {} end
+                self.active_filter.tags = nil
+                UIManager:close(dialog)
+                self:refresh()
+            end },
+        })
+        dialog = ButtonDialog:new{
+            title = _( "Filter by Tags" ),
+            buttons = tag_buttons,
+            width_factor = 0.7,
+        }
+        UIManager:show(dialog)
+    end
+
+    local function showColorStyleFilter()
+        local colors, styles = {}, {}
+        for _, note in ipairs(self.notes_list) do
+            if note.color then colors[note.color:lower()] = true end
+            if note.drawer then styles[note.drawer:lower()] = true end
+        end
+        local color_map = {
+            { "yellow", _( "Yellow" ), "#FFFF00" },
+            { "green", _( "Green" ), "#00FF00" },
+            { "blue", _( "Blue" ), "#0000FF" },
+            { "pink", _( "Pink" ), "#FF00FF" },
+            { "orange", _( "Orange" ), "#FFA500" },
+            { "red", _( "Red" ), "#FF0000" },
+            { "cyan", _( "Cyan" ), "#00FFFF" },
+            { "purple", _( "Purple" ), "#800080" },
+            { "gray", _( "Gray" ), "#808080" },
+        }
+        local curr_type = self.active_filter and self.active_filter.type or nil
+        local curr_val = self.active_filter and self.active_filter.value or nil
+        local radio_buttons = {}
+        for style, _ in pairs(styles) do
+            local name = getStyleName(style)
+            table.insert(radio_buttons, {
+                { text = name or style, checked = curr_type == "style" and curr_val == style,
+                  provider = { type = "style", value = style } },
+            })
+        end
+        for _, c in ipairs(color_map) do
+            if colors[c[1]] then
+                table.insert(radio_buttons, {
+                    { text = c[2], checked = curr_type == "color" and curr_val == c[1],
+                      bgcolor = Blitbuffer.colorFromString(c[3]),
+                      provider = { type = "color", value = c[1] } },
+                })
+            end
+        end
+        table.insert(radio_buttons, {
+            { text = _( "Clear Filter" ), checked = curr_type == nil, provider = nil },
+        })
+        UIManager:show(RadioButtonWidget:new{
+            title_text = _( "Filter by Color/Style" ),
+            width_factor = 0.6,
+            radio_buttons = radio_buttons,
+            callback = function(radio)
+                self.active_filter = self.active_filter or {}
+                if radio.provider then
+                    self.active_filter.type = radio.provider.type
+                    self.active_filter.value = radio.provider.value
+                else
+                    self.active_filter.type = nil
+                    self.active_filter.value = nil
+                end
+                self:refresh()
+            end,
+            colorful = true,
+            dithered = true,
+        })
+    end
+
+    local main_buttons = {
+        {{ text = _("Filter by Book"), callback = function()
+            showBookFilter()
+        end }},
+        {{ text = _("Filter by Tags"), callback = function()
+            showTagsFilter()
+        end }},
+        {{ text = _("Filter by Color/Style"), callback = function()
+            showColorStyleFilter()
+        end }},
+        {{ text = _("Clear All Filters"), callback = function()
+            self.active_filter = {}
             self:refresh()
-        end,
-        colorful = true,
-        dithered = true,
-    })
+        end }},
+        {{ text = _("Back"), callback = function()
+            if self.filter_dialog then
+                UIManager:close(self.filter_dialog)
+            end
+            self:showMainMenu()
+        end }},
+    }
+    self.filter_dialog = ButtonDialog:new{
+        title = _("Annotation Filters"),
+        buttons = main_buttons,
+        width_factor = 0.7,
+    }
+    UIManager:show(self.filter_dialog)
 end
 function NotesListWidget:refresh()
-    self.content_height = self.height - self.title_height - self.footer_height - getVMargin() * 2 - getTopPadding()
-    self.current_page = 1
+    self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
+    local prev_page = self.current_page or 1
     self:applyFilter()
     self:calculatePages()
+    self.current_page = math.max(1, math.min(prev_page, self.total_pages or 1))
     self:updatePage()
 end
 function NotesListWidget:onGotoNextPage()
@@ -945,7 +1219,11 @@ function NotesListWidget:onSwipe(_, ges)
     elseif ges.direction == "east" then return self:onGotoPrevPage()
     end
 end
-function NotesListWidget:onNoteSelected(note) self.viewer:showNoteDetails(note, self) end
+function NotesListWidget:onNoteSelected(note)
+    if self.viewer and self.viewer.showNoteDetails then
+        self.viewer:showNoteDetails(note, self)
+    end
+end
 function NotesListWidget:onClose() UIManager:close(self) return true end
 local AllNotesViewer = WidgetContainer:extend{ name = "allnotesviewer", is_doc_only = false }
 AllNotesViewer.is_doc_only = false
@@ -957,7 +1235,7 @@ function AllNotesViewer:init()
         title = _("Show all annotations"),
         filemanager = true,
     })
-    if not self.ui.document then -- FileManager only, not Reader
+    if not self.ui.document then
         self.ui.menu:registerToMainMenu(self)
     end
 end
@@ -990,6 +1268,7 @@ function AllNotesViewer:loadBookAnnotations(book_path)
                         page = item.page or item.pageno or 0, pos0 = item.pos0, pos1 = item.pos1,
                         chapter = item.chapter or "", text = item.text or "", notes = item.note or "",
                         datetime = item.datetime or "", drawer = item.drawer, color = item.color or "yellow",
+                        tags = item.tags, keywords = item.keywords
                     })
                 end
             end
@@ -1007,6 +1286,7 @@ function AllNotesViewer:loadBookAnnotations(book_path)
                                 page = tonumber(page) or 0, pos0 = hl.pos0, pos1 = hl.pos1,
                                 chapter = hl.chapter or "", text = hl.text or "", notes = hl.note or "",
                                 datetime = hl.datetime or "", drawer = hl.drawer, color = hl.color or "yellow",
+                                tags = hl.tags, keywords = hl.keywords
                             })
                         end
                     end
@@ -1049,13 +1329,45 @@ function AllNotesViewer:showAllNotes()
     local all_notes_by_book = self:findAllNotes()
     local notes_list = {}
     for _, book_data in ipairs(all_notes_by_book) do
+        
+        local tags
+        do
+            local ok, doc_settings = pcall(DocSettings.open, DocSettings, book_data.path)
+            if ok and doc_settings and doc_settings.data and doc_settings.data.doc_props then
+                tags = doc_settings.data.doc_props.tags or doc_settings.data.doc_props.keywords
+            end
+        end
+        
+        local function split_tags(val)
+            if not val then return nil end
+            if type(val) == "table" then return val end
+            if type(val) == "string" then
+                local t = {}
+                for tag in val:gmatch("[^,;\n|\t]+") do
+                    tag = tag:match("^%s*(.-)%s*$")
+                    if tag ~= "" then table.insert(t, tag) end
+                end
+                return t
+            end
+            return nil
+        end
+        local tags_table = split_tags(tags)
         for _, note in ipairs(book_data.notes) do
+            
+            local note_tags = split_tags(note.tags) or tags_table or {}
+            
+            local tag_set = {}
+            for _, tag in ipairs(note_tags) do if tag ~= "" then tag_set[tag] = true end end
+            local all_tags = {}
+            for tag in pairs(tag_set) do table.insert(all_tags, tag) end
+            table.sort(all_tags)
             table.insert(notes_list, {
                 book_title = book_data.title, book_authors = book_data.authors,
                 book_path = book_data.path, page = note.page, chapter = note.chapter,
                 pos0 = note.pos0, pos1 = note.pos1,
                 highlighted_text = note.text, user_note = note.notes,
                 datetime = note.datetime, drawer = note.drawer, color = note.color,
+                tags = all_tags
             })
         end
     end
@@ -1067,9 +1379,9 @@ function AllNotesViewer:showAllNotes()
     UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self })
 end
 function AllNotesViewer:showNoteDetails(note, parent_widget)
-    -- Icon prefixes matching KOReader bookmark details
-    local ICON_HIGHLIGHT = "\u{2592}\u{2002}" -- medium shade + en space
-    local ICON_NOTE = "\u{F040}\u{2002}" -- pencil + en space
+    
+    local ICON_HIGHLIGHT = "\u{2592}\u{2002}"
+    local ICON_NOTE = "\u{F040}\u{2002}"
 
     local text_parts = {}
     if note.highlighted_text and note.highlighted_text ~= "" then
@@ -1082,11 +1394,11 @@ function AllNotesViewer:showNoteDetails(note, parent_widget)
         table.insert(text_parts, ICON_NOTE .. note.user_note)
     end
 
-    local title = note.book_title or _("Annotation")
+    local title = note.book_title or _( "Annotation" )
     local book_exists = note.book_path and lfs.attributes(note.book_path, "mode") ~= nil
     local has_note = note.user_note and note.user_note ~= ""
-    local goto_text = has_note and _("Go to Note") or _("Go to Highlight")
-    local edit_text = has_note and _("Edit Note") or _("Add Note")
+    local goto_text = has_note and _( "Go to Note" ) or _( "Go to Highlight" )
+    local edit_text = has_note and _( "Edit Note" ) or _( "Add Note" )
     local popup
     local buttons = {}
     if book_exists then
@@ -1100,70 +1412,24 @@ function AllNotesViewer:showNoteDetails(note, parent_widget)
         UIManager:close(popup)
         self:editNote(note, parent_widget)
     end })
-    table.insert(buttons, { text = _("Style"), callback = function()
+    table.insert(buttons, { text = _( "Style" ), callback = function()
         UIManager:close(popup)
         self:showStyleMenu(note, parent_widget)
     end })
-    table.insert(buttons, { text = _("Delete"), callback = function()
+    table.insert(buttons, { text = _( "Delete" ), callback = function()
         UIManager:close(popup)
         self:confirmDelete(note, parent_widget)
     end })
-    table.insert(buttons, { text = _("Close"), callback = function() UIManager:close(popup) end })
-    
+    table.insert(buttons, { text = _( "Close" ), callback = function() UIManager:close(popup) end })
+
     popup = TextViewer:new{
-        title = title, text = table.concat(text_parts, ""),
+        title = title,
+        text = table.concat(text_parts, ""),
         width = Screen:getWidth() - Size.margin.fullscreen_popout * 8,
         height = Screen:getHeight() * 0.7,
         buttons_table = { buttons },
     }
     UIManager:show(popup)
-end
-function AllNotesViewer:showStyleMenu(note, parent_widget)
-    local ButtonDialog = require("ui/widget/buttondialog")
-    local dialog
-    dialog = ButtonDialog:new{
-        title = _("Highlight Style"),
-        buttons = {
-            {
-                { text = _("Change Style"), callback = function()
-                    UIManager:close(dialog)
-                    self:showStylePicker(note, parent_widget)
-                end },
-            },
-            {
-                { text = _("Change Color"), callback = function()
-                    UIManager:close(dialog)
-                    self:showColorPicker(note, parent_widget)
-                end },
-            },
-            {
-                { text = _("Cancel"), callback = function() UIManager:close(dialog) end },
-            },
-        },
-    }
-    UIManager:show(dialog)
-end
-function AllNotesViewer:showStylePicker(note, parent_widget)
-    local ButtonDialog = require("ui/widget/buttondialog")
-    local styles = {
-        { _("Lighten"), "lighten" },
-        { _("Underline"), "underscore" },
-        { _("Strikethrough"), "strikeout" },
-        { _("Invert"), "invert" },
-    }
-    local buttons = {}
-    for _, style in ipairs(styles) do
-        table.insert(buttons, {
-            { text = style[1] .. (note.drawer == style[2] and "  ✓" or ""),
-              callback = function()
-                  UIManager:close(dialog)
-                  self:updateHighlightStyle(note, style[2], parent_widget)
-              end },
-        })
-    end
-    table.insert(buttons, { { text = _("Cancel"), callback = function() UIManager:close(dialog) end } })
-    dialog = ButtonDialog:new{ title = _("Select Style"), buttons = buttons }
-    UIManager:show(dialog)
 end
 function AllNotesViewer:showColorPicker(note, parent_widget)
     local RadioButtonWidget = require("ui/widget/radiobuttonwidget")
@@ -1198,6 +1464,56 @@ function AllNotesViewer:showColorPicker(note, parent_widget)
         dithered = true,
     })
 end
+
+function AllNotesViewer:showStyleMenu(note, parent_widget)
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local dialog
+    dialog = ButtonDialog:new{
+        title = _("Highlight Style"),
+        buttons = {
+            {
+                { text = _("Change Style"), callback = function()
+                    UIManager:close(dialog)
+                    self:showStylePicker(note, parent_widget)
+                end },
+            },
+            {
+                { text = _("Change Color"), callback = function()
+                    UIManager:close(dialog)
+                    self:showColorPicker(note, parent_widget)
+                end },
+            },
+            {
+                { text = _("Cancel"), callback = function() UIManager:close(dialog) end },
+            },
+        },
+    }
+    UIManager:show(dialog)
+end
+
+function AllNotesViewer:showStylePicker(note, parent_widget)
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local styles = {
+        { _("Lighten"), "lighten" },
+        { _("Underline"), "underscore" },
+        { _("Strikethrough"), "strikeout" },
+        { _("Invert"), "invert" },
+    }
+    local buttons = {}
+    local dialog
+    for _, style in ipairs(styles) do
+        table.insert(buttons, {
+            { text = style[1] .. (note.drawer == style[2] and "  ✓" or ""),
+              callback = function()
+                  UIManager:close(dialog)
+                  self:updateHighlightStyle(note, style[2], parent_widget)
+              end },
+        })
+    end
+    table.insert(buttons, { { text = _("Cancel"), callback = function() UIManager:close(dialog) end } })
+    dialog = ButtonDialog:new{ title = _("Select Style"), buttons = buttons }
+    UIManager:show(dialog)
+end
 function AllNotesViewer:updateHighlightStyle(note, new_style, parent_widget)
     if not note.book_path then return end
     local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
@@ -1205,7 +1521,7 @@ function AllNotesViewer:updateHighlightStyle(note, new_style, parent_widget)
     local data = doc_settings.data
     if not data then return end
     local updated = false
-    -- Try to update in annotations array first
+    
     local items = data.annotations
     if items and #items > 0 then
         for _, item in ipairs(items) do
@@ -1216,7 +1532,7 @@ function AllNotesViewer:updateHighlightStyle(note, new_style, parent_widget)
             end
         end
     end
-    -- If not found in annotations, try highlight table
+    
     if not updated then
         local highlights = data.highlight or {}
         for _, page_highlights in pairs(highlights) do
@@ -1234,7 +1550,7 @@ function AllNotesViewer:updateHighlightStyle(note, new_style, parent_widget)
     end
     if updated then
         doc_settings:flush()
-        -- Update in current notes list
+        
         for _, n in ipairs(parent_widget.notes_list) do
             if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
                 n.drawer = new_style
@@ -1252,7 +1568,7 @@ function AllNotesViewer:updateHighlightColor(note, new_color, parent_widget)
     local data = doc_settings.data
     if not data then return end
     local updated = false
-    -- Try to update in annotations array first
+    
     local items = data.annotations
     if items and #items > 0 then
         for _, item in ipairs(items) do
@@ -1263,7 +1579,7 @@ function AllNotesViewer:updateHighlightColor(note, new_color, parent_widget)
             end
         end
     end
-    -- If not found in annotations, try highlight table
+    
     if not updated then
         local highlights = data.highlight or {}
         for _, page_highlights in pairs(highlights) do
@@ -1281,7 +1597,7 @@ function AllNotesViewer:updateHighlightColor(note, new_color, parent_widget)
     end
     if updated then
         doc_settings:flush()
-        -- Update in current notes list
+        
         for _, n in ipairs(parent_widget.notes_list) do
             if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
                 n.color = new_color
@@ -1309,7 +1625,7 @@ function AllNotesViewer:deleteAnnotation(note, parent_widget)
     local data = doc_settings.data
     if not data then return end
     local deleted = false
-    -- Try to delete from annotations array first
+    
     local items = data.annotations
     if items and #items > 0 then
         for i = #items, 1, -1 do
@@ -1321,7 +1637,7 @@ function AllNotesViewer:deleteAnnotation(note, parent_widget)
             end
         end
     end
-    -- If not found in annotations, try highlight table
+    
     if not deleted then
         local highlights = data.highlight or {}
         for page, page_highlights in pairs(highlights) do
@@ -1340,7 +1656,7 @@ function AllNotesViewer:deleteAnnotation(note, parent_widget)
     end
     if deleted then
         doc_settings:flush()
-        -- Remove from current notes list
+        
         for i = #parent_widget.notes_list, 1, -1 do
             local n = parent_widget.notes_list[i]
             if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
@@ -1390,7 +1706,7 @@ function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget)
     local data = doc_settings.data
     if not data then return end
     local updated = false
-    -- Try to update in annotations array first
+    
     local items = data.annotations
     if items and #items > 0 then
         for _, item in ipairs(items) do
@@ -1401,7 +1717,7 @@ function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget)
             end
         end
     end
-    -- If not found in annotations, try highlight table
+    
     if not updated then
         local highlights = data.highlight or {}
         for _, page_highlights in pairs(highlights) do
@@ -1419,7 +1735,7 @@ function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget)
     end
     if updated then
         doc_settings:flush()
-        -- Update in current notes list
+        
         for _, n in ipairs(parent_widget.notes_list) do
             if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
                 n.user_note = new_note_text
