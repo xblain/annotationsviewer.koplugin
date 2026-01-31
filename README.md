@@ -38,4 +38,5 @@ Use the plugin Settings (accessible from the plugin menu) to adjust fonts, font 
 ## Screenshot
 
 ![Annotations Viewer — All Notes & Highlights](Screenshots/Screenshot.png)
+![Annotations Viewer — All Notes & Highlights](Screenshots/Screenshot2.png)
 
