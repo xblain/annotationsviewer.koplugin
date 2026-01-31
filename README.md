@@ -4,22 +4,23 @@ This plugin scans KOReader's stored annotations (highlights and notes) and provi
 
 Key behaviors:
 - Aggregates highlights and notes from KOReader document settings files for books in your read history
-- Shows book title, authors, page, highlighted text and any user note for each annotation
+- Shows book title, date, chapter, highlighted text and any user note for each annotation
 - Lets you open the source book at the annotated location
 - Edit or delete annotations, change highlight style or color
-- Filter annotations by highlight color or style
+- Filter annotations by highlight color, style, books and tags
 - Configure font sizes, margins, truncation length and other display options from the plugin Settings menu
 
 ## Features
 
 - Unified view of all annotations across books
 - Pagination for long annotation lists
-- Filter by highlight color or style (underline/strikeout/invert/lighten)
+- Filter by highlight color, style (underline/strikeout/invert/lighten), book titles or tags
 - Edit note text in-place and save back to the book's settings
 - Change highlight style and color and persist back to book settings
 - Delete annotations from the book settings
 - Go to the highlighted location in the reader
 - Customize fonts, margins, truncation and other presentation options
+- Preview Annotations on next page
 
 
 ## Usage
@@ -32,7 +33,7 @@ Key behaviors:
    - Change highlight style or color
    - Delete annotation
 
-Use the plugin Settings (accessible from the plugin menu) to adjust font sizes, margins, truncate length, justify text and other display preferences.
+Use the plugin Settings (accessible from the plugin menu) to adjust fonts, font sizes, margins,and other display preferences.
 
 ## Screenshot
 
