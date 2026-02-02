@@ -387,10 +387,6 @@ function NoteItemWidget:init()
         HorizontalSpan:new{ width = h_margin }, note_content, HorizontalSpan:new{ width = h_margin },
     }
 
-    
-    if not self.is_preview and not self.disable_tap then
-        self.ges_events = { Tap = { GestureRange:new{ ges = "tap", range = self.dimen } } }
-    end
 end
 function NoteItemWidget:formatDate(datetime)
     if not datetime or datetime == "" then return nil end
@@ -401,12 +397,6 @@ function NoteItemWidget:formatDate(datetime)
     if note_time >= today_start then return "Today"
     elseif note_time >= today_start - 86400 then return "Yesterday"
     else return os.date("%d %b %Y", note_time) end
-end
-function NoteItemWidget:onTap()
-    if self.show_parent and self.show_parent.onNoteSelected then
-        self.show_parent:onNoteSelected(self.note)
-    end
-    return true
 end
 local NotesListWidget = InputContainer:extend{
     width = nil, height = nil, notes_list = nil, filtered_notes = nil,
@@ -434,7 +424,7 @@ function NotesListWidget:init()
     local temp_button = Button:new{ icon = "chevron.first", bordersize = 0 }
     self.footer_height = temp_button:getSize().h
     temp_button:free()
-    self.content_height = self.height - self.title_height - self.footer_height
+    self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
     self:applyFilter()
     self:calculatePages()
     self:updatePage()
@@ -449,7 +439,11 @@ function NotesListWidget:init()
     end
     if not G_reader_settings:isTrue("page_turns_disable_swipe") then
         self.ges_events = { Swipe = { GestureRange:new{ ges = "swipe", range = self.dimen } } }
+    else
+        self.ges_events = {}
     end
+    
+    self.initial_update = true
 end
 function NotesListWidget:applyFilter()
     self.filtered_notes = {}
@@ -603,7 +597,7 @@ function NotesListWidget:updatePage()
     local temp_button = Button:new{ icon = "chevron.first", bordersize = 0 }
     self.footer_height = temp_button:getSize().h
     temp_button:free()
-    self.content_height = self.height - self.title_height - self.footer_height
+    self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
     
 local function filterToString(filter)
     if not filter then return "" end
@@ -712,7 +706,6 @@ end
                     alpha = 0.2,
                     bordered_preview
                 }
-                -- Always add note_spacing before the preview
                 table.insert(notes_group, VerticalSpan:new{ width = note_spacing })
                 table.insert(notes_group, alpha_preview)
             end
@@ -739,6 +732,10 @@ end
         background = BlitBuffer.COLOR_WHITE,
         content,
     }
+    
+    self.ges_events = self.ges_events or {}
+    self.ges_events.Tap = { GestureRange:new{ ges = "tap", range = Geom:new{ x = 0, y = self.title_height, w = self.width, h = self.content_height } } }
+    
     UIManager:setDirty(self, "ui")
 end
 function NotesListWidget:showMainMenu()
@@ -1191,6 +1188,39 @@ function NotesListWidget:onSwipe(_, ges)
     if ges.direction == "west" then return self:onGotoNextPage()
     elseif ges.direction == "east" then return self:onGotoPrevPage()
     end
+end
+function NotesListWidget:onTap(_, ges)
+    if not ges or not ges.pos then return end
+    
+    local tap_y = ges.pos.y
+    if tap_y < self.title_height then
+        return
+    end
+    
+    -- Find which note was tapped based on Y coordinate
+    local current_y = self.title_height + getTopPadding()
+    local page_indices = self.pages[self.current_page] or {}
+    local note_spacing = getNoteSpacing()
+    
+    for _, idx in ipairs(page_indices) do
+        local note = self.filtered_notes[idx]
+        if note then
+            local temp_widget = NoteItemWidget:new{ width = self.width, note = note, show_parent = self }
+            local note_height = temp_widget.dimen.h
+            temp_widget:free()
+            
+            local note_y_end = current_y + note_height
+            
+            if tap_y >= current_y and tap_y < note_y_end then
+                self:onNoteSelected(note)
+                return true
+            end
+            
+            current_y = note_y_end + note_spacing
+        end
+    end
+    
+    return false
 end
 function NotesListWidget:onNoteSelected(note)
     if self.viewer and self.viewer.showNoteDetails then
