@@ -1,4 +1,5 @@
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local ReaderHighlight = require("apps/reader/modules/readerhighlight")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
@@ -23,7 +24,7 @@ local ButtonDialogTitle = require("ui/widget/buttondialogtitle")
 local TextViewer = require("ui/widget/textviewer")
 local SpinWidget = require("ui/widget/spinwidget")
 local TitleBar = require("ui/widget/titlebar")
-local Blitbuffer = require("ffi/blitbuffer")
+local BlitBuffer = require("ffi/blitbuffer")
 local Screen = require("device").screen
 local Device = require("device")
 local FontList = require("fontlist")
@@ -97,62 +98,22 @@ local function getContentFont() return getSetting("content_font", nil) end
 local function getShowTotalNotes() return getSetting("show_total", true) end
 local function getTopPadding() return Screen:scaleBySize(getSetting("top_padding", DEFAULT_TOP_PADDING)) end
 local function getPreviewFudge() return tonumber(getSetting("preview_fudge", DEFAULT_PREVIEW_FUDGE)) end
-local HIGHLIGHT_COLORS = {
-    yellow = Blitbuffer.colorFromString("#FFFF00"),
-    green = Blitbuffer.colorFromString("#00FF00"),
-    blue = Blitbuffer.colorFromString("#0000FF"),
-    pink = Blitbuffer.colorFromString("#FF00FF"),
-    orange = Blitbuffer.colorFromString("#FFA500"),
-    red = Blitbuffer.colorFromString("#FF0000"),
-    cyan = Blitbuffer.colorFromString("#00FFFF"),
-    gray = Blitbuffer.colorFromString("#808080"),
-    lighten = Blitbuffer.colorFromString("#E0E0E0"),
-}
+
+local HIGHLIGHT_COLORS = BlitBuffer.HIGHLIGHT_COLORS
+
 local function getHighlightColor(color)
-    if not color then return HIGHLIGHT_COLORS.lighten end
-    local lower = color:lower()
-    if HIGHLIGHT_COLORS[lower] then return HIGHLIGHT_COLORS[lower] end
-    if color:match("^#") then return Blitbuffer.colorFromString(color) end
-    return HIGHLIGHT_COLORS.lighten
-end
-local function getColorName(color)
-    if not color then return nil end
-    local lower = color:lower()
-    if lower == "yellow" or lower:find("ffff00") then return "Yellow"
-    elseif lower == "green" or lower:find("00ff00") then return "Green"
-    elseif lower == "blue" or lower:find("0000ff") then return "Blue"
-    elseif lower == "pink" or lower:find("ff00ff") then return "Pink"
-    elseif lower == "orange" or lower:find("ffa500") then return "Orange"
-    elseif lower == "red" or lower:find("ff0000") then return "Red"
-    elseif lower == "cyan" or lower:find("00ffff") then return "Cyan"
-    elseif lower == "gray" or lower:find("808080") then return "Gray"
-    else return color end
-end
-local function getStyleName(drawer)
-    if not drawer then return nil end
-    local d = drawer:lower()
-    if d == "underscore" then return "Underline"
-    elseif d == "strikeout" then return "Strikeout"
-    elseif d == "invert" then return "Invert"
-    elseif d == "lighten" then return "Lighten"
-    elseif d == "highlight" then return "Highlight"
-    else return drawer end
+        local val = HIGHLIGHT_COLORS[color and color:lower() or ""]
+    if val and BlitBuffer.colorFromString then
+        return BlitBuffer.colorFromString(val)
+    end
+    return BlitBuffer.COLOR_GRAY
 end
 local function isNoBackgroundStyle(drawer)
     if not drawer then return false end
     local d = drawer:lower()
     return d == "strikeout" or d == "underscore"
 end
-local function truncateText(text, max_words)
-    if not text then return "" end
-    local clean_text = text:gsub("\n", " "):gsub("%s+", " ")
-    local words = {}
-    for word in clean_text:gmatch("%S+") do table.insert(words, word) end
-    if #words > max_words then
-        return table.concat(words, " ", 1, max_words) .. "..."
-    end
-    return clean_text
-end
+
 local function wrapText(text, face, max_width)
     local lines = {}
     local words = {}
@@ -211,12 +172,12 @@ end
 local StrikeoutLineWidget = InputContainer:extend{ width = nil, height = nil, y_offset = nil }
 function StrikeoutLineWidget:init() self.dimen = Geom:new{ w = self.width, h = self.height } end
 function StrikeoutLineWidget:paintTo(bb, x, y)
-    bb:paintRect(x, y + (self.y_offset or math.floor(self.height / 2)), self.width, 2, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x, y + (self.y_offset or math.floor(self.height / 2)), self.width, 2, BlitBuffer.COLOR_BLACK)
 end
 local UnderlineWidget = InputContainer:extend{ width = nil, height = nil }
 function UnderlineWidget:init() self.dimen = Geom:new{ w = self.width, h = self.height } end
 function UnderlineWidget:paintTo(bb, x, y)
-    bb:paintRect(x, y + self.height - 2, self.width, 2, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x, y + self.height - 2, self.width, 2, BlitBuffer.COLOR_BLACK)
 end
 local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_parent = nil, is_last = false, is_preview = false, disable_tap = false }
 function NoteItemWidget:init()
@@ -246,7 +207,6 @@ function NoteItemWidget:init()
 
     local date_text = self:formatDate(self.note.datetime) or ""
     local drawer = self.note.drawer or "lighten"
-    local style_name = getStyleName(drawer)
     local info_parts = {}
     if date_text ~= "" then table.insert(info_parts, date_text) end
     if self.note.chapter and self.note.chapter ~= "" then
@@ -259,18 +219,18 @@ function NoteItemWidget:init()
     local date_widget = TextBoxWidget:new{
         text = info_text, face = info_face,
         width = content_width, alignment = "left",
-        fgcolor = Blitbuffer.COLOR_DARK_GRAY,
+        fgcolor = BlitBuffer.COLOR_DARK_GRAY,
     }
 
-    local text_fgcolor = Blitbuffer.COLOR_BLACK
+    local text_fgcolor = BlitBuffer.COLOR_BLACK
     local show_strikeout = drawer == "strikeout"
     local show_underline = drawer == "underscore"
     local no_background = isNoBackgroundStyle(drawer)
 
-    local bg_color = Blitbuffer.COLOR_WHITE
+    local bg_color = BlitBuffer.COLOR_WHITE
     if drawer == "invert" then
-        text_fgcolor = Blitbuffer.COLOR_WHITE
-        bg_color = Blitbuffer.COLOR_BLACK
+        text_fgcolor = BlitBuffer.COLOR_WHITE
+        bg_color = BlitBuffer.COLOR_BLACK
     elseif not no_background then
         bg_color = getHighlightColor(self.note.color)
     end
@@ -394,7 +354,7 @@ function NoteItemWidget:init()
         local note_icon = TextWidget:new{
             text = note_icon_char,
             face = content_face,
-            fgcolor = Blitbuffer.COLOR_BLACK,
+            fgcolor = BlitBuffer.COLOR_BLACK,
         }
         local icon_size = note_icon:getSize().w
 
@@ -403,7 +363,7 @@ function NoteItemWidget:init()
         local note_text_group = VerticalGroup:new{ align = "left" }
         for _, line in ipairs(note_lines) do
             local line_widget = TextWidget:new{
-                text = line, face = content_face, fgcolor = Blitbuffer.COLOR_BLACK,
+                text = line, face = content_face, fgcolor = BlitBuffer.COLOR_BLACK,
             }
             table.insert(note_text_group, line_widget)
         end
@@ -618,7 +578,7 @@ function NotesListWidget:createFooter()
             padding = 0,
             margin = 0,
             bordersize = 0,
-            background = Blitbuffer.COLOR_WHITE,
+            background = BlitBuffer.COLOR_WHITE,
             page_info_container,
         },
     }
@@ -645,21 +605,40 @@ function NotesListWidget:updatePage()
     temp_button:free()
     self.content_height = self.height - self.title_height - self.footer_height
     
-    local filter_text = ""
-    if self.active_filter then
-        if self.active_filter.type == "color" and self.active_filter.value then
-            filter_text = " [" .. (getColorName(self.active_filter.value) or tostring(self.active_filter.value)) .. "]"
-        elseif self.active_filter.type == "style" and self.active_filter.value then
-            filter_text = " [" .. (getStyleName(self.active_filter.value) or tostring(self.active_filter.value)) .. "]"
+local function filterToString(filter)
+    if not filter then return "" end
+    local parts = {}
+    if filter.value then
+        local name = nil
+        for _, v in ipairs(ReaderHighlight.highlight_colors) do
+            if v[2] == filter.value then
+                name = v[1]
+                break
+            end
         end
+        table.insert(parts, name or (filter.value:sub(1,1):upper() .. filter.value:sub(2)))
     end
+    if filter.books and next(filter.books) then
+        local books = {}
+        for k in pairs(filter.books) do table.insert(books, k) end
+        table.insert(parts, "B: " .. table.concat(books, ", "))
+    end
+    if filter.tags and next(filter.tags) then
+        local tags = {}
+        for k in pairs(filter.tags) do table.insert(tags, k) end
+        table.insert(parts, "T: " .. table.concat(tags, ", "))
+    end
+    return #parts > 0 and (" [" .. table.concat(parts, "; ") .. "]") or ""
+end
 
-    local title_text
-    if getShowTotalNotes() == true then
-            title_text = string.format(_("Annotations (%d)%s"), #self.filtered_notes, filter_text)
-    else
-        title_text = _("Annotations") .. filter_text
-    end
+local filter_text = filterToString(self.active_filter)
+
+local title_text
+if getShowTotalNotes() == true then
+    title_text = string.format(_("Annotations (%d)%s"), #self.filtered_notes, filter_text)
+else
+    title_text = _("Annotations") .. filter_text
+end
 
     
     local title_bar = TitleBar:new{
@@ -757,7 +736,7 @@ function NotesListWidget:updatePage()
 
     self[1] = FrameContainer:new{
         width = self.width, height = self.height, padding = 0, margin = 0, bordersize = 0,
-        background = Blitbuffer.COLOR_WHITE,
+        background = BlitBuffer.COLOR_WHITE,
         content,
     }
     UIManager:setDirty(self, "ui")
@@ -1108,33 +1087,26 @@ function NotesListWidget:showFilterMenu()
             if note.color then colors[note.color:lower()] = true end
             if note.drawer then styles[note.drawer:lower()] = true end
         end
-        local color_map = {
-            { "yellow", _( "Yellow" ), "#FFFF00" },
-            { "green", _( "Green" ), "#00FF00" },
-            { "blue", _( "Blue" ), "#0000FF" },
-            { "pink", _( "Pink" ), "#FF00FF" },
-            { "orange", _( "Orange" ), "#FFA500" },
-            { "red", _( "Red" ), "#FF0000" },
-            { "cyan", _( "Cyan" ), "#00FFFF" },
-            { "purple", _( "Purple" ), "#800080" },
-            { "gray", _( "Gray" ), "#808080" },
-        }
         local curr_type = self.active_filter and self.active_filter.type or nil
         local curr_val = self.active_filter and self.active_filter.value or nil
         local radio_buttons = {}
         for style, _ in pairs(styles) do
-            local name = getStyleName(style)
-            table.insert(radio_buttons, {
-                { text = name or style, checked = curr_type == "style" and curr_val == style,
-                  provider = { type = "style", value = style } },
-            })
+            local name = style:sub(1,1):upper() .. style:sub(2)
+            local button = { text = name or style, checked = curr_type == "style" and curr_val == style,
+                             provider = { type = "style", value = style } }
+            if style == "invert" then
+                button.fgcolor = BlitBuffer.COLOR_WHITE
+                button.bgcolor = BlitBuffer.COLOR_BLACK
+            end
+            table.insert(radio_buttons, { button })
         end
-        for _, c in ipairs(color_map) do
-            if colors[c[1]] then
+        for _, v in ipairs(ReaderHighlight.highlight_colors) do
+            local name, color_key = v[1], v[2]
+            if colors[color_key] then
                 table.insert(radio_buttons, {
-                    { text = c[2], checked = curr_type == "color" and curr_val == c[1],
-                      bgcolor = Blitbuffer.colorFromString(c[3]),
-                      provider = { type = "color", value = c[1] } },
+                    { text = name, checked = curr_type == "color" and curr_val == color_key,
+                      bgcolor = BlitBuffer.colorFromString(HIGHLIGHT_COLORS[color_key]),
+                      provider = { type = "color", value = color_key } },
                 })
             end
         end
@@ -1434,30 +1406,24 @@ function AllNotesViewer:showNoteDetails(note, parent_widget)
 end
 function AllNotesViewer:showColorPicker(note, parent_widget)
     local RadioButtonWidget = require("ui/widget/radiobuttonwidget")
-    local curr_color = note.color or "yellow"
-    local colors = {
-        { "yellow", _("Yellow"), "#FFFF00" },
-        { "green", _("Green"), "#00FF00" },
-        { "blue", _("Blue"), "#0000FF" },
-        { "pink", _("Pink"), "#FF00FF" },
-        { "orange", _("Orange"), "#FFA500" },
-        { "red", _("Red"), "#FF0000" },
-        { "cyan", _("Cyan"), "#00FFFF" },
-        { "purple", _("Purple"), "#800080" },
-        { "gray", _("Gray"), "#808080" },
-    }
+        local colors = {}
+        for _, v in ipairs(ReaderHighlight.highlight_colors) do
+            if v[2] ~= "gray" then
+                table.insert(colors, { v[2], v[1], BlitBuffer.HIGHLIGHT_COLORS[v[2]] })
+            end
+        end
+        table.insert(colors, { "gray", _("Gray"), BlitBuffer.COLOR_GRAY })
     local radio_buttons = {}
     for _, c in ipairs(colors) do
-        table.insert(radio_buttons, {
-            { text = c[2], checked = curr_color == c[1],
-              bgcolor = Blitbuffer.colorFromString(c[3]), provider = c[1] },
-        })
+                table.insert(radio_buttons, {
+                        { text = c[2], checked = note.color == c[1],
+                            bgcolor = c[1] == "gray" and BlitBuffer.COLOR_GRAY or BlitBuffer.colorFromString(c[3]), provider = c[1] },
+                })
     end
     UIManager:show(RadioButtonWidget:new{
         title_text = _("Select Color"),
         width_factor = 0.6,
         radio_buttons = radio_buttons,
-        default_provider = curr_color,
         callback = function(radio)
             self:updateHighlightColor(note, radio.provider, parent_widget)
         end,
