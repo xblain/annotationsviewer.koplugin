@@ -427,7 +427,6 @@ function NotesListWidget:init()
     self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
     self:applyFilter()
     self:calculatePages()
-    self:updatePage()
     if Device:hasKeys() then
         self.key_events = {
             ReadPrevItem = { { "Up" }, event = "GotoPrevPage" },
@@ -443,6 +442,7 @@ function NotesListWidget:init()
         self.ges_events = {}
     end
     
+    self:updatePage()
     self.initial_update = true
 end
 function NotesListWidget:applyFilter()
@@ -734,7 +734,8 @@ end
     }
     
     self.ges_events = self.ges_events or {}
-    self.ges_events.Tap = { GestureRange:new{ ges = "tap", range = Geom:new{ x = 0, y = self.title_height, w = self.width, h = self.content_height } } }
+    local tap_height = self.height - self.title_height - self.footer_height
+    self.ges_events.Tap = { GestureRange:new{ ges = "tap", range = Geom:new{ x = 0, y = self.title_height, w = self.width, h = tap_height } } }
     
     UIManager:setDirty(self, "ui")
 end
@@ -1186,7 +1187,9 @@ function NotesListWidget:onGotoPrevPage()
 end
 function NotesListWidget:onSwipe(_, ges)
     if ges.direction == "west" then return self:onGotoNextPage()
+    elseif ges.direction == "north" then return self:onGotoNextPage()
     elseif ges.direction == "east" then return self:onGotoPrevPage()
+    elseif ges.direction == "south" then return self:onGotoPrevPage()
     end
 end
 function NotesListWidget:onTap(_, ges)
