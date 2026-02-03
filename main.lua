@@ -7,14 +7,12 @@ local Event = require("ui/event")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
 local LeftContainer = require("ui/widget/container/leftcontainer")
-local RightContainer = require("ui/widget/container/rightcontainer")
 local TopContainer = require("ui/widget/container/topcontainer")
 local BottomContainer = require("ui/widget/container/bottomcontainer")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local TextWidget = require("ui/widget/textwidget")
-local LineWidget = require("ui/widget/linewidget")
 local Button = require("ui/widget/button")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local GestureRange = require("ui/gesturerange")
@@ -27,6 +25,8 @@ local TitleBar = require("ui/widget/titlebar")
 local BlitBuffer = require("ffi/blitbuffer")
 local Screen = require("device").screen
 local Device = require("device")
+local Input = Device.input
+local logger = require("logger")
 local FontList = require("fontlist")
 local DocSettings = require("docsettings")
 local ReadHistory = require("readhistory")
@@ -99,7 +99,167 @@ local function getShowTotalNotes() return getSetting("show_total", true) end
 local function getTopPadding() return Screen:scaleBySize(getSetting("top_padding", DEFAULT_TOP_PADDING)) end
 local function getPreviewFudge() return tonumber(getSetting("preview_fudge", DEFAULT_PREVIEW_FUDGE)) end
 
+local SORT_MODES = {
+    date_newest = { label = _("Newest First") },
+    date_oldest = { label = _("Oldest First") },
+    author_asc = { label = _("A to Z (by Date)") },
+    author_desc = { label = _("Z to A (by Date)") },
+    author_location_asc = { label = _("Location: Begin to End") },
+    author_location_desc = { label = _("Location: End to Begin") },
+    book_asc = { label = _("A to Z (by Date)") },
+    book_desc = { label = _("Z to A (by Date)") },
+    book_location_asc = { label = _("Location: Begin to End") },
+    book_location_desc = { label = _("Location: End to Begin") },
+    filename_asc = { label = _("A to Z (by Date)") },
+    filename_desc = { label = _("Z to A (by Date)") },
+    filename_location_asc = { label = _("Location: Begin to End") },
+    filename_location_desc = { label = _("Location: End to Begin") },
+}
+
+local SORT_CATEGORIES = {
+    date = { "date_newest", "date_oldest" },
+    author = { "author_asc", "author_desc", "author_location_asc", "author_location_desc" },
+    book = { "book_asc", "book_desc", "book_location_asc", "book_location_desc" },
+    filename = { "filename_asc", "filename_desc", "filename_location_asc", "filename_location_desc" },
+}
+
+local SPIN_MENUS = {
+    font_size = {
+        dialog_name = "font_size_dialog",
+        title = _("Font Sizes"),
+        settings = {
+            { label = _("Title Size: "), key = "title_font_size", default = DEFAULT_TITLE_FONT_SIZE, min = 8, max = 48, step = 1, getter = getTitleFontSize },
+            { label = _("Info Size: "), key = "info_font_size", default = DEFAULT_INFO_FONT_SIZE, min = 8, max = 48, step = 1, getter = getInfoFontSize },
+            { label = _("Content Size: "), key = "content_font_size", default = DEFAULT_CONTENT_FONT_SIZE, min = 8, max = 48, step = 1, getter = getContentFontSize },
+        }
+    },
+    section_margin = {
+        dialog_name = "section_margin_dialog",
+        title = _("Section Margins"),
+        settings = {
+            { label = _("After Title: "), key = "title_margin", default = DEFAULT_TITLE_MARGIN, min = 0, max = 30, step = 1, getter = function() return getSetting("title_margin", DEFAULT_TITLE_MARGIN) end },
+            { label = _("After Info: "), key = "info_margin", default = DEFAULT_INFO_MARGIN, min = 0, max = 30, step = 1, getter = function() return getSetting("info_margin", DEFAULT_INFO_MARGIN) end },
+        }
+    },
+    margins = {
+        dialog_name = "margin_dialog",
+        title = _("Margins"),
+        settings = {
+            { label = _("Top Padding: "), key = "top_padding", default = DEFAULT_TOP_PADDING, min = 0, max = 100, step = 5, getter = function() return getSetting("top_padding", DEFAULT_TOP_PADDING) end },
+            { label = _("Horizontal Margin: "), key = "h_margin", default = DEFAULT_H_MARGIN, min = 5, max = 60, step = 5, getter = function() return getSetting("h_margin", DEFAULT_H_MARGIN) end },
+            { label = _("Note Spacing: "), key = "note_spacing", default = DEFAULT_NOTE_SPACING, min = 5, max = 100, step = 2, getter = function() return getSetting("note_spacing", DEFAULT_NOTE_SPACING) end },
+            { label = _("Text Margin: "), key = "text_margin", default = DEFAULT_TEXT_MARGIN, min = 0, max = 30, step = 2, getter = function() return getSetting("text_margin", DEFAULT_TEXT_MARGIN) end },
+            { label = _("Preview Fudge: "), key = "preview_fudge", default = DEFAULT_PREVIEW_FUDGE, min = 0, max = 40, step = 1, getter = getPreviewFudge },
+        }
+    }
+}
+
 local HIGHLIGHT_COLORS = BlitBuffer.HIGHLIGHT_COLORS
+
+local function normalizeBookTitle(title)
+    if not title then return "" end
+    local normalized = title:lower():gsub("^%s+", ""):gsub("%s+$", "")
+    normalized = normalized:gsub("^the%s+", ""):gsub("^a%s+", ""):gsub("^an%s+", "")
+    return normalized
+end
+
+local function compareByDatetime(a, b, reverse)
+    local cmp = (a.datetime or "") > (b.datetime or "") and 1 or ((a.datetime or "") < (b.datetime or "") and -1 or 0)
+    return reverse and cmp < 0 or cmp > 0
+end
+
+local function compareByPosition(a, b, reverse)
+    local pos_a = tonumber(a.pos0) or 0
+    local pos_b = tonumber(b.pos0) or 0
+    if reverse then return pos_a > pos_b else return pos_a < pos_b end
+end
+
+local SORT_COMPARATORS = {
+    date_newest = function(a, b) return (a.datetime or "") > (b.datetime or "") end,
+    date_oldest = function(a, b) return (a.datetime or "") < (b.datetime or "") end,
+    
+    author_asc = function(a, b)
+        if a.book_authors ~= b.book_authors then return a.book_authors < b.book_authors end
+        return compareByDatetime(a, b)
+    end,
+    author_desc = function(a, b)
+        if a.book_authors ~= b.book_authors then return a.book_authors > b.book_authors end
+        return compareByDatetime(a, b)
+    end,
+    
+    book_asc = function(a, b)
+        local title_a = normalizeBookTitle(a.book_title)
+        local title_b = normalizeBookTitle(b.book_title)
+        if title_a ~= title_b then return title_a < title_b end
+        return compareByDatetime(a, b)
+    end,
+    book_desc = function(a, b)
+        local title_a = normalizeBookTitle(a.book_title)
+        local title_b = normalizeBookTitle(b.book_title)
+        if title_a ~= title_b then return title_a > title_b end
+        return compareByDatetime(a, b)
+    end,
+    
+    author_location_asc = function(a, b)
+        if a.book_authors ~= b.book_authors then return a.book_authors < b.book_authors end
+        local title_a = normalizeBookTitle(a.book_title)
+        local title_b = normalizeBookTitle(b.book_title)
+        if title_a ~= title_b then return title_a < title_b end
+        return compareByPosition(a, b)
+    end,
+    author_location_desc = function(a, b)
+        if a.book_authors ~= b.book_authors then return a.book_authors < b.book_authors end
+        local title_a = normalizeBookTitle(a.book_title)
+        local title_b = normalizeBookTitle(b.book_title)
+        if title_a ~= title_b then return title_a < title_b end
+        return compareByPosition(a, b, true)
+    end,
+    
+    book_location_asc = function(a, b)
+        local title_a = normalizeBookTitle(a.book_title)
+        local title_b = normalizeBookTitle(b.book_title)
+        if title_a ~= title_b then return title_a < title_b end
+        return compareByPosition(a, b)
+    end,
+    book_location_desc = function(a, b)
+        local title_a = normalizeBookTitle(a.book_title)
+        local title_b = normalizeBookTitle(b.book_title)
+        if title_a ~= title_b then return title_a < title_b end
+        return compareByPosition(a, b, true)
+    end,
+    
+    filename_location_asc = function(a, b)
+        local filename_a = (a.book_filename or ""):lower()
+        local filename_b = (b.book_filename or ""):lower()
+        if filename_a ~= filename_b then return filename_a < filename_b end
+        local title_a = normalizeBookTitle(a.book_title)
+        local title_b = normalizeBookTitle(b.book_title)
+        if title_a ~= title_b then return title_a < title_b end
+        return compareByPosition(a, b)
+    end,
+    filename_location_desc = function(a, b)
+        local filename_a = (a.book_filename or ""):lower()
+        local filename_b = (b.book_filename or ""):lower()
+        if filename_a ~= filename_b then return filename_a > filename_b end
+        local title_a = normalizeBookTitle(a.book_title)
+        local title_b = normalizeBookTitle(b.book_title)
+        if title_a ~= title_b then return title_a < title_b end
+        return compareByPosition(a, b, true)
+    end,
+    
+    filename_asc = function(a, b)
+        local filename_a = (a.book_filename or ""):lower()
+        local filename_b = (b.book_filename or ""):lower()
+        if filename_a ~= filename_b then return filename_a < filename_b end
+        return compareByDatetime(a, b)
+    end,
+    filename_desc = function(a, b)
+        local filename_a = (a.book_filename or ""):lower()
+        local filename_b = (b.book_filename or ""):lower()
+        if filename_a ~= filename_b then return filename_a > filename_b end
+        return compareByDatetime(a, b)
+    end,
+}
 
 local function getHighlightColor(color)
         local val = HIGHLIGHT_COLORS[color and color:lower() or ""]
@@ -112,6 +272,52 @@ local function isNoBackgroundStyle(drawer)
     if not drawer then return false end
     local d = drawer:lower()
     return d == "strikeout" or d == "underscore"
+end
+
+local function truncateAuthorDisplay(author_str)
+    if not author_str or author_str == "Unknown" then return author_str end
+    if not author_str:find("\n") then return author_str end
+    local first_author = author_str:match("^([^\n]+)")
+    if first_author then
+        first_author = first_author:match("^%s*(.-)%s*$")
+        return first_author .. " et al."
+    end
+    return author_str
+end
+
+local NoteWrapper = {}
+function NoteWrapper:new(note)
+    return setmetatable({ _note = note }, { __index = self })
+end
+function NoteWrapper:getDisplayAuthors()
+    if not self._note.book_authors or self._note.book_authors == "" or self._note.book_authors == "Unknown" then
+        return nil
+    end
+    return truncateAuthorDisplay(self._note.book_authors)
+end
+function NoteWrapper:getTags()
+    local tags = self._note.tags or self._note.keywords or {}
+    if type(tags) == "string" then
+        local result = {}
+        for tag in tags:gmatch("[^,;\n|\t]+") do
+            tag = tag:match("^%s*(.-)%s*$")
+            if tag ~= "" then table.insert(result, tag) end
+        end
+        return result
+    end
+    return tags
+end
+function NoteWrapper:getNormalizedColor()
+    return self._note.color and self._note.color:lower() or nil
+end
+function NoteWrapper:getNormalizedDrawer()
+    return self._note.drawer and self._note.drawer:lower() or nil
+end
+function NoteWrapper:hasHighlightedText()
+    return self._note.highlighted_text and self._note.highlighted_text ~= "" or false
+end
+function NoteWrapper:hasUserNote()
+    return self._note.user_note and self._note.user_note ~= "" or false
 end
 
 local function wrapText(text, face, max_width)
@@ -196,6 +402,7 @@ function NoteItemWidget:init()
     local content_width = inner_width - h_padding * 2
     local justify = getJustify()
 
+    local note_wrapper = NoteWrapper:new(self.note)
     local title_text = self.note.book_title or "Unknown"
 
     local title_font = getTitleFont()
@@ -209,6 +416,10 @@ function NoteItemWidget:init()
     local drawer = self.note.drawer or "lighten"
     local info_parts = {}
     if date_text ~= "" then table.insert(info_parts, date_text) end
+    local display_authors = note_wrapper:getDisplayAuthors()
+    if display_authors then
+        table.insert(info_parts, display_authors)
+    end
     if self.note.chapter and self.note.chapter ~= "" then
         table.insert(info_parts, self.note.chapter)
     end
@@ -253,9 +464,8 @@ function NoteItemWidget:init()
         })
     end
     table.insert(note_content, VerticalSpan:new{ width = info_margin })
-
     
-    if self.note.highlighted_text and self.note.highlighted_text ~= "" then
+    if note_wrapper:hasHighlightedText() then
         
         local full_lines = wrapText(self.note.highlighted_text or "", content_face, line_width)
         local max_lines = getTruncateLines() or math.huge
@@ -346,7 +556,7 @@ function NoteItemWidget:init()
         })
     end
 
-    if self.note.user_note and self.note.user_note ~= "" then
+    if note_wrapper:hasUserNote() then
         table.insert(note_content, VerticalSpan:new{ width = Screen:scaleBySize(8) })
 
         local note_icon_char = "\u{F040}"
@@ -428,13 +638,10 @@ function NotesListWidget:init()
     self:applyFilter()
     self:calculatePages()
     if Device:hasKeys() then
-        self.key_events = {
-            ReadPrevItem = { { "Up" }, event = "GotoPrevPage" },
-            ReadNextItem = { { "Down" }, event = "GotoNextPage" },
-            GotoPrevPage = { { Device.input.group.PgBack }, event = "GotoPrevPage" },
-            GotoNextPage = { { Device.input.group.PgFwd }, event = "GotoNextPage" },
-            Close = { { Device.input.group.Back }, event = "Close" },
-        }
+        logger.info("[AnnotationsViewer]Available Input.group keys:", Input.group)
+        self.key_events.GotoPrevPage = { { Input.group.PgBack } }
+        self.key_events.GotoNextPage = { { Input.group.PgFwd } }
+        self.key_events.Close = { { Input.group.Back } }  
     end
     if not G_reader_settings:isTrue("page_turns_disable_swipe") then
         self.ges_events = { Swipe = { GestureRange:new{ ges = "swipe", range = self.dimen } } }
@@ -454,24 +661,20 @@ function NotesListWidget:applyFilter()
                 match = self.active_filter.books[note.book_title] == true
             end
             if match and self.active_filter.tags and next(self.active_filter.tags) ~= nil then
-                local note_tags = note.tags or note.keywords or ""
+                local note_wrapper = NoteWrapper:new(note)
+                local note_tags = note_wrapper:getTags()
                 local found = false
-                if type(note_tags) == "string" then
-                    for tag in note_tags:gmatch("[^,;\n|\t]+") do
-                        tag = tag:match("^%s*(.-)%s*$")
-                        if self.active_filter.tags[tag] then found = true break end
-                    end
-                elseif type(note_tags) == "table" then
-                    for _, tag in ipairs(note_tags) do
-                        if self.active_filter.tags[tag] then found = true break end
-                    end
+                for _, tag in ipairs(note_tags) do
+                    if self.active_filter.tags[tag] then found = true break end
                 end
                 match = found
             end
             if match and self.active_filter.type == "color" then
-                match = note.color and note.color:lower() == self.active_filter.value
+                local note_wrapper = NoteWrapper:new(note)
+                match = note_wrapper:getNormalizedColor() == self.active_filter.value
             elseif match and self.active_filter.type == "style" then
-                match = note.drawer and note.drawer:lower() == self.active_filter.value
+                local note_wrapper = NoteWrapper:new(note)
+                match = note_wrapper:getNormalizedDrawer() == self.active_filter.value
             end
         end
         if match then table.insert(self.filtered_notes, note) end
@@ -482,7 +685,27 @@ function NotesListWidget:calculatePages()
     local note_spacing = getNoteSpacing()
     local current_page_notes, current_height = {}, 0
     
-    local effective_content_height = self.content_height + getPreviewFudge()
+    local filter_text = self.active_filter and (
+        (self.active_filter.value and (self.active_filter.type == "color" or self.active_filter.type == "style")) or
+        (self.active_filter.books and next(self.active_filter.books)) or
+        (self.active_filter.tags and next(self.active_filter.tags))
+    ) or false
+    
+    local subtitle_height = 0
+    if filter_text then
+        local TextWidget = require("ui/widget/textwidget")
+        local Font = require("ui/font")
+        local test_widget = TextWidget:new{
+            text = "test",
+            face = Font:getFace("cfont", 14),
+        }
+        subtitle_height = test_widget:getSize().h + Screen:scaleBySize(5)
+        test_widget:free()
+    end
+    
+    local available_content_height = self.content_height - subtitle_height
+    local effective_content_height = available_content_height + getPreviewFudge()
+    
     for i, note in ipairs(self.filtered_notes) do
         local temp_widget = NoteItemWidget:new{ width = self.width, note = note, show_parent = self }
         local item_height = temp_widget.dimen.h
@@ -599,18 +822,22 @@ function NotesListWidget:updatePage()
     temp_button:free()
     self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
     
+    
 local function filterToString(filter)
     if not filter then return "" end
     local parts = {}
-    if filter.value then
+    if filter.type == "color" or filter.type == "style" then
+        local prefix = filter.type == "color" and "C: " or "S: "
         local name = nil
-        for _, v in ipairs(ReaderHighlight.highlight_colors) do
-            if v[2] == filter.value then
-                name = v[1]
-                break
+        if filter.type == "color" then
+            for _, v in ipairs(ReaderHighlight.highlight_colors) do
+                if v[2] == filter.value then
+                    name = v[1]
+                    break
+                end
             end
         end
-        table.insert(parts, name or (filter.value:sub(1,1):upper() .. filter.value:sub(2)))
+        table.insert(parts, prefix .. (name or (filter.value:sub(1,1):upper() .. filter.value:sub(2))))
     end
     if filter.books and next(filter.books) then
         local books = {}
@@ -622,16 +849,16 @@ local function filterToString(filter)
         for k in pairs(filter.tags) do table.insert(tags, k) end
         table.insert(parts, "T: " .. table.concat(tags, ", "))
     end
-    return #parts > 0 and (" [" .. table.concat(parts, "; ") .. "]") or ""
+    return #parts > 0 and table.concat(parts, "; ") or ""
 end
 
 local filter_text = filterToString(self.active_filter)
 
 local title_text
 if getShowTotalNotes() == true then
-    title_text = string.format(_("Annotations (%d)%s"), #self.filtered_notes, filter_text)
+    title_text = string.format(_("Annotations (%d)"), #self.filtered_notes)
 else
-    title_text = _("Annotations") .. filter_text
+    title_text = _("Annotations")
 end
 
     
@@ -650,6 +877,19 @@ end
         left_icon_tap_callback = function() self:showMainMenu() end,
         show_parent = self,
     }
+    
+    local subtitle_widget = nil
+    local subtitle_height = 0
+    if filter_text ~= "" then
+        local TextWidget = require("ui/widget/textwidget")
+        local Font = require("ui/font")
+        subtitle_widget = TextWidget:new{
+            text = "[" .. filter_text .. "]",
+            face = Font:getFace("cfont", 14),
+            fgcolor = BlitBuffer.COLOR_DARK_GRAY,
+        }
+        subtitle_height = subtitle_widget:getSize().h
+    end
 
     local notes_group = VerticalGroup:new{ align = "left" }
     local top_padding = getTopPadding()
@@ -716,13 +956,27 @@ end
 
     local footer = self:createFooter()
 
+    local title_content = VerticalGroup:new{
+        align = "left",
+        title_bar,
+    }
+    if subtitle_widget then
+        table.insert(title_content, CenterContainer:new{
+            dimen = Geom:new{ w = self.width, h = subtitle_height },
+            subtitle_widget,
+        })
+    end
+    
+    local title_area_height = title_content:getSize().h
+    local adjusted_content_height = self.height - title_area_height - self.footer_height - getTopPadding()
+
     local content = OverlapGroup:new{
         allow_mirroring = false,
         dimen = Geom:new{ w = self.width, h = self.height },
         VerticalGroup:new{
             align = "left",
-            title_bar,
-            TopContainer:new{ dimen = Geom:new{ w = self.width, h = self.content_height }, notes_group },
+            title_content,
+            TopContainer:new{ dimen = Geom:new{ w = self.width, h = adjusted_content_height }, notes_group },
         },
         footer,
     }
@@ -745,6 +999,10 @@ function NotesListWidget:showMainMenu()
             UIManager:close(self.main_menu)
             self:showFilterMenu()
         end }},
+        {{ text = _("Sort"), callback = function()
+            UIManager:close(self.main_menu)
+            self:showSortMenu()
+        end }},
         {{ text = _("Settings"), callback = function()
             UIManager:close(self.main_menu)
             self:showSettingsMenu()
@@ -754,7 +1012,131 @@ function NotesListWidget:showMainMenu()
     self.main_menu = ButtonDialogTitle:new{ title = _("Menu"), buttons = buttons }
     UIManager:show(self.main_menu)
 end
+function NotesListWidget:showSortMenu()
+    local sort_mode = getSetting("sort_mode", "date_newest")
+    
+    local function getCurrentPrimarySort()
+        if sort_mode:match("^date") then return "date"
+        elseif sort_mode:match("^author") then return "author"
+        elseif sort_mode:match("^book") then return "book"
+        elseif sort_mode:match("^location") then return "location"
+        elseif sort_mode:match("^filename") then return "filename"
+        else return "date" end
+    end
+    
+    local function getSortIndicator(primary)
+        return getCurrentPrimarySort() == primary and "✓ " or "  "
+    end
+    
+    local buttons = {
+        {{ text = getSortIndicator("date") .. _("Date"), callback = function()
+            UIManager:close(self.sort_dialog)
+            self:showSecondarySortMenu("date")
+        end }},
+        {{ text = getSortIndicator("author") .. _("Author"), callback = function()
+            UIManager:close(self.sort_dialog)
+            self:showSecondarySortMenu("author")
+        end }},
+        {{ text = getSortIndicator("book") .. _("Book"), callback = function()
+            UIManager:close(self.sort_dialog)
+            self:showSecondarySortMenu("book")
+        end }},
+        {{ text = getSortIndicator("filename") .. _("Filename"), callback = function()
+            UIManager:close(self.sort_dialog)
+            self:showSecondarySortMenu("filename")
+        end }},
+        {{ text = _("Back"), callback = function()
+            UIManager:close(self.sort_dialog)
+            self:showMainMenu()
+        end }},
+    }
+    self.sort_dialog = ButtonDialogTitle:new{ title = _("Sort By"), buttons = buttons }
+    UIManager:show(self.sort_dialog)
+end
+
+function NotesListWidget:showSecondarySortMenu(primary)
+    local sort_mode = getSetting("sort_mode", "date_newest")
+    
+    local function getSecondaryIndicator(mode)
+        return sort_mode == mode and "✓ " or "  "
+    end
+    
+    local function createSortCallback(mode)
+        return function()
+            setSetting("sort_mode", mode)
+            self:applySort()
+            self:refresh()
+            UIManager:close(self.secondary_sort_dialog)
+            self:showMainMenu()
+        end
+    end
+    
+    local buttons = {}
+    local sort_modes = SORT_CATEGORIES[primary] or {}
+    
+    for _, mode in ipairs(sort_modes) do
+        local mode_info = SORT_MODES[mode]
+        if mode_info then
+            table.insert(buttons, {{
+                text = getSecondaryIndicator(mode) .. mode_info.label,
+                callback = createSortCallback(mode)
+            }})
+        end
+    end
+    
+    table.insert(buttons, {{ text = _("Back"), callback = function()
+        UIManager:close(self.secondary_sort_dialog)
+        self:showSortMenu()
+    end }})
+    
+    self.secondary_sort_dialog = ButtonDialogTitle:new{ title = _("Sort Direction"), buttons = buttons }
+    UIManager:show(self.secondary_sort_dialog)
+end
+function NotesListWidget:showSpinMenu(menu_key, parent_callback)
+    local menu_config = SPIN_MENUS[menu_key]
+    if not menu_config then return end
+    
+    local buttons = {}
+    for _, setting in ipairs(menu_config.settings) do
+        table.insert(buttons, {{
+            text = setting.label .. setting.getter(),
+            callback = function()
+                UIManager:close(self[menu_config.dialog_name])
+                self:showSpinSetting(setting.label:gsub(": $", ""), setting.key, setting.default, setting.min, setting.max, setting.step, parent_callback)
+            end
+        }})
+    end
+    
+    table.insert(buttons, {{ text = _("Back"), callback = function()
+        UIManager:close(self[menu_config.dialog_name])
+        parent_callback()
+    end }})
+    
+    self[menu_config.dialog_name] = ButtonDialogTitle:new{ title = menu_config.title, buttons = buttons }
+    UIManager:show(self[menu_config.dialog_name])
+end
+
+function NotesListWidget:applySort()
+    local sort_mode = getSetting("sort_mode", "date_newest")
+    self:sortNotesList(self.notes_list, sort_mode)
+end
+function NotesListWidget:sortNotesList(notes_list, sort_mode)
+    sort_mode = sort_mode or getSetting("sort_mode", "date_newest")
+    local comparator = SORT_COMPARATORS[sort_mode]
+    if comparator then
+        table.sort(notes_list, comparator)
+    end
+    return notes_list
+end
 function NotesListWidget:showSettingsMenu()
+    local function makeToggleSetting(key, getter)
+        return function()
+            UIManager:close(self.settings_dialog)
+            setSetting(key, not (getter() == true))
+            self:refresh()
+            self:showSettingsMenu()
+        end
+    end
     
     local justify_text = getJustify() == true and "On" or "Off"
     local show_total_text = getShowTotalNotes() == true and "On" or "Off"
@@ -762,7 +1144,7 @@ function NotesListWidget:showSettingsMenu()
     local buttons = {
         {{ text = _("Font Sizes..."), callback = function()
             UIManager:close(self.settings_dialog)
-            self:showFontSizeMenu()
+            self:showSpinMenu("font_size", function() self:showSettingsMenu() end)
         end }},
         {{ text = _("Fonts..."), callback = function()
             UIManager:close(self.settings_dialog)
@@ -770,28 +1152,18 @@ function NotesListWidget:showSettingsMenu()
         end }},
         {{ text = _("Section Margins..."), callback = function()
             UIManager:close(self.settings_dialog)
-            self:showSectionMarginMenu()
+            self:showSpinMenu("section_margin", function() self:showSettingsMenu() end)
         end }},
         {{ text = _("Margins..."), callback = function()
             UIManager:close(self.settings_dialog)
-            self:showMarginMenu()
+            self:showSpinMenu("margins", function() self:showSettingsMenu() end)
         end }},
         {{ text = _("Truncate Lines: ") .. getTruncateLines(), callback = function()
             UIManager:close(self.settings_dialog)
             self:showSpinSetting(_("Truncate Lines"), "truncate_lines", DEFAULT_TRUNCATE_LINES, 1, 20, 1, function() self:showSettingsMenu() end)
         end }},
-        {{ text = _("Justify Text: ") .. justify_text, callback = function()
-            UIManager:close(self.settings_dialog)
-            setSetting("justify", not (getJustify() == true))
-            self:refresh()
-            self:showSettingsMenu()
-        end }},
-        {{ text = _("Show Total: ") .. show_total_text, callback = function()
-            UIManager:close(self.settings_dialog)
-            setSetting("show_total", not (getShowTotalNotes() == true))
-            self:refresh()
-            self:showSettingsMenu()
-        end }},
+        {{ text = _("Justify Text: ") .. justify_text, callback = makeToggleSetting("justify", getJustify) }},
+        {{ text = _("Show Total: ") .. show_total_text, callback = makeToggleSetting("show_total", getShowTotalNotes) }},
         {{ text = _("Back"), callback = function()
             UIManager:close(self.settings_dialog)
             self:showMainMenu()
@@ -801,26 +1173,7 @@ function NotesListWidget:showSettingsMenu()
     UIManager:show(self.settings_dialog)
 end
 function NotesListWidget:showFontSizeMenu()
-    local buttons = {
-        {{ text = _("Title Size: ") .. getTitleFontSize(), callback = function()
-            UIManager:close(self.font_size_dialog)
-            self:showSpinSetting(_("Title Font Size"), "title_font_size", DEFAULT_TITLE_FONT_SIZE, 8, 48, 1, function() self:showFontSizeMenu() end)
-        end }},
-        {{ text = _("Info Size: ") .. getInfoFontSize(), callback = function()
-            UIManager:close(self.font_size_dialog)
-            self:showSpinSetting(_("Info Font Size"), "info_font_size", DEFAULT_INFO_FONT_SIZE, 8, 48, 1, function() self:showFontSizeMenu() end)
-        end }},
-        {{ text = _("Content Size: ") .. getContentFontSize(), callback = function()
-            UIManager:close(self.font_size_dialog)
-            self:showSpinSetting(_("Content Font Size"), "content_font_size", DEFAULT_CONTENT_FONT_SIZE, 8, 48, 1, function() self:showFontSizeMenu() end)
-        end }},
-        {{ text = _("Back"), callback = function()
-            UIManager:close(self.font_size_dialog)
-            self:showSettingsMenu()
-        end }},
-    }
-    self.font_size_dialog = ButtonDialogTitle:new{ title = _("Font Sizes"), buttons = buttons }
-    UIManager:show(self.font_size_dialog)
+    self:showSpinMenu("font_size", function() self:showSettingsMenu() end)
 end
 function NotesListWidget:showFontsMenu()
     local function getAvailableFonts()
@@ -902,52 +1255,10 @@ function NotesListWidget:showFontsMenu()
     UIManager:show(self.fonts_dialog)
 end
 function NotesListWidget:showSectionMarginMenu()
-    local buttons = {
-        {{ text = _("After Title: ") .. getSetting("title_margin", DEFAULT_TITLE_MARGIN), callback = function()
-            UIManager:close(self.section_margin_dialog)
-            self:showSpinSetting(_("Margin After Title"), "title_margin", DEFAULT_TITLE_MARGIN, 0, 30, 1, function() self:showSectionMarginMenu() end)
-        end }},
-        {{ text = _("After Info: ") .. getSetting("info_margin", DEFAULT_INFO_MARGIN), callback = function()
-            UIManager:close(self.section_margin_dialog)
-            self:showSpinSetting(_("Margin After Info"), "info_margin", DEFAULT_INFO_MARGIN, 0, 30, 1, function() self:showSectionMarginMenu() end)
-        end }},
-        {{ text = _("Back"), callback = function()
-            UIManager:close(self.section_margin_dialog)
-            self:showSettingsMenu()
-        end }},
-    }
-    self.section_margin_dialog = ButtonDialogTitle:new{ title = _("Section Margins"), buttons = buttons }
-    UIManager:show(self.section_margin_dialog)
+    self:showSpinMenu("section_margin", function() self:showSettingsMenu() end)
 end
 function NotesListWidget:showMarginMenu()
-    local buttons = {
-        {{ text = _("Top Padding: ") .. getSetting("top_padding", DEFAULT_TOP_PADDING), callback = function()
-            UIManager:close(self.margin_dialog)
-            self:showSpinSetting(_("Top Padding"), "top_padding", DEFAULT_TOP_PADDING, 0, 100, 5, function() self:showMarginMenu() end)
-        end }},
-        {{ text = _("Horizontal Margin: ") .. getSetting("h_margin", DEFAULT_H_MARGIN), callback = function()
-            UIManager:close(self.margin_dialog)
-            self:showSpinSetting(_("Horizontal Margin"), "h_margin", DEFAULT_H_MARGIN, 5, 60, 5, function() self:showMarginMenu() end)
-        end }},
-        {{ text = _("Note Spacing: ") .. getSetting("note_spacing", DEFAULT_NOTE_SPACING), callback = function()
-            UIManager:close(self.margin_dialog)
-            self:showSpinSetting(_("Note Spacing"), "note_spacing", DEFAULT_NOTE_SPACING, 5, 100, 2, function() self:showMarginMenu() end)
-        end }},
-        {{ text = _("Text Margin: ") .. getSetting("text_margin", DEFAULT_TEXT_MARGIN), callback = function()
-            UIManager:close(self.margin_dialog)
-            self:showSpinSetting(_("Text Margin"), "text_margin", DEFAULT_TEXT_MARGIN, 0, 30, 2, function() self:showMarginMenu() end)
-        end }},
-        {{ text = _("Preview Fudge: ") .. getPreviewFudge(), callback = function()
-            UIManager:close(self.margin_dialog)
-            self:showSpinSetting(_("Preview Fudge"), "preview_fudge", DEFAULT_PREVIEW_FUDGE, 0, 40, 1, function() self:showMarginMenu() end)
-        end }},
-        {{ text = _("Back"), callback = function()
-            UIManager:close(self.margin_dialog)
-            self:showSettingsMenu()
-        end }},
-    }
-    self.margin_dialog = ButtonDialogTitle:new{ title = _("Margins"), buttons = buttons }
-    UIManager:show(self.margin_dialog)
+    self:showSpinMenu("margins", function() self:showSettingsMenu() end)
 end
 function NotesListWidget:showSpinSetting(title, key, default, min, max, step, back_callback)
     UIManager:show(SpinWidget:new{
@@ -967,123 +1278,136 @@ end
 function NotesListWidget:showFilterMenu()
     local ButtonDialog = require("ui/widget/buttondialog")
     local RadioButtonWidget = require("ui/widget/radiobuttonwidget")
-    local function showBookFilter()
-        local books = {}
-        for _, note in ipairs(self.notes_list) do
-            if note.book_title then books[note.book_title] = true end
+    
+    local function ensureFilter()
+        if not self.active_filter or type(self.active_filter) ~= "table" then
+            self.active_filter = {}
         end
-        local curr_books = self.active_filter and self.active_filter.books or {}
-        local book_titles = {}
-        for title in pairs(books) do table.insert(book_titles, title) end
-        table.sort(book_titles)
-        local dialog
-        local function toggle_book(title)
-            if not self.active_filter or type(self.active_filter) ~= "table" then self.active_filter = {} end
-            if not self.active_filter.books then self.active_filter.books = {} end
-            if self.active_filter.books[title] then
-                self.active_filter.books[title] = nil
+    end
+    
+    local function makeToggleFunction(category, items_table, item_value)
+        return function()
+            ensureFilter()
+            if not self.active_filter[category] then self.active_filter[category] = {} end
+            if self.active_filter[category][item_value] then
+                self.active_filter[category][item_value] = nil
             else
-                self.active_filter.books[title] = true
+                self.active_filter[category][item_value] = true
             end
-            UIManager:close(dialog)
-            showBookFilter()
         end
-        local book_buttons = {}
-        for _, title in ipairs(book_titles) do
-            local checked = curr_books and curr_books[title] or false
+    end
+    
+    local function showToggleFilter(config)
+        local data = config.collector(self.notes_list)
+        local keys = {}
+        for key in pairs(data) do table.insert(keys, key) end
+        table.sort(keys)
+        
+        local current_selections = self.active_filter and self.active_filter[config.filter_key] or {}
+        local dialog
+        
+        local function toggle_and_refresh(key)
+            makeToggleFunction(config.filter_key, data, key)()
+            UIManager:close(dialog)
+            showToggleFilter(config)
+        end
+        
+        local buttons = {}
+        for _, key in ipairs(keys) do
+            local checked = current_selections and current_selections[key] or false
             local mark = checked and "[x] " or "[ ] "
-            table.insert(book_buttons, {
-                { text = mark .. title, callback = function() toggle_book(title) end },
+            local display_text = config.formatter(key, data[key])
+            table.insert(buttons, {
+                { text = mark .. display_text, callback = function() toggle_and_refresh(key) end },
             })
         end
-        table.insert(book_buttons, {
-            { text = _( "Apply Book Filter" ), callback = function()
+        
+        table.insert(buttons, {
+            { text = _(config.apply_label), callback = function()
                 UIManager:close(dialog)
                 self:refresh()
             end },
         })
-        table.insert(book_buttons, {
-            { text = _( "Clear Book Filter" ), callback = function()
-                if not self.active_filter then self.active_filter = {} end
-                self.active_filter.books = nil
+        table.insert(buttons, {
+            { text = _(config.clear_label), callback = function()
+                ensureFilter()
+                self.active_filter[config.filter_key] = nil
                 UIManager:close(dialog)
                 self:refresh()
             end },
         })
+        
         dialog = ButtonDialog:new{
-            title = _( "Filter by Book" ),
-            buttons = book_buttons,
+            title = _(config.dialog_title),
+            buttons = buttons,
             width_factor = 0.7,
         }
         UIManager:show(dialog)
     end
+    
+    local FILTER_CONFIGS = {
+        book = {
+            filter_key = "books",
+            dialog_title = "Filter by Book",
+            apply_label = "Apply Book Filter",
+            clear_label = "Clear Book Filter",
+            collector = function(notes_list)
+                local books = {}
+                for _, note in ipairs(notes_list) do
+                    if note.book_title then 
+                        books[note.book_title] = note.book_authors or "Unknown"
+                    end
+                end
+                return books
+            end,
+            formatter = function(title, author)
+                local display_author = author
+                if author and author ~= "Unknown" and author:find("\n") then
+                    local first_author = author:match("^([^\n]+)")
+                    if first_author then
+                        first_author = first_author:match("^%s*(.-)%s*$")
+                        display_author = first_author .. " et al."
+                    end
+                end
+                return display_author ~= "Unknown" and (display_author .. " - " .. title) or title
+            end,
+        },
+        tags = {
+            filter_key = "tags",
+            dialog_title = "Filter by Tags",
+            apply_label = "Apply Tags Filter",
+            clear_label = "Clear Tags Filter",
+            collector = function(notes_list)
+                local tags = {}
+                for _, note in ipairs(notes_list) do
+                    local note_wrapper = NoteWrapper:new(note)
+                    local note_tags = note_wrapper:getTags()
+                    for _, tag in ipairs(note_tags) do
+                        if tag ~= "" then tags[tag] = true end
+                    end
+                end
+                return tags
+            end,
+            formatter = function(tag, _) return tag end,
+        },
+    }
+    
+    local function showBookFilter()
+        showToggleFilter(FILTER_CONFIGS.book)
+    end
 
     local function showTagsFilter()
-        local tags = {}
-        for _, note in ipairs(self.notes_list) do
-            local note_tags = note.tags or note.keywords or {}
-            if type(note_tags) == "string" then
-                for tag in note_tags:gmatch("[^,;\n|\t]+") do
-                    tag = tag:match("^%s*(.-)%s*$")
-                    if tag ~= "" then tags[tag] = true end
-                end
-            elseif type(note_tags) == "table" then
-                for _, tag in ipairs(note_tags) do
-                    if tag ~= "" then tags[tag] = true end
-                end
-            end
-        end
-        local curr_tags = self.active_filter and self.active_filter.tags or {}
-        local tag_list = {}
-        for tag in pairs(tags) do table.insert(tag_list, tag) end
-        table.sort(tag_list)
-        local dialog
-        local function toggle_tag(tag)
-            if not self.active_filter or type(self.active_filter) ~= "table" then self.active_filter = {} end
-            if not self.active_filter.tags then self.active_filter.tags = {} end
-            if self.active_filter.tags[tag] then
-                self.active_filter.tags[tag] = nil
-            else
-                self.active_filter.tags[tag] = true
-            end
-            UIManager:close(dialog)
-            showTagsFilter()
-        end
-        local tag_buttons = {}
-        for _, tag in ipairs(tag_list) do
-            local checked = curr_tags and curr_tags[tag] or false
-            local mark = checked and "[x] " or "[ ] "
-            table.insert(tag_buttons, {
-                { text = mark .. tag, callback = function() toggle_tag(tag) end },
-            })
-        end
-        table.insert(tag_buttons, {
-            { text = _( "Apply Tags Filter" ), callback = function()
-                UIManager:close(dialog)
-                self:refresh()
-            end },
-        })
-        table.insert(tag_buttons, {
-            { text = _( "Clear Tags Filter" ), callback = function()
-                if not self.active_filter then self.active_filter = {} end
-                self.active_filter.tags = nil
-                UIManager:close(dialog)
-                self:refresh()
-            end },
-        })
-        dialog = ButtonDialog:new{
-            title = _( "Filter by Tags" ),
-            buttons = tag_buttons,
-            width_factor = 0.7,
-        }
-        UIManager:show(dialog)
+        showToggleFilter(FILTER_CONFIGS.tags)
     end
 
     local function showColorStyleFilter()
         local colors, styles = {}, {}
         for _, note in ipairs(self.notes_list) do
-            if note.color then colors[note.color:lower()] = true end
-            if note.drawer then styles[note.drawer:lower()] = true end
+            local note_wrapper = NoteWrapper:new(note)
+            local color = note_wrapper:getNormalizedColor()
+            if color then colors[color] = true end
+            local drawer = note_wrapper:getNormalizedDrawer()
+            if drawer then styles[drawer] = true end
         end
         local curr_type = self.active_filter and self.active_filter.type or nil
         local curr_val = self.active_filter and self.active_filter.value or nil
@@ -1101,12 +1425,22 @@ function NotesListWidget:showFilterMenu()
         for _, v in ipairs(ReaderHighlight.highlight_colors) do
             local name, color_key = v[1], v[2]
             if colors[color_key] then
-                table.insert(radio_buttons, {
-                    { text = name, checked = curr_type == "color" and curr_val == color_key,
-                      bgcolor = BlitBuffer.colorFromString(HIGHLIGHT_COLORS[color_key]),
-                      provider = { type = "color", value = color_key } },
-                })
+                local color_value = HIGHLIGHT_COLORS[color_key]
+                if color_value then
+                    table.insert(radio_buttons, {
+                        { text = name, checked = curr_type == "color" and curr_val == color_key,
+                          bgcolor = BlitBuffer.colorFromString(color_value),
+                          provider = { type = "color", value = color_key } },
+                    })
+                end
             end
+        end
+        if colors["gray"] then
+            table.insert(radio_buttons, {
+                { text = "Gray", checked = curr_type == "color" and curr_val == "gray",
+                  bgcolor = BlitBuffer.COLOR_GRAY,
+                  provider = { type = "color", value = "gray" } },
+            })
         end
         table.insert(radio_buttons, {
             { text = _( "Clear Filter" ), checked = curr_type == nil, provider = nil },
@@ -1307,10 +1641,31 @@ function AllNotesViewer:getBookInfo(book_path)
     local ok, doc_settings = pcall(DocSettings.open, DocSettings, book_path)
     local data = ok and doc_settings and doc_settings.data or {}
     local filename = book_path:match("([^/\\]+)$") or book_path
-    local title = data.doc_props and data.doc_props.title
-    local authors = data.doc_props and data.doc_props.authors
+    
+    local custom_metadata = {}
+    if doc_settings then
+        local custom_metadata_file = DocSettings:findCustomMetadataFile(book_path)
+        if custom_metadata_file then
+            local ok_cm, cm_data = pcall(dofile, custom_metadata_file)
+            if ok_cm and cm_data then
+                custom_metadata = cm_data
+            end
+        end
+    end
+    
+    local title = (custom_metadata.custom_props and custom_metadata.custom_props.title) or 
+                  (custom_metadata.doc_props and custom_metadata.doc_props.title) or
+                  (data.doc_props and data.doc_props.title)
+    local authors = (custom_metadata.custom_props and custom_metadata.custom_props.authors) or 
+                    (custom_metadata.doc_props and custom_metadata.doc_props.authors) or
+                    (data.doc_props and data.doc_props.authors)
+    local tags = (custom_metadata.custom_props and (custom_metadata.custom_props.tags or custom_metadata.custom_props.keywords)) or
+                 (custom_metadata.doc_props and (custom_metadata.doc_props.tags or custom_metadata.doc_props.keywords)) or
+                 (data.doc_props and (data.doc_props.tags or data.doc_props.keywords))
+    
     if not title or title == "" then title = filename:gsub("%.[^.]+$", "") end
-    return { path = book_path, filename = filename, title = title or filename, authors = authors or "Unknown" }
+    
+    return { path = book_path, filename = filename, title = title or filename, authors = authors or "Unknown", tags = tags }
 end
 function AllNotesViewer:findAllNotes()
     local notes_data = {}
@@ -1324,7 +1679,7 @@ function AllNotesViewer:findAllNotes()
                 local book_info = self:getBookInfo(book_path)
                 table.insert(notes_data, {
                     path = book_path, filename = book_info.filename,
-                    title = book_info.title, authors = book_info.authors, notes = annotations,
+                    title = book_info.title, authors = book_info.authors, tags = book_info.tags, notes = annotations,
                 })
             end
         end
@@ -1334,33 +1689,25 @@ end
 function AllNotesViewer:showAllNotes()
     local all_notes_by_book = self:findAllNotes()
     local notes_list = {}
+    
+    local function split_tags(val)
+        if not val then return nil end
+        if type(val) == "table" then return val end
+        if type(val) == "string" then
+            local t = {}
+            for tag in val:gmatch("[^,;\n|\t]+") do
+                tag = tag:match("^%s*(.-)%s*$")
+                if tag ~= "" then table.insert(t, tag) end
+            end
+            return t
+        end
+        return nil
+    end
+    
     for _, book_data in ipairs(all_notes_by_book) do
-        
-        local tags
-        do
-            local ok, doc_settings = pcall(DocSettings.open, DocSettings, book_data.path)
-            if ok and doc_settings and doc_settings.data and doc_settings.data.doc_props then
-                tags = doc_settings.data.doc_props.tags or doc_settings.data.doc_props.keywords
-            end
-        end
-        
-        local function split_tags(val)
-            if not val then return nil end
-            if type(val) == "table" then return val end
-            if type(val) == "string" then
-                local t = {}
-                for tag in val:gmatch("[^,;\n|\t]+") do
-                    tag = tag:match("^%s*(.-)%s*$")
-                    if tag ~= "" then table.insert(t, tag) end
-                end
-                return t
-            end
-            return nil
-        end
-        local tags_table = split_tags(tags)
+        local book_tags_table = split_tags(book_data.tags)
         for _, note in ipairs(book_data.notes) do
-            
-            local note_tags = split_tags(note.tags) or tags_table or {}
+            local note_tags = split_tags(note.tags) or book_tags_table or {}
             
             local tag_set = {}
             for _, tag in ipairs(note_tags) do if tag ~= "" then tag_set[tag] = true end end
@@ -1369,6 +1716,7 @@ function AllNotesViewer:showAllNotes()
             table.sort(all_tags)
             table.insert(notes_list, {
                 book_title = book_data.title, book_authors = book_data.authors,
+                book_filename = book_data.filename,
                 book_path = book_data.path, page = note.page, chapter = note.chapter,
                 pos0 = note.pos0, pos1 = note.pos1,
                 highlighted_text = note.text, user_note = note.notes,
@@ -1381,7 +1729,8 @@ function AllNotesViewer:showAllNotes()
         UIManager:show(InfoMessage:new{ text = _("No annotations found.") })
         return
     end
-    table.sort(notes_list, function(a, b) return (a.datetime or "") > (b.datetime or "") end)
+    local sort_mode = getSetting("sort_mode", "date_newest")
+    NotesListWidget:sortNotesList(notes_list, sort_mode)
     UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self })
 end
 function AllNotesViewer:showNoteDetails(note, parent_widget)
@@ -1390,10 +1739,21 @@ function AllNotesViewer:showNoteDetails(note, parent_widget)
     local ICON_NOTE = "\u{F040}\u{2002}"
 
     local text_parts = {}
-    if note.highlighted_text and note.highlighted_text ~= "" then
+    
+    local note_wrapper = NoteWrapper:new(note)
+    local display_authors = note_wrapper:getDisplayAuthors()
+    if display_authors then
+        local authors_display = note.book_authors:gsub("\n", ", ")
+        table.insert(text_parts, "Author: " .. authors_display .. "\n")
+    end
+    
+    if note_wrapper:hasHighlightedText() then
+        if #text_parts > 0 then
+            table.insert(text_parts, "\n")
+        end
         table.insert(text_parts, ICON_HIGHLIGHT .. note.highlighted_text)
     end
-    if note.user_note and note.user_note ~= "" then
+    if note_wrapper:hasUserNote() then
         if #text_parts > 0 then
             table.insert(text_parts, "\n\n")
         end
