@@ -98,6 +98,28 @@ local function getContentFont() return getSetting("content_font", nil) end
 local function getShowTotalNotes() return getSetting("show_total", true) end
 local function getTopPadding() return Screen:scaleBySize(getSetting("top_padding", DEFAULT_TOP_PADDING)) end
 local function getPreviewFudge() return tonumber(getSetting("preview_fudge", DEFAULT_PREVIEW_FUDGE)) end
+local function getHideDupTitle() return getSetting("hide_dup_title", true) ~= false end
+local function getHideDupInfo() return getSetting("hide_dup_info", true) ~= false end
+local function getDedupInfoFields() return getSetting("dedup_info_fields", "date,author,chapter") end
+local function getShowInfo() return getSetting("show_info", true) ~= false end
+local function getInfoFields() return getSetting("info_fields", "date,author,chapter") end
+local function getAlwaysShowFirstOnPage() return getSetting("always_show_first_on_page", true) ~= false end
+
+local function getNoteInfoKey(note, fields_setting)
+    local parts = {}
+    local fields = {}
+    for f in fields_setting:gmatch("[^,]+") do fields[f] = true end
+    if fields["date"] then
+        table.insert(parts, note.datetime and note.datetime:match("^(%d+-%d+-%d+)") or "")
+    end
+    if fields["author"] then
+        table.insert(parts, note.book_authors or "")
+    end
+    if fields["chapter"] then
+        table.insert(parts, note.chapter or "")
+    end
+    return table.concat(parts, "|")
+end
 
 local SORT_MODES = {
     date_newest = { label = _("Newest First") },
@@ -385,7 +407,7 @@ function UnderlineWidget:init() self.dimen = Geom:new{ w = self.width, h = self.
 function UnderlineWidget:paintTo(bb, x, y)
     bb:paintRect(x, y + self.height - 2, self.width, 2, BlitBuffer.COLOR_BLACK)
 end
-local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_parent = nil, is_last = false, is_preview = false, disable_tap = false }
+local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_parent = nil, is_last = false, is_preview = false, disable_tap = false, skip_title = false, skip_info = false }
 function NoteItemWidget:init()
     local h_margin = getHMargin()
     local text_margin = getTextMargin()
@@ -414,14 +436,20 @@ function NoteItemWidget:init()
 
     local date_text = self:formatDate(self.note.datetime) or ""
     local drawer = self.note.drawer or "lighten"
+    local show_info_header = getShowInfo()
+    local info_fields_str = getInfoFields()
+    local info_fields = {}
+    for f in info_fields_str:gmatch("[^,]+") do info_fields[f] = true end
     local info_parts = {}
-    if date_text ~= "" then table.insert(info_parts, date_text) end
-    local display_authors = note_wrapper:getDisplayAuthors()
-    if display_authors then
-        table.insert(info_parts, display_authors)
-    end
-    if self.note.chapter and self.note.chapter ~= "" then
-        table.insert(info_parts, self.note.chapter)
+    if show_info_header then
+        if info_fields["date"] and date_text ~= "" then table.insert(info_parts, date_text) end
+        local display_authors = note_wrapper:getDisplayAuthors()
+        if info_fields["author"] and display_authors then
+            table.insert(info_parts, display_authors)
+        end
+        if info_fields["chapter"] and self.note.chapter and self.note.chapter ~= "" then
+            table.insert(info_parts, self.note.chapter)
+        end
     end
     local info_text = table.concat(info_parts, " | ")
 
@@ -452,18 +480,25 @@ function NoteItemWidget:init()
     local line_width = text_content_width - Size.padding.small * 2
 
     local note_content = VerticalGroup:new{ align = "left" }
-    table.insert(note_content, LeftContainer:new{
-        dimen = Geom:new{ w = inner_width, h = title_widget:getSize().h },
-        HorizontalGroup:new{ HorizontalSpan:new{ width = h_padding }, title_widget },
-    })
-    table.insert(note_content, VerticalSpan:new{ width = title_margin })
-    if info_text ~= "" then
+    if not self.skip_title then
+        table.insert(note_content, LeftContainer:new{
+            dimen = Geom:new{ w = inner_width, h = title_widget:getSize().h },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = h_padding }, title_widget },
+        })
+        table.insert(note_content, VerticalSpan:new{ width = title_margin })
+    end
+    local info_visible = show_info_header and not self.skip_info and info_text ~= ""
+    if info_visible then
         table.insert(note_content, LeftContainer:new{
             dimen = Geom:new{ w = inner_width, h = date_widget:getSize().h },
             HorizontalGroup:new{ HorizontalSpan:new{ width = h_padding }, date_widget },
         })
     end
-    table.insert(note_content, VerticalSpan:new{ width = info_margin })
+    -- only add the post-header margin when at least one header row is actually shown
+    local any_header_visible = (not self.skip_title) or info_visible
+    if any_header_visible then
+        table.insert(note_content, VerticalSpan:new{ width = info_margin })
+    end
     
     if note_wrapper:hasHighlightedText() then
         
@@ -706,8 +741,21 @@ function NotesListWidget:calculatePages()
     local available_content_height = self.content_height - subtitle_height
     local effective_content_height = available_content_height + getPreviewFudge()
     
+    local dedup_prev_title = nil
+    local dedup_prev_info_key = nil
+    local dedup_fields = getDedupInfoFields()
+    local do_hide_dup_title = getHideDupTitle()
+    local do_hide_dup_info = getHideDupInfo()
+    local always_show_first = getAlwaysShowFirstOnPage()
     for i, note in ipairs(self.filtered_notes) do
-        local temp_widget = NoteItemWidget:new{ width = self.width, note = note, show_parent = self }
+        local is_first_on_page = (#current_page_notes == 0)
+        local skip_title = do_hide_dup_title
+            and not (always_show_first and is_first_on_page)
+            and (note.book_title == dedup_prev_title)
+        local skip_info = do_hide_dup_info
+            and not (always_show_first and is_first_on_page)
+            and (getNoteInfoKey(note, dedup_fields) == dedup_prev_info_key)
+        local temp_widget = NoteItemWidget:new{ width = self.width, note = note, show_parent = self, skip_title = skip_title, skip_info = skip_info }
         local item_height = temp_widget.dimen.h
         local spacing = (#current_page_notes > 0) and note_spacing or 0
         local next_height = current_height + spacing + item_height
@@ -719,6 +767,8 @@ function NotesListWidget:calculatePages()
             current_page_notes = {i}
             current_height = item_height
         end
+        dedup_prev_title = note.book_title
+        dedup_prev_info_key = getNoteInfoKey(note, dedup_fields)
     end
     if #current_page_notes > 0 then table.insert(self.pages, current_page_notes) end
     if #self.pages == 0 then self.pages = {{}} end
@@ -901,15 +951,44 @@ end
     local page_indices = self.pages[self.current_page] or {}
     local last_note_widget = nil
     local note_spacing = getNoteSpacing()
+    local dedup_fields = getDedupInfoFields()
+    local do_hide_dup_title = getHideDupTitle()
+    local do_hide_dup_info = getHideDupInfo()
+    local always_show_first = getAlwaysShowFirstOnPage()
+    -- determine dedup state from last note of previous page
+    local dedup_prev_title = nil
+    local dedup_prev_info_key = nil
+    if do_hide_dup_title or do_hide_dup_info then
+        for p = 1, self.current_page - 1 do
+            local prev_page = self.pages[p] or {}
+            if #prev_page > 0 then
+                local last_idx = prev_page[#prev_page]
+                local prev_note = self.filtered_notes[last_idx]
+                if prev_note then
+                    dedup_prev_title = prev_note.book_title
+                    dedup_prev_info_key = getNoteInfoKey(prev_note, dedup_fields)
+                end
+            end
+        end
+    end
     for i, idx in ipairs(page_indices) do
         local note = self.filtered_notes[idx]
         if note then
             if i > 1 then
                 table.insert(notes_group, VerticalSpan:new{ width = note_spacing })
             end
-            local note_widget = NoteItemWidget:new{ width = self.width, note = note, show_parent = self }
+            local is_first_on_page = (i == 1)
+            local skip_title = do_hide_dup_title
+                and not (always_show_first and is_first_on_page)
+                and (note.book_title == dedup_prev_title)
+            local skip_info = do_hide_dup_info
+                and not (always_show_first and is_first_on_page)
+                and (getNoteInfoKey(note, dedup_fields) == dedup_prev_info_key)
+            local note_widget = NoteItemWidget:new{ width = self.width, note = note, show_parent = self, skip_title = skip_title, skip_info = skip_info }
             table.insert(notes_group, note_widget)
             if i == #page_indices then last_note_widget = note_widget end
+            dedup_prev_title = note.book_title
+            dedup_prev_info_key = getNoteInfoKey(note, dedup_fields)
         end
     end
 
@@ -925,12 +1004,16 @@ end
                     if w.getSize then used_height = used_height + w:getSize().h end
                 end
                 local available_height = self.height - self.title_height - self.footer_height - used_height - 2
+                local preview_skip_title = do_hide_dup_title and (next_note.book_title == dedup_prev_title)
+                local preview_skip_info = do_hide_dup_info and (getNoteInfoKey(next_note, dedup_fields) == dedup_prev_info_key)
                 local preview_widget = NoteItemWidget:new{
                     width = self.width,
                     note = next_note,
                     show_parent = self,
                     is_preview = true,
-                    disable_tap = true
+                    disable_tap = true,
+                    skip_title = preview_skip_title,
+                    skip_info = preview_skip_info,
                 }
                 local FrameContainer = require("ui/widget/container/framecontainer")
                 local AlphaContainer = require("ui/widget/container/alphacontainer")
@@ -1140,6 +1223,10 @@ function NotesListWidget:showSettingsMenu()
     
     local justify_text = getJustify() == true and "On" or "Off"
     local show_total_text = getShowTotalNotes() == true and "On" or "Off"
+    local hide_dup_title_text = getHideDupTitle() and "On" or "Off"
+    local hide_dup_info_text = getHideDupInfo() and "On" or "Off"
+    local show_info_text = getShowInfo() and "On" or "Off"
+    local always_first_text = getAlwaysShowFirstOnPage() and "On" or "Off"
     
     local buttons = {
         {{ text = _("Font Sizes..."), callback = function()
@@ -1164,6 +1251,18 @@ function NotesListWidget:showSettingsMenu()
         end }},
         {{ text = _("Justify Text: ") .. justify_text, callback = makeToggleSetting("justify", getJustify) }},
         {{ text = _("Show Total: ") .. show_total_text, callback = makeToggleSetting("show_total", getShowTotalNotes) }},
+        {{ text = _("Show Info Header: ") .. show_info_text, callback = makeToggleSetting("show_info", getShowInfo) }},
+        {{ text = _("Show Info Header: Fields..."), callback = function()
+            UIManager:close(self.settings_dialog)
+            self:showInfoFieldsMenu()
+        end }},
+        {{ text = _("Hide Repeat Title: ") .. hide_dup_title_text, callback = makeToggleSetting("hide_dup_title", getHideDupTitle) }},
+        {{ text = _("Hide Repeat Info: ") .. hide_dup_info_text, callback = makeToggleSetting("hide_dup_info", getHideDupInfo) }},
+        {{ text = _("Hide Repeat Info: Match By Fields..."), callback = function()
+            UIManager:close(self.settings_dialog)
+            self:showDedupInfoFieldsMenu()
+        end }},
+        {{ text = _("Show Repeat Headers On First Page Entry: ") .. always_first_text, callback = makeToggleSetting("always_show_first_on_page", getAlwaysShowFirstOnPage) }},
         {{ text = _("Back"), callback = function()
             UIManager:close(self.settings_dialog)
             self:showMainMenu()
@@ -1171,6 +1270,74 @@ function NotesListWidget:showSettingsMenu()
     }
     self.settings_dialog = ButtonDialogTitle:new{ title = _("Settings"), buttons = buttons }
     UIManager:show(self.settings_dialog)
+end
+function NotesListWidget:showInfoFieldsMenu()
+    local fields_setting = getInfoFields()
+    local active = {}
+    for f in fields_setting:gmatch("[^,]+") do active[f] = true end
+
+    local function toggleField(field)
+        if active[field] then active[field] = nil else active[field] = true end
+        local parts = {}
+        for _, f in ipairs({"date", "author", "chapter"}) do
+            if active[f] then table.insert(parts, f) end
+        end
+        local new_val = #parts > 0 and table.concat(parts, ",") or "date"
+        setSetting("info_fields", new_val)
+        fields_setting = new_val
+        active = {}
+        for f in new_val:gmatch("[^,]+") do active[f] = true end
+        self:refresh()
+        UIManager:close(self.info_fields_dialog)
+        self:showInfoFieldsMenu()
+    end
+
+    local function check(field) return active[field] and "\u{2713} " or "  " end
+    local buttons = {
+        {{ text = check("date")    .. _("Date"),    callback = function() toggleField("date")    end }},
+        {{ text = check("author")  .. _("Author"),  callback = function() toggleField("author")  end }},
+        {{ text = check("chapter") .. _("Chapter"), callback = function() toggleField("chapter") end }},
+        {{ text = _("Back"), callback = function()
+            UIManager:close(self.info_fields_dialog)
+            self:showSettingsMenu()
+        end }},
+    }
+    self.info_fields_dialog = ButtonDialogTitle:new{ title = _("Show Info Header: Fields"), buttons = buttons }
+    UIManager:show(self.info_fields_dialog)
+end
+function NotesListWidget:showDedupInfoFieldsMenu()
+    local fields_setting = getDedupInfoFields()
+    local active = {}
+    for f in fields_setting:gmatch("[^,]+") do active[f] = true end
+
+    local function toggleField(field)
+        if active[field] then active[field] = nil else active[field] = true end
+        local parts = {}
+        for _, f in ipairs({"date", "author", "chapter"}) do
+            if active[f] then table.insert(parts, f) end
+        end
+        local new_val = #parts > 0 and table.concat(parts, ",") or "date"
+        setSetting("dedup_info_fields", new_val)
+        fields_setting = new_val
+        active = {}
+        for f in new_val:gmatch("[^,]+") do active[f] = true end
+        self:refresh()
+        UIManager:close(self.dedup_fields_dialog)
+        self:showDedupInfoFieldsMenu()
+    end
+
+    local function check(field) return active[field] and "✓ " or "  " end
+    local buttons = {
+        {{ text = check("date")    .. _("Date"),    callback = function() toggleField("date")    end }},
+        {{ text = check("author")  .. _("Author"),  callback = function() toggleField("author")  end }},
+        {{ text = check("chapter") .. _("Chapter"), callback = function() toggleField("chapter") end }},
+        {{ text = _("Back"), callback = function()
+            UIManager:close(self.dedup_fields_dialog)
+            self:showSettingsMenu()
+        end }},
+    }
+    self.dedup_fields_dialog = ButtonDialogTitle:new{ title = _("Hide Repeat Info: Match By"), buttons = buttons }
+    UIManager:show(self.dedup_fields_dialog)
 end
 function NotesListWidget:showFontSizeMenu()
     self:showSpinMenu("font_size", function() self:showSettingsMenu() end)
