@@ -711,75 +711,89 @@ function NotesListWidget:init()
     self.initial_update = true
 end
 function NotesListWidget:applyFilter()
+    local function textMatches(raw, query, mode, case_sensitive)
+        local text = case_sensitive and raw or raw:lower()
+        local q    = case_sensitive and query or query:lower()
+        if mode == "phrase" then
+            return text:find(q, 1, true) ~= nil
+        elseif mode == "any" then
+            for word in q:gmatch("%S+") do
+                if text:find(word, 1, true) then return true end
+            end
+            return false
+        else -- "all"
+            for word in q:gmatch("%S+") do
+                if not text:find(word, 1, true) then return false end
+            end
+            return true
+        end
+    end
     self.filtered_notes = {}
     for _, note in ipairs(self.notes_list) do
         local match = true
         if self.active_filter then
-            if self.active_filter.books and next(self.active_filter.books) ~= nil then
-                match = self.active_filter.books[note.book_title] == true
+            local af = self.active_filter
+            -- Books include / exclude
+            if af.books and next(af.books) then
+                match = af.books[note.book_title] == true
             end
-            if match and self.active_filter.tags and next(self.active_filter.tags) ~= nil then
-                local note_wrapper = NoteWrapper:new(note)
-                local note_tags = note_wrapper:getTags()
+            if match and af.books_exclude and next(af.books_exclude) then
+                if af.books_exclude[note.book_title] then match = false end
+            end
+            -- Tags include / exclude
+            if match and af.tags and next(af.tags) then
+                local nw = NoteWrapper:new(note)
                 local found = false
-                for _, tag in ipairs(note_tags) do
-                    if self.active_filter.tags[tag] then found = true break end
+                for _, tag in ipairs(nw:getTags()) do
+                    if af.tags[tag] then found = true; break end
                 end
                 match = found
             end
-            if match and self.active_filter.chapters and next(self.active_filter.chapters) ~= nil then
-                match = note.chapter and self.active_filter.chapters[note.chapter] == true
-            end
-            if match and self.active_filter.type == "color" then
-                local note_wrapper = NoteWrapper:new(note)
-                match = note_wrapper:getNormalizedColor() == self.active_filter.value
-            elseif match and self.active_filter.type == "style" then
-                local note_wrapper = NoteWrapper:new(note)
-                match = note_wrapper:getNormalizedDrawer() == self.active_filter.value
-            end
-            if match and self.active_filter.search_highlight and self.active_filter.search_highlight ~= "" then
-                local q    = self.active_filter.search_highlight
-                local mode = self.active_filter.search_highlight_mode or "all"
-                local case = self.active_filter.search_highlight_case
-                local text = case and (note.highlighted_text or "") or (note.highlighted_text or ""):lower()
-                if not case then q = q:lower() end
-                if mode == "phrase" then
-                    match = text:find(q, 1, true) ~= nil
-                elseif mode == "any" then
-                    match = false
-                    for word in q:gmatch("%S+") do
-                        if text:find(word, 1, true) then match = true; break end
-                    end
-                else -- "all"
-                    for word in q:gmatch("%S+") do
-                        if not text:find(word, 1, true) then match = false; break end
-                    end
+            if match and af.tags_exclude and next(af.tags_exclude) then
+                local nw = NoteWrapper:new(note)
+                for _, tag in ipairs(nw:getTags()) do
+                    if af.tags_exclude[tag] then match = false; break end
                 end
             end
-            if match and self.active_filter.search_note and self.active_filter.search_note ~= "" then
-                local q    = self.active_filter.search_note
-                local mode = self.active_filter.search_note_mode or "all"
-                local case_sensitive = (self.active_filter.search_note_case == true)
-                local raw  = note.user_note or ""
-                local text, cq
-                if case_sensitive then
-                    text = raw
-                    cq   = q
-                else
-                    text = raw:lower()
-                    cq   = q:lower()
-                end
-                if mode == "phrase" then
-                    match = text:find(cq, 1, true) ~= nil
-                elseif mode == "any" then
+            -- Chapters include / exclude
+            if match and af.chapters and next(af.chapters) then
+                match = note.chapter and af.chapters[note.chapter] == true
+            end
+            if match and af.chapters_exclude and next(af.chapters_exclude) then
+                if note.chapter and af.chapters_exclude[note.chapter] then match = false end
+            end
+            -- Color / Style include
+            if match and af.type == "color" then
+                match = NoteWrapper:new(note):getNormalizedColor() == af.value
+            elseif match and af.type == "style" then
+                match = NoteWrapper:new(note):getNormalizedDrawer() == af.value
+            end
+            -- Color / Style exclude
+            if match and af.type_exclude == "color" then
+                if NoteWrapper:new(note):getNormalizedColor() == af.value_exclude then match = false end
+            elseif match and af.type_exclude == "style" then
+                if NoteWrapper:new(note):getNormalizedDrawer() == af.value_exclude then match = false end
+            end
+            -- Highlight text include / exclude
+            if match and af.search_highlight and af.search_highlight ~= "" then
+                match = textMatches(note.highlighted_text or "", af.search_highlight,
+                    af.search_highlight_mode or "all", af.search_highlight_case == true)
+            end
+            if match and af.search_highlight_exclude and af.search_highlight_exclude ~= "" then
+                if textMatches(note.highlighted_text or "", af.search_highlight_exclude,
+                    af.search_highlight_exclude_mode or "all", af.search_highlight_exclude_case == true) then
                     match = false
-                    for word in cq:gmatch("%S+") do
-                        if text:find(word, 1, true) then match = true; break end
-                    end
-                else -- "all"
-                    for word in cq:gmatch("%S+") do
-                        if not text:find(word, 1, true) then match = false; break end
-                    end
+                end
+            end
+            -- Note text include / exclude
+            if match and af.search_note and af.search_note ~= "" then
+                match = textMatches(note.user_note or "", af.search_note,
+                    af.search_note_mode or "all", af.search_note_case == true)
+            end
+            if match and af.search_note_exclude and af.search_note_exclude ~= "" then
+                if textMatches(note.user_note or "", af.search_note_exclude,
+                    af.search_note_exclude_mode or "all", af.search_note_exclude_case == true) then
+                    match = false
                 end
             end
         end
@@ -793,11 +807,17 @@ function NotesListWidget:calculatePages()
     
     local filter_text = self.active_filter and (
         (self.active_filter.value and (self.active_filter.type == "color" or self.active_filter.type == "style")) or
+        (self.active_filter.value_exclude and (self.active_filter.type_exclude == "color" or self.active_filter.type_exclude == "style")) or
         (self.active_filter.books and next(self.active_filter.books)) or
+        (self.active_filter.books_exclude and next(self.active_filter.books_exclude)) or
         (self.active_filter.tags and next(self.active_filter.tags)) or
+        (self.active_filter.tags_exclude and next(self.active_filter.tags_exclude)) or
         (self.active_filter.search_highlight and self.active_filter.search_highlight ~= "") or
+        (self.active_filter.search_highlight_exclude and self.active_filter.search_highlight_exclude ~= "") or
         (self.active_filter.search_note and self.active_filter.search_note ~= "") or
-        (self.active_filter.chapters and next(self.active_filter.chapters))
+        (self.active_filter.search_note_exclude and self.active_filter.search_note_exclude ~= "") or
+        (self.active_filter.chapters and next(self.active_filter.chapters)) or
+        (self.active_filter.chapters_exclude and next(self.active_filter.chapters_exclude))
     ) or false
     
     local subtitle_height = 0
@@ -1043,46 +1063,88 @@ function NotesListWidget:updatePage()
 local function filterToString(filter)
     if not filter then return "" end
     local parts = {}
+    -- Color / Style include
     if filter.type == "color" or filter.type == "style" then
         local prefix = filter.type == "color" and "C: " or "S: "
         local name = nil
         if filter.type == "color" then
             for _, v in ipairs(ReaderHighlight.highlight_colors) do
-                if v[2] == filter.value then
-                    name = v[1]
-                    break
-                end
+                if v[2] == filter.value then name = v[1]; break end
             end
         end
         table.insert(parts, prefix .. (name or (filter.value:sub(1,1):upper() .. filter.value:sub(2))))
     end
+    -- Color / Style exclude
+    if filter.type_exclude == "color" or filter.type_exclude == "style" then
+        local prefix = filter.type_exclude == "color" and "C≠ " or "S≠ "
+        local name = nil
+        if filter.type_exclude == "color" then
+            for _, v in ipairs(ReaderHighlight.highlight_colors) do
+                if v[2] == filter.value_exclude then name = v[1]; break end
+            end
+        end
+        table.insert(parts, prefix .. (name or (filter.value_exclude:sub(1,1):upper() .. filter.value_exclude:sub(2))))
+    end
+    -- Books include / exclude
     if filter.books and next(filter.books) then
         local books = {}
         for k in pairs(filter.books) do table.insert(books, k) end
         table.insert(parts, "B: " .. table.concat(books, ", "))
     end
+    if filter.books_exclude and next(filter.books_exclude) then
+        local books = {}
+        for k in pairs(filter.books_exclude) do table.insert(books, k) end
+        table.insert(parts, "B≠ " .. table.concat(books, ", "))
+    end
+    -- Tags include / exclude
     if filter.tags and next(filter.tags) then
         local tags = {}
         for k in pairs(filter.tags) do table.insert(tags, k) end
         table.insert(parts, "T: " .. table.concat(tags, ", "))
     end
+    if filter.tags_exclude and next(filter.tags_exclude) then
+        local tags = {}
+        for k in pairs(filter.tags_exclude) do table.insert(tags, k) end
+        table.insert(parts, "T≠ " .. table.concat(tags, ", "))
+    end
+    -- Highlight text include / exclude
     if filter.search_highlight and filter.search_highlight ~= "" then
         local mode = filter.search_highlight_mode or "all"
         local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
         local case_str = filter.search_highlight_case and " [Aa]" or ""
         table.insert(parts, "H: \"" .. filter.search_highlight .. "\"" .. mode_str .. case_str)
     end
+    if filter.search_highlight_exclude and filter.search_highlight_exclude ~= "" then
+        local mode = filter.search_highlight_exclude_mode or "all"
+        local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
+        local case_str = filter.search_highlight_exclude_case and " [Aa]" or ""
+        table.insert(parts, "H≠ \"" .. filter.search_highlight_exclude .. "\"" .. mode_str .. case_str)
+    end
+    -- Note text include / exclude
     if filter.search_note and filter.search_note ~= "" then
         local mode = filter.search_note_mode or "all"
         local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
         local case_str = filter.search_note_case and " [Aa]" or ""
         table.insert(parts, "N: \"" .. filter.search_note .. "\"" .. mode_str .. case_str)
     end
+    if filter.search_note_exclude and filter.search_note_exclude ~= "" then
+        local mode = filter.search_note_exclude_mode or "all"
+        local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
+        local case_str = filter.search_note_exclude_case and " [Aa]" or ""
+        table.insert(parts, "N≠ \"" .. filter.search_note_exclude .. "\"" .. mode_str .. case_str)
+    end
+    -- Chapters include / exclude
     if filter.chapters and next(filter.chapters) then
         local chs = {}
         for k in pairs(filter.chapters) do table.insert(chs, k) end
         table.sort(chs)
         table.insert(parts, "Ch: " .. table.concat(chs, ", "))
+    end
+    if filter.chapters_exclude and next(filter.chapters_exclude) then
+        local chs = {}
+        for k in pairs(filter.chapters_exclude) do table.insert(chs, k) end
+        table.sort(chs)
+        table.insert(parts, "Ch≠ " .. table.concat(chs, ", "))
     end
     return #parts > 0 and table.concat(parts, "; ") or ""
 end
@@ -1691,59 +1753,71 @@ function NotesListWidget:showFilterMenu()
             self.active_filter = {}
         end
     end
-    
-    local function makeToggleFunction(category, items_table, item_value)
-        return function()
-            ensureFilter()
-            if not self.active_filter[category] then self.active_filter[category] = {} end
-            if self.active_filter[category][item_value] then
-                self.active_filter[category][item_value] = nil
-            else
-                self.active_filter[category][item_value] = true
-            end
-        end
-    end
-    
+
+    local showFilterMenu  -- forward reference
+
     local function showToggleFilter(config)
         local data = config.collector(self.notes_list)
         local keys = {}
         for key in pairs(data) do table.insert(keys, key) end
         table.sort(keys)
-        
-        local current_selections = self.active_filter and self.active_filter[config.filter_key] or {}
-        local dialog
-        
-        local function toggle_and_refresh(key)
-            makeToggleFunction(config.filter_key, data, key)()
-            UIManager:close(dialog)
-            showToggleFilter(config)
+
+        local function getState(key)
+            local inc = (self.active_filter and self.active_filter[config.filter_key]) or {}
+            local exc = (self.active_filter and self.active_filter[config.exclude_filter_key]) or {}
+            if inc[key] then return "include"
+            elseif exc[key] then return "exclude"
+            else return "none" end
         end
-        
+
+        local function cycleState(key)
+            ensureFilter()
+            local inc = self.active_filter[config.filter_key] or {}
+            local exc = self.active_filter[config.exclude_filter_key] or {}
+            local state = getState(key)
+            if state == "none" then
+                inc[key] = true
+            elseif state == "include" then
+                inc[key] = nil
+                exc[key] = true
+            else
+                exc[key] = nil
+            end
+            self.active_filter[config.filter_key] = next(inc) and inc or nil
+            self.active_filter[config.exclude_filter_key] = next(exc) and exc or nil
+        end
+
+        local dialog
         local buttons = {}
         for _, key in ipairs(keys) do
-            local checked = current_selections and current_selections[key] or false
-            local mark = checked and "[x] " or "[ ] "
+            local state = getState(key)
+            local mark = state == "include" and "[+] " or state == "exclude" and "[-] " or "[ ] "
             local display_text = config.formatter(key, data[key])
             table.insert(buttons, {
-                { text = mark .. display_text, callback = function() toggle_and_refresh(key) end },
+                { text = mark .. display_text, callback = function()
+                    cycleState(key)
+                    UIManager:close(dialog)
+                    showToggleFilter(config)
+                end },
             })
         end
-        
         table.insert(buttons, {
             { text = _(config.apply_label), callback = function()
                 UIManager:close(dialog)
                 self:refresh()
+                showFilterMenu()
             end },
         })
         table.insert(buttons, {
             { text = _(config.clear_label), callback = function()
                 ensureFilter()
                 self.active_filter[config.filter_key] = nil
+                self.active_filter[config.exclude_filter_key] = nil
                 UIManager:close(dialog)
                 self:refresh()
+                showFilterMenu()
             end },
         })
-        
         dialog = ButtonDialog:new{
             title = _(config.dialog_title),
             buttons = buttons,
@@ -1755,6 +1829,7 @@ function NotesListWidget:showFilterMenu()
     local FILTER_CONFIGS = {
         book = {
             filter_key = "books",
+            exclude_filter_key = "books_exclude",
             dialog_title = "Filter by Book",
             apply_label = "Apply Book Filter",
             clear_label = "Clear Book Filter",
@@ -1781,6 +1856,7 @@ function NotesListWidget:showFilterMenu()
         },
         tags = {
             filter_key = "tags",
+            exclude_filter_key = "tags_exclude",
             dialog_title = "Filter by Tags",
             apply_label = "Apply Tags Filter",
             clear_label = "Clear Tags Filter",
@@ -1799,6 +1875,7 @@ function NotesListWidget:showFilterMenu()
         },
         chapter = {
             filter_key = "chapters",
+            exclude_filter_key = "chapters_exclude",
             dialog_title = "Filter by Chapter",
             apply_label = "Apply Chapter Filter",
             clear_label = "Clear Chapter Filter",
@@ -1836,7 +1913,9 @@ function NotesListWidget:showFilterMenu()
         showToggleFilter(FILTER_CONFIGS.tags)
     end
 
-    local function showColorStyleFilter()
+    local function showColorStyleFilter(is_exclude)
+        local type_key  = is_exclude and "type_exclude"  or "type"
+        local value_key = is_exclude and "value_exclude" or "value"
         local colors, styles = {}, {}
         for _, note in ipairs(self.notes_list) do
             local note_wrapper = NoteWrapper:new(note)
@@ -1845,8 +1924,8 @@ function NotesListWidget:showFilterMenu()
             local drawer = note_wrapper:getNormalizedDrawer()
             if drawer then styles[drawer] = true end
         end
-        local curr_type = self.active_filter and self.active_filter.type or nil
-        local curr_val = self.active_filter and self.active_filter.value or nil
+        local curr_type = self.active_filter and self.active_filter[type_key] or nil
+        local curr_val  = self.active_filter and self.active_filter[value_key] or nil
         local radio_buttons = {}
         for style, _ in pairs(styles) do
             local name = style:sub(1,1):upper() .. style:sub(2)
@@ -1882,30 +1961,37 @@ function NotesListWidget:showFilterMenu()
             { text = _( "Clear Filter" ), checked = curr_type == nil, provider = nil },
         })
         UIManager:show(RadioButtonWidget:new{
-            title_text = _( "Filter by Color/Style" ),
+            title_text = is_exclude and _("Exclude Color/Style") or _("Filter by Color/Style"),
             width_factor = 0.6,
             radio_buttons = radio_buttons,
             callback = function(radio)
                 self.active_filter = self.active_filter or {}
+                -- clear the opposite side so only one is ever active
+                local opp_type  = is_exclude and "type"  or "type_exclude"
+                local opp_value = is_exclude and "value" or "value_exclude"
+                self.active_filter[opp_type]  = nil
+                self.active_filter[opp_value] = nil
                 if radio.provider then
-                    self.active_filter.type = radio.provider.type
-                    self.active_filter.value = radio.provider.value
+                    self.active_filter[type_key]  = radio.provider.type
+                    self.active_filter[value_key] = radio.provider.value
                 else
-                    self.active_filter.type = nil
-                    self.active_filter.value = nil
+                    self.active_filter[type_key]  = nil
+                    self.active_filter[value_key] = nil
                 end
                 self:refresh()
+                showFilterMenu()
             end,
             colorful = true,
             dithered = true,
         })
     end
 
-    local function showTextSearchFilter(field_key, dialog_title, hint)
+    local function showTextSearchFilter(field_key, dialog_title, hint, is_exclude)
         local InputDialog = require("ui/widget/inputdialog")
-        local mode_key = field_key .. "_mode"
-        local case_key = field_key .. "_case"
-        local init_query = (self.active_filter and self.active_filter[field_key]) or ""
+        local actual_key = is_exclude and (field_key .. "_exclude") or field_key
+        local mode_key = actual_key .. "_mode"
+        local case_key = actual_key .. "_case"
+        local init_query = (self.active_filter and self.active_filter[actual_key]) or ""
         local init_mode  = (self.active_filter and self.active_filter[mode_key]) or "all"
         local init_case  = (self.active_filter and self.active_filter[case_key]) or false
         local dialog_mode = init_mode
@@ -1948,20 +2034,22 @@ function NotesListWidget:showFilterMenu()
                         { text = _("Clear"), callback = function()
                             UIManager:close(input_dialog)
                             if self.active_filter then
-                                self.active_filter[field_key] = nil
-                                self.active_filter[mode_key]  = nil
-                                self.active_filter[case_key]  = nil
+                                self.active_filter[actual_key] = nil
+                                self.active_filter[mode_key]   = nil
+                                self.active_filter[case_key]   = nil
                             end
                             self:refresh()
+                            showFilterMenu()
                         end },
-                        { text = _("Search"), is_enter_default = true, callback = function()
+                        { text = is_exclude and _("Exclude") or _("Search"), is_enter_default = true, callback = function()
                             local q = input_dialog:getInputText()
                             UIManager:close(input_dialog)
                             ensureFilter()
-                            self.active_filter[field_key] = q ~= "" and q or nil
-                            self.active_filter[mode_key]  = dialog_mode
-                            self.active_filter[case_key]  = dialog_case
+                            self.active_filter[actual_key] = q ~= "" and q or nil
+                            self.active_filter[mode_key]   = dialog_mode
+                            self.active_filter[case_key]   = dialog_case
                             self:refresh()
+                            showFilterMenu()
                         end },
                     },
                 },
@@ -1972,48 +2060,134 @@ function NotesListWidget:showFilterMenu()
         rebuildDialog(init_query)
     end
 
-    local main_buttons = {}
-    if not self.single_book then
-        table.insert(main_buttons, {{ text = _("Filter by Book"), callback = function()
-            showBookFilter()
-        end }})
+    -- cs_exclude tracks whether the Color/Style row acts as Filter or Exclude
+    -- initialise to exclude if an exclude is already active but no include is
+    local cs_exclude = false
+    if self.active_filter then
+        local has_inc = self.active_filter.type ~= nil
+        local has_exc = self.active_filter.type_exclude ~= nil
+        if has_exc and not has_inc then cs_exclude = true end
     end
-    table.insert(main_buttons, {{ text = _("Filter by Tags"), callback = function()
-        showTagsFilter()
-    end }})
-    table.insert(main_buttons, {{ text = _("Filter by Color/Style"), callback = function()
-        showColorStyleFilter()
-    end }})
-    table.insert(main_buttons, {{ text = _("Filter by Highlight Text"), callback = function()
-        UIManager:close(self.filter_dialog)
-        showTextSearchFilter("search_highlight", "Filter by Highlight Text", _("Words in highlighted text…"))
-    end }})
-    table.insert(main_buttons, {{ text = _("Filter by Note Text"), callback = function()
-        UIManager:close(self.filter_dialog)
-        showTextSearchFilter("search_note", "Filter by Note Text", _("Words in annotation notes…"))
-    end }})
-    if isSingleBookContext() then
-        table.insert(main_buttons, {{ text = _("Filter by Chapter"), callback = function()
-            UIManager:close(self.filter_dialog)
-            showToggleFilter(FILTER_CONFIGS.chapter)
-        end }})
-    end
-    table.insert(main_buttons, {{ text = _("Clear All Filters"), callback = function()
-        self.active_filter = {}
-        self:refresh()
-    end }})
-    table.insert(main_buttons, {{ text = _("Back"), callback = function()
-        if self.filter_dialog then
-            UIManager:close(self.filter_dialog)
+
+    local function isActive(keys)
+        if not self.active_filter then return false end
+        for _, k in ipairs(keys) do
+            local v = self.active_filter[k]
+            if type(v) == "table" and next(v) then return true end
+            if type(v) == "string" and v ~= "" then return true end
         end
-        self:showMainMenu()
-    end }})
-    self.filter_dialog = ButtonDialog:new{
-        title = _("Annotation Filters"),
-        buttons = main_buttons,
-        width_factor = 0.7,
-    }
-    UIManager:show(self.filter_dialog)
+        return false
+    end
+
+    local function mark(keys, label)
+        return (isActive(keys) and "✓ " or "") .. label
+    end
+
+    showFilterMenu = function()
+        if self.filter_dialog then UIManager:close(self.filter_dialog) end
+        local af = self.active_filter or {}
+        local main_buttons = {}
+
+        -- 1. Filter by Book (hidden in single-book mode)
+        if not self.single_book then
+            table.insert(main_buttons, {
+                { text = mark({"books","books_exclude"}, _("Filter by Book")), callback = function()
+                    showBookFilter()
+                end },
+            })
+        end
+
+        -- 2. Filter by Chapter (single-book context only)
+        if isSingleBookContext() then
+            table.insert(main_buttons, {
+                { text = mark({"chapters","chapters_exclude"}, _("Filter by Chapter")), callback = function()
+                    UIManager:close(self.filter_dialog)
+                    showToggleFilter(FILTER_CONFIGS.chapter)
+                end },
+            })
+        end
+
+        -- 3. Filter by Tags
+        table.insert(main_buttons, {
+            { text = mark({"tags","tags_exclude"}, _("Filter by Tags")), callback = function()
+                showTagsFilter()
+            end },
+        })
+
+        -- 4. Color/Style: open dialog | toggle Filter↔Exclude mode
+        local cs_action_label = cs_exclude and _("Exclude Color/Style") or _("Filter by Color/Style")
+        local cs_active = isActive({"type","value","type_exclude","value_exclude"})
+        local cs_toggle_label = cs_exclude and _("Mode: Exclude") or _("Mode: Filter")
+        table.insert(main_buttons, {
+            { text = (cs_active and "✓ " or "") .. cs_action_label, callback = function()
+                showColorStyleFilter(cs_exclude)
+            end },
+            { text = cs_toggle_label, callback = function()
+                cs_exclude = not cs_exclude
+                -- clear whichever side is now the opposite so there's no stale filter
+                ensureFilter()
+                if cs_exclude then
+                    self.active_filter.type  = nil
+                    self.active_filter.value = nil
+                else
+                    self.active_filter.type_exclude  = nil
+                    self.active_filter.value_exclude = nil
+                end
+                self:refresh()
+                showFilterMenu()
+            end },
+        })
+
+        -- 5. Highlight text filter | exclude
+        table.insert(main_buttons, {
+            { text = mark({"search_highlight"}, _("Filter by Highlight Text")), callback = function()
+                UIManager:close(self.filter_dialog)
+                showTextSearchFilter("search_highlight", "Filter by Highlight Text", _("Words in highlighted text…"), false)
+            end },
+            { text = mark({"search_highlight_exclude"}, _("Exclude by Highlight Text")), callback = function()
+                UIManager:close(self.filter_dialog)
+                showTextSearchFilter("search_highlight", "Exclude Highlight Text", _("Words to hide highlighted text…"), true)
+            end },
+        })
+
+        -- 6. Note text filter | exclude
+        table.insert(main_buttons, {
+            { text = mark({"search_note"}, _("Filter by Note Text")), callback = function()
+                UIManager:close(self.filter_dialog)
+                showTextSearchFilter("search_note", "Filter by Note Text", _("Words in annotation notes…"), false)
+            end },
+            { text = mark({"search_note_exclude"}, _("Exclude by Note Text")), callback = function()
+                UIManager:close(self.filter_dialog)
+                showTextSearchFilter("search_note", "Exclude Note Text", _("Words to hide annotation notes…"), true)
+            end },
+        })
+
+        -- 7. Clear all
+        table.insert(main_buttons, {
+            { text = _("Clear All Filters"), callback = function()
+                self.active_filter = {}
+                cs_exclude = false
+                self:refresh()
+                showFilterMenu()
+            end },
+        })
+
+        -- 8. Back
+        table.insert(main_buttons, {
+            { text = _("Back"), callback = function()
+                if self.filter_dialog then UIManager:close(self.filter_dialog) end
+                self:showMainMenu()
+            end },
+        })
+
+        self.filter_dialog = ButtonDialog:new{
+            title = _("Annotation Filters"),
+            buttons = main_buttons,
+            width_factor = 0.7,
+        }
+        UIManager:show(self.filter_dialog)
+    end
+    showFilterMenu()
 end
 function NotesListWidget:refresh()
     self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
