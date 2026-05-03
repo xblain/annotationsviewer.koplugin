@@ -652,6 +652,7 @@ end
 local NotesListWidget = InputContainer:extend{
     width = nil, height = nil, notes_list = nil, filtered_notes = nil,
     viewer = nil, current_page = 1, pages = nil, active_filter = nil,
+    single_book = false,
 }
 function NotesListWidget:init()
     self.width = Screen:getWidth()
@@ -726,12 +727,60 @@ function NotesListWidget:applyFilter()
                 end
                 match = found
             end
+            if match and self.active_filter.chapters and next(self.active_filter.chapters) ~= nil then
+                match = note.chapter and self.active_filter.chapters[note.chapter] == true
+            end
             if match and self.active_filter.type == "color" then
                 local note_wrapper = NoteWrapper:new(note)
                 match = note_wrapper:getNormalizedColor() == self.active_filter.value
             elseif match and self.active_filter.type == "style" then
                 local note_wrapper = NoteWrapper:new(note)
                 match = note_wrapper:getNormalizedDrawer() == self.active_filter.value
+            end
+            if match and self.active_filter.search_highlight and self.active_filter.search_highlight ~= "" then
+                local q    = self.active_filter.search_highlight
+                local mode = self.active_filter.search_highlight_mode or "all"
+                local case = self.active_filter.search_highlight_case
+                local text = case and (note.highlighted_text or "") or (note.highlighted_text or ""):lower()
+                if not case then q = q:lower() end
+                if mode == "phrase" then
+                    match = text:find(q, 1, true) ~= nil
+                elseif mode == "any" then
+                    match = false
+                    for word in q:gmatch("%S+") do
+                        if text:find(word, 1, true) then match = true; break end
+                    end
+                else -- "all"
+                    for word in q:gmatch("%S+") do
+                        if not text:find(word, 1, true) then match = false; break end
+                    end
+                end
+            end
+            if match and self.active_filter.search_note and self.active_filter.search_note ~= "" then
+                local q    = self.active_filter.search_note
+                local mode = self.active_filter.search_note_mode or "all"
+                local case_sensitive = (self.active_filter.search_note_case == true)
+                local raw  = note.user_note or ""
+                local text, cq
+                if case_sensitive then
+                    text = raw
+                    cq   = q
+                else
+                    text = raw:lower()
+                    cq   = q:lower()
+                end
+                if mode == "phrase" then
+                    match = text:find(cq, 1, true) ~= nil
+                elseif mode == "any" then
+                    match = false
+                    for word in cq:gmatch("%S+") do
+                        if text:find(word, 1, true) then match = true; break end
+                    end
+                else -- "all"
+                    for word in cq:gmatch("%S+") do
+                        if not text:find(word, 1, true) then match = false; break end
+                    end
+                end
             end
         end
         if match then table.insert(self.filtered_notes, note) end
@@ -745,7 +794,10 @@ function NotesListWidget:calculatePages()
     local filter_text = self.active_filter and (
         (self.active_filter.value and (self.active_filter.type == "color" or self.active_filter.type == "style")) or
         (self.active_filter.books and next(self.active_filter.books)) or
-        (self.active_filter.tags and next(self.active_filter.tags))
+        (self.active_filter.tags and next(self.active_filter.tags)) or
+        (self.active_filter.search_highlight and self.active_filter.search_highlight ~= "") or
+        (self.active_filter.search_note and self.active_filter.search_note ~= "") or
+        (self.active_filter.chapters and next(self.active_filter.chapters))
     ) or false
     
     local subtitle_height = 0
@@ -1013,6 +1065,24 @@ local function filterToString(filter)
         local tags = {}
         for k in pairs(filter.tags) do table.insert(tags, k) end
         table.insert(parts, "T: " .. table.concat(tags, ", "))
+    end
+    if filter.search_highlight and filter.search_highlight ~= "" then
+        local mode = filter.search_highlight_mode or "all"
+        local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
+        local case_str = filter.search_highlight_case and " [Aa]" or ""
+        table.insert(parts, "H: \"" .. filter.search_highlight .. "\"" .. mode_str .. case_str)
+    end
+    if filter.search_note and filter.search_note ~= "" then
+        local mode = filter.search_note_mode or "all"
+        local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
+        local case_str = filter.search_note_case and " [Aa]" or ""
+        table.insert(parts, "N: \"" .. filter.search_note .. "\"" .. mode_str .. case_str)
+    end
+    if filter.chapters and next(filter.chapters) then
+        local chs = {}
+        for k in pairs(filter.chapters) do table.insert(chs, k) end
+        table.sort(chs)
+        table.insert(parts, "Ch: " .. table.concat(chs, ", "))
     end
     return #parts > 0 and table.concat(parts, "; ") or ""
 end
@@ -1727,7 +1797,36 @@ function NotesListWidget:showFilterMenu()
             end,
             formatter = function(tag, _) return tag end,
         },
+        chapter = {
+            filter_key = "chapters",
+            dialog_title = "Filter by Chapter",
+            apply_label = "Apply Chapter Filter",
+            clear_label = "Clear Chapter Filter",
+            collector = function(notes_list)
+                local chapters = {}
+                for _, note in ipairs(notes_list) do
+                    if note.chapter and note.chapter ~= "" then
+                        chapters[note.chapter] = true
+                    end
+                end
+                return chapters
+            end,
+            formatter = function(ch, _) return ch end,
+        },
     }
+
+    -- Single-book context: launched from the reader (current book only),
+    -- or the book filter is narrowed to exactly one book.
+    local function isSingleBookContext()
+        if self.single_book then return true end
+        local book_filter = self.active_filter and self.active_filter.books
+        if book_filter and next(book_filter) then
+            local count = 0
+            for _ in pairs(book_filter) do count = count + 1 end
+            if count == 1 then return true end
+        end
+        return false
+    end
     
     local function showBookFilter()
         showToggleFilter(FILTER_CONFIGS.book)
@@ -1802,27 +1901,113 @@ function NotesListWidget:showFilterMenu()
         })
     end
 
-    local main_buttons = {
-        {{ text = _("Filter by Book"), callback = function()
-            showBookFilter()
-        end }},
-        {{ text = _("Filter by Tags"), callback = function()
-            showTagsFilter()
-        end }},
-        {{ text = _("Filter by Color/Style"), callback = function()
-            showColorStyleFilter()
-        end }},
-        {{ text = _("Clear All Filters"), callback = function()
-            self.active_filter = {}
-            self:refresh()
-        end }},
-        {{ text = _("Back"), callback = function()
-            if self.filter_dialog then
-                UIManager:close(self.filter_dialog)
+    local function showTextSearchFilter(field_key, dialog_title, hint)
+        local InputDialog = require("ui/widget/inputdialog")
+        local mode_key = field_key .. "_mode"
+        local case_key = field_key .. "_case"
+        local init_query = (self.active_filter and self.active_filter[field_key]) or ""
+        local init_mode  = (self.active_filter and self.active_filter[mode_key]) or "all"
+        local init_case  = (self.active_filter and self.active_filter[case_key]) or false
+        local dialog_mode = init_mode
+        local dialog_case = init_case
+        local input_dialog
+        local function rebuildDialog(saved_query)
+            if input_dialog then UIManager:close(input_dialog) end
+            local function modeBtn(label, m)
+                return {
+                    text = (dialog_mode == m and "✓ " or "") .. label,
+                    callback = function()
+                        local q = input_dialog:getInputText()
+                        dialog_mode = m
+                        rebuildDialog(q)
+                    end,
+                }
             end
-            self:showMainMenu()
-        end }},
-    }
+            input_dialog = InputDialog:new{
+                title = _(dialog_title),
+                input = saved_query,
+                input_hint = hint,
+                buttons = {
+                    {
+                        modeBtn(_("All Words"), "all"),
+                        modeBtn(_("Any Word"), "any"),
+                        modeBtn(_("Exact Phrase"), "phrase"),
+                    },
+                    {
+                        {
+                            text = dialog_case and _("Case-Sensitive: On") or _("Case-Sensitive: Off"),
+                            callback = function()
+                                local q = input_dialog:getInputText()
+                                dialog_case = not dialog_case
+                                rebuildDialog(q)
+                            end,
+                        },
+                    },
+                    {
+                        { text = _("Cancel"), callback = function() UIManager:close(input_dialog) end },
+                        { text = _("Clear"), callback = function()
+                            UIManager:close(input_dialog)
+                            if self.active_filter then
+                                self.active_filter[field_key] = nil
+                                self.active_filter[mode_key]  = nil
+                                self.active_filter[case_key]  = nil
+                            end
+                            self:refresh()
+                        end },
+                        { text = _("Search"), is_enter_default = true, callback = function()
+                            local q = input_dialog:getInputText()
+                            UIManager:close(input_dialog)
+                            ensureFilter()
+                            self.active_filter[field_key] = q ~= "" and q or nil
+                            self.active_filter[mode_key]  = dialog_mode
+                            self.active_filter[case_key]  = dialog_case
+                            self:refresh()
+                        end },
+                    },
+                },
+            }
+            UIManager:show(input_dialog)
+            input_dialog:onShowKeyboard()
+        end
+        rebuildDialog(init_query)
+    end
+
+    local main_buttons = {}
+    if not self.single_book then
+        table.insert(main_buttons, {{ text = _("Filter by Book"), callback = function()
+            showBookFilter()
+        end }})
+    end
+    table.insert(main_buttons, {{ text = _("Filter by Tags"), callback = function()
+        showTagsFilter()
+    end }})
+    table.insert(main_buttons, {{ text = _("Filter by Color/Style"), callback = function()
+        showColorStyleFilter()
+    end }})
+    table.insert(main_buttons, {{ text = _("Filter by Highlight Text"), callback = function()
+        UIManager:close(self.filter_dialog)
+        showTextSearchFilter("search_highlight", "Filter by Highlight Text", _("Words in highlighted text…"))
+    end }})
+    table.insert(main_buttons, {{ text = _("Filter by Note Text"), callback = function()
+        UIManager:close(self.filter_dialog)
+        showTextSearchFilter("search_note", "Filter by Note Text", _("Words in annotation notes…"))
+    end }})
+    if isSingleBookContext() then
+        table.insert(main_buttons, {{ text = _("Filter by Chapter"), callback = function()
+            UIManager:close(self.filter_dialog)
+            showToggleFilter(FILTER_CONFIGS.chapter)
+        end }})
+    end
+    table.insert(main_buttons, {{ text = _("Clear All Filters"), callback = function()
+        self.active_filter = {}
+        self:refresh()
+    end }})
+    table.insert(main_buttons, {{ text = _("Back"), callback = function()
+        if self.filter_dialog then
+            UIManager:close(self.filter_dialog)
+        end
+        self:showMainMenu()
+    end }})
     self.filter_dialog = ButtonDialog:new{
         title = _("Annotation Filters"),
         buttons = main_buttons,
@@ -2001,6 +2186,24 @@ function NotesListWidget:onNoteSelected(note)
     end
 end
 function NotesListWidget:onClose() UIManager:close(self) return true end
+
+-- Module-level caches: survive across plugin open/close within the same KOReader session.
+local _annotation_cache = {}  -- [book_path] = { data = {...}, mtime = N }
+local _book_info_cache   = {}  -- [book_path] = { data = {...}, mtime = N }
+local function getSidecarMtime(book_path)
+    local ok, sidecar = pcall(function() return DocSettings:findSidecarFile(book_path, true) end)
+    if not ok or not sidecar then
+        -- Fallback: KOReader < 2023 API
+        ok, sidecar = pcall(function() return DocSettings:getSidecarFile(book_path) end)
+    end
+    if sidecar then
+        local attr = lfs.attributes(sidecar, "modification")
+        if attr then return attr end
+    end
+    -- Fall back to the book file mtime itself
+    return lfs.attributes(book_path, "modification")
+end
+
 local AllNotesViewer = WidgetContainer:extend{ name = "allnotesviewer", is_doc_only = false }
 AllNotesViewer.is_doc_only = false
 function AllNotesViewer:init()
@@ -2035,7 +2238,13 @@ function AllNotesViewer:showCurrentBookNotes()
     if not ui or not ui.document then return end
     local book_path = ui.document.file
     if not book_path then return end
-    local annotations = self:loadBookAnnotations(book_path)
+    -- Prefer live in-memory annotations so unsaved changes are visible
+    local annotations
+    if ui.annotation and ui.annotation.annotations then
+        annotations = self:convertLiveAnnotations(ui.annotation.annotations)
+    else
+        annotations = self:loadBookAnnotations(book_path)
+    end
     if not annotations or #annotations == 0 then
         UIManager:show(InfoMessage:new{ text = _("No annotations found for this book.") })
         return
@@ -2059,9 +2268,49 @@ function AllNotesViewer:addToMainMenu(menu_items)
         }
     end
 end
+function AllNotesViewer:notifyLiveReader(book_path, note)
+    local ReaderUI = require("apps/reader/readerui")
+    local live_ui = ReaderUI and ReaderUI.instance
+    if live_ui and live_ui.document and live_ui.document.file == book_path then
+        live_ui:handleEvent(Event:new("AnnotationsModified", { note }))
+    end
+end
+function AllNotesViewer:clearBookCache(book_path)
+    _annotation_cache[book_path] = nil
+    -- book_info rarely changes, but clear it too so tags/title edits are reflected
+    _book_info_cache[book_path] = nil
+end
+function AllNotesViewer:convertLiveAnnotations(live)
+    local annotations = {}
+    for _, item in ipairs(live) do
+        if item.drawer then
+            local has_highlight = item.text and item.text ~= ""
+            local has_note = item.note and item.note ~= ""
+            if has_highlight or has_note then
+                table.insert(annotations, {
+                    page = item.page or item.pageno or 0,
+                    pos0 = item.pos0, pos1 = item.pos1,
+                    chapter = item.chapter or "",
+                    text = item.text or "",
+                    notes = item.note or "",
+                    datetime = item.datetime or "",
+                    drawer = item.drawer,
+                    color = item.color or "yellow",
+                    tags = item.tags, keywords = item.keywords,
+                })
+            end
+        end
+    end
+    return annotations
+end
 function AllNotesViewer:loadBookAnnotations(book_path)
     local annotations = {}
     if not book_path then return annotations end
+    local mtime = getSidecarMtime(book_path)
+    local cached = _annotation_cache[book_path]
+    if cached and cached.mtime == mtime then
+        return cached.data
+    end
     local ok, doc_settings = pcall(DocSettings.open, DocSettings, book_path)
     if not ok or not doc_settings then return annotations end
     local data = doc_settings.data
@@ -2105,9 +2354,15 @@ function AllNotesViewer:loadBookAnnotations(book_path)
         end
     end
     table.sort(annotations, function(a, b) return (a.datetime or "") > (b.datetime or "") end)
+    _annotation_cache[book_path] = { data = annotations, mtime = mtime }
     return annotations
 end
 function AllNotesViewer:getBookInfo(book_path)
+    local mtime = getSidecarMtime(book_path)
+    local cached = _book_info_cache[book_path]
+    if cached and cached.mtime == mtime then
+        return cached.data
+    end
     local ok, doc_settings = pcall(DocSettings.open, DocSettings, book_path)
     local data = ok and doc_settings and doc_settings.data or {}
     local filename = book_path:match("([^/\\]+)$") or book_path
@@ -2135,7 +2390,9 @@ function AllNotesViewer:getBookInfo(book_path)
     
     if not title or title == "" then title = filename:gsub("%.[^.]+$", "") end
     
-    return { path = book_path, filename = filename, title = title or filename, authors = authors or "Unknown", tags = tags }
+    local info = { path = book_path, filename = filename, title = title or filename, authors = authors or "Unknown", tags = tags }
+    _book_info_cache[book_path] = { data = info, mtime = mtime }
+    return info
 end
 function AllNotesViewer:findAllNotes()
     local notes_data = {}
@@ -2195,7 +2452,7 @@ function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations)
     if #notes_list == 0 then return end
     local sort_mode = getSetting("sort_mode", "date_newest")
     NotesListWidget:sortNotesList(notes_list, sort_mode)
-    UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self })
+    UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self, single_book = true })
 end
 function AllNotesViewer:showAllNotes()
     local all_notes_by_book = self:findAllNotes()
@@ -2387,96 +2644,110 @@ function AllNotesViewer:showStylePicker(note, parent_widget)
 end
 function AllNotesViewer:updateHighlightStyle(note, new_style, parent_widget)
     if not note.book_path then return end
-    local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
-    if not ok or not doc_settings then return end
-    local data = doc_settings.data
-    if not data then return end
+    local ReaderUI = require("apps/reader/readerui")
+    local live_ui = ReaderUI and ReaderUI.instance
+    local is_open = live_ui and live_ui.document and live_ui.document.file == note.book_path
     local updated = false
-    
-    local items = data.annotations
-    if items and #items > 0 then
-        for _, item in ipairs(items) do
-            if item.datetime == note.datetime and item.text == note.highlighted_text then
-                item.drawer = new_style
-                updated = true
-                break
-            end
-        end
-    end
-    
-    if not updated then
-        local highlights = data.highlight or {}
-        for _, page_highlights in pairs(highlights) do
-            if type(page_highlights) == "table" then
-                for _, hl in ipairs(page_highlights) do
-                    if hl.datetime == note.datetime and hl.text == note.highlighted_text then
-                        hl.drawer = new_style
-                        updated = true
-                        break
-                    end
+    if is_open then
+        if live_ui.annotation and live_ui.annotation.annotations then
+            for _, item in ipairs(live_ui.annotation.annotations) do
+                if item.datetime == note.datetime and item.text == note.highlighted_text then
+                    item.drawer = new_style
+                    updated = true
+                    break
                 end
             end
-            if updated then break end
         end
-    end
-    if updated then
-        doc_settings:flush()
-        
-        for _, n in ipairs(parent_widget.notes_list) do
-            if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
-                n.drawer = new_style
-                break
+        if updated then live_ui:handleEvent(Event:new("AnnotationsModified", { note })) end
+    else
+        local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
+        if not ok or not doc_settings then return end
+        local data = doc_settings.data
+        if not data then return end
+        local items = data.annotations
+        if items and #items > 0 then
+            for _, item in ipairs(items) do
+                if item.datetime == note.datetime and item.text == note.highlighted_text then
+                    item.drawer = new_style; updated = true; break
+                end
             end
         end
-        self.ui:handleEvent(Event:new("AnnotationsModified", { note }))
+        if not updated then
+            for _, page_highlights in pairs(data.highlight or {}) do
+                if type(page_highlights) == "table" then
+                    for _, hl in ipairs(page_highlights) do
+                        if hl.datetime == note.datetime and hl.text == note.highlighted_text then
+                            hl.drawer = new_style; updated = true; break
+                        end
+                    end
+                end
+                if updated then break end
+            end
+        end
+        if updated then doc_settings:flush() end
+    end
+    if updated then
+        self:clearBookCache(note.book_path)
+        for _, n in ipairs(parent_widget.notes_list) do
+            if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
+                n.drawer = new_style; break
+            end
+        end
         parent_widget:refresh()
         UIManager:show(require("ui/widget/infomessage"):new{ text = _("Style updated."), timeout = 1 })
     end
 end
 function AllNotesViewer:updateHighlightColor(note, new_color, parent_widget)
     if not note.book_path then return end
-    local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
-    if not ok or not doc_settings then return end
-    local data = doc_settings.data
-    if not data then return end
+    local ReaderUI = require("apps/reader/readerui")
+    local live_ui = ReaderUI and ReaderUI.instance
+    local is_open = live_ui and live_ui.document and live_ui.document.file == note.book_path
     local updated = false
-    
-    local items = data.annotations
-    if items and #items > 0 then
-        for _, item in ipairs(items) do
-            if item.datetime == note.datetime and item.text == note.highlighted_text then
-                item.color = new_color
-                updated = true
-                break
-            end
-        end
-    end
-    
-    if not updated then
-        local highlights = data.highlight or {}
-        for _, page_highlights in pairs(highlights) do
-            if type(page_highlights) == "table" then
-                for _, hl in ipairs(page_highlights) do
-                    if hl.datetime == note.datetime and hl.text == note.highlighted_text then
-                        hl.color = new_color
-                        updated = true
-                        break
-                    end
+    if is_open then
+        if live_ui.annotation and live_ui.annotation.annotations then
+            for _, item in ipairs(live_ui.annotation.annotations) do
+                if item.datetime == note.datetime and item.text == note.highlighted_text then
+                    item.color = new_color
+                    updated = true
+                    break
                 end
             end
-            if updated then break end
         end
-    end
-    if updated then
-        doc_settings:flush()
-        
-        for _, n in ipairs(parent_widget.notes_list) do
-            if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
-                n.color = new_color
-                break
+        if updated then live_ui:handleEvent(Event:new("AnnotationsModified", { note })) end
+    else
+        local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
+        if not ok or not doc_settings then return end
+        local data = doc_settings.data
+        if not data then return end
+        local items = data.annotations
+        if items and #items > 0 then
+            for _, item in ipairs(items) do
+                if item.datetime == note.datetime and item.text == note.highlighted_text then
+                    item.color = new_color; updated = true; break
+                end
             end
         end
-        self.ui:handleEvent(Event:new("AnnotationsModified", { note }))
+        if not updated then
+            for _, page_highlights in pairs(data.highlight or {}) do
+                if type(page_highlights) == "table" then
+                    for _, hl in ipairs(page_highlights) do
+                        if hl.datetime == note.datetime and hl.text == note.highlighted_text then
+                            hl.color = new_color; updated = true; break
+                        end
+                    end
+                end
+                if updated then break end
+            end
+        end
+        if updated then doc_settings:flush() end
+    end
+    if updated then
+        self:clearBookCache(note.book_path)
+        for _, n in ipairs(parent_widget.notes_list) do
+            if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
+                n.color = new_color; break
+            end
+        end
         parent_widget:refresh()
         UIManager:show(require("ui/widget/infomessage"):new{ text = _("Color updated."), timeout = 1 })
     end
@@ -2493,51 +2764,58 @@ function AllNotesViewer:confirmDelete(note, parent_widget)
 end
 function AllNotesViewer:deleteAnnotation(note, parent_widget)
     if not note.book_path then return end
-    local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
-    if not ok or not doc_settings then return end
-    local data = doc_settings.data
-    if not data then return end
+    local ReaderUI = require("apps/reader/readerui")
+    local live_ui = ReaderUI and ReaderUI.instance
+    local is_open = live_ui and live_ui.document and live_ui.document.file == note.book_path
     local deleted = false
-    
-    local items = data.annotations
-    if items and #items > 0 then
-        for i = #items, 1, -1 do
-            local item = items[i]
-            if item.datetime == note.datetime and item.text == note.highlighted_text then
-                table.remove(items, i)
-                deleted = true
-                break
-            end
-        end
-    end
-    
-    if not deleted then
-        local highlights = data.highlight or {}
-        for page, page_highlights in pairs(highlights) do
-            if type(page_highlights) == "table" then
-                for i = #page_highlights, 1, -1 do
-                    local hl = page_highlights[i]
-                    if hl.datetime == note.datetime and hl.text == note.highlighted_text then
-                        table.remove(page_highlights, i)
-                        deleted = true
-                        break
-                    end
+    if is_open then
+        if live_ui.annotation and live_ui.annotation.annotations then
+            local items = live_ui.annotation.annotations
+            for i = #items, 1, -1 do
+                if items[i].datetime == note.datetime and items[i].text == note.highlighted_text then
+                    table.remove(items, i)
+                    deleted = true
+                    break
                 end
             end
-            if deleted then break end
         end
+        if deleted then live_ui:handleEvent(Event:new("AnnotationsModified", { note })) end
+    else
+        local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
+        if not ok or not doc_settings then return end
+        local data = doc_settings.data
+        if not data then return end
+        local items = data.annotations
+        if items and #items > 0 then
+            for i = #items, 1, -1 do
+                if items[i].datetime == note.datetime and items[i].text == note.highlighted_text then
+                    table.remove(items, i); deleted = true; break
+                end
+            end
+        end
+        if not deleted then
+            for _, page_highlights in pairs(data.highlight or {}) do
+                if type(page_highlights) == "table" then
+                    for i = #page_highlights, 1, -1 do
+                        local hl = page_highlights[i]
+                        if hl.datetime == note.datetime and hl.text == note.highlighted_text then
+                            table.remove(page_highlights, i); deleted = true; break
+                        end
+                    end
+                end
+                if deleted then break end
+            end
+        end
+        if deleted then doc_settings:flush() end
     end
     if deleted then
-        doc_settings:flush()
-        
+        self:clearBookCache(note.book_path)
         for i = #parent_widget.notes_list, 1, -1 do
             local n = parent_widget.notes_list[i]
             if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
-                table.remove(parent_widget.notes_list, i)
-                break
+                table.remove(parent_widget.notes_list, i); break
             end
         end
-        self.ui:handleEvent(Event:new("AnnotationsModified", { note }))
         parent_widget:refresh()
     end
 end
@@ -2575,48 +2853,55 @@ function AllNotesViewer:editNote(note, parent_widget)
 end
 function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget)
     if not note.book_path then return end
-    local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
-    if not ok or not doc_settings then return end
-    local data = doc_settings.data
-    if not data then return end
+    local ReaderUI = require("apps/reader/readerui")
+    local live_ui = ReaderUI and ReaderUI.instance
+    local is_open = live_ui and live_ui.document and live_ui.document.file == note.book_path
     local updated = false
-    
-    local items = data.annotations
-    if items and #items > 0 then
-        for _, item in ipairs(items) do
-            if item.datetime == note.datetime and item.text == note.highlighted_text then
-                item.note = new_note_text
-                updated = true
-                break
-            end
-        end
-    end
-    
-    if not updated then
-        local highlights = data.highlight or {}
-        for _, page_highlights in pairs(highlights) do
-            if type(page_highlights) == "table" then
-                for _, hl in ipairs(page_highlights) do
-                    if hl.datetime == note.datetime and hl.text == note.highlighted_text then
-                        hl.note = new_note_text
-                        updated = true
-                        break
-                    end
+    if is_open then
+        if live_ui.annotation and live_ui.annotation.annotations then
+            for _, item in ipairs(live_ui.annotation.annotations) do
+                if item.datetime == note.datetime and item.text == note.highlighted_text then
+                    item.note = new_note_text
+                    updated = true
+                    break
                 end
             end
-            if updated then break end
         end
-    end
-    if updated then
-        doc_settings:flush()
-        
-        for _, n in ipairs(parent_widget.notes_list) do
-            if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
-                n.user_note = new_note_text
-                break
+        if updated then live_ui:handleEvent(Event:new("AnnotationsModified", { note })) end
+    else
+        local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
+        if not ok or not doc_settings then return end
+        local data = doc_settings.data
+        if not data then return end
+        local items = data.annotations
+        if items and #items > 0 then
+            for _, item in ipairs(items) do
+                if item.datetime == note.datetime and item.text == note.highlighted_text then
+                    item.note = new_note_text; updated = true; break
+                end
             end
         end
-        self.ui:handleEvent(Event:new("AnnotationsModified", { note }))
+        if not updated then
+            for _, page_highlights in pairs(data.highlight or {}) do
+                if type(page_highlights) == "table" then
+                    for _, hl in ipairs(page_highlights) do
+                        if hl.datetime == note.datetime and hl.text == note.highlighted_text then
+                            hl.note = new_note_text; updated = true; break
+                        end
+                    end
+                end
+                if updated then break end
+            end
+        end
+        if updated then doc_settings:flush() end
+    end
+    if updated then
+        self:clearBookCache(note.book_path)
+        for _, n in ipairs(parent_widget.notes_list) do
+            if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
+                n.user_note = new_note_text; break
+            end
+        end
         parent_widget:refresh()
         UIManager:show(require("ui/widget/infomessage"):new{ text = _("Note saved."), timeout = 1 })
     end
