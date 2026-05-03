@@ -104,6 +104,12 @@ local function getDedupInfoFields() return getSetting("dedup_info_fields", "date
 local function getShowInfo() return getSetting("show_info", true) ~= false end
 local function getInfoFields() return getSetting("info_fields", "date,author,chapter") end
 local function getAlwaysShowFirstOnPage() return getSetting("always_show_first_on_page", true) ~= false end
+local function getPaginationStyle() return getSetting("pagination_style", "right") end
+local SB_THUMB_WIDTH  = Screen:scaleBySize(8)   -- scrollbar thumb width
+local SB_MARGIN_RIGHT = Screen:scaleBySize(20.2)  -- scrollbar gap from screen edge
+local SB_TRACK_WIDTH  = Screen:scaleBySize(1)   -- scrollbar track width
+local SB_MARGIN_V_TOP    = Screen:scaleBySize(16)  -- scrollbar gap above thumb
+local SB_MARGIN_V_BOTTOM = Screen:scaleBySize(32)  -- scrollbar gap below thumb
 
 local function getNoteInfoKey(note, fields_setting)
     local parts = {}
@@ -666,9 +672,20 @@ function NotesListWidget:init()
         close_callback = function() end,
     }
     self.title_height = temp_title:getHeight()
+    -- Compute close button center x for scrollbar alignment
+    if temp_title.right_button then
+        local bp = Screen:scaleBySize(5)
+        local icon_w = math.floor((temp_title.right_button.dimen.w - bp) / 3)
+        local close_center_x = self.width - bp - math.floor(icon_w / 2)
+        self.sb_x = close_center_x - math.floor(SB_THUMB_WIDTH / 2)
+    else
+        self.sb_x = self.width - SB_THUMB_WIDTH - SB_MARGIN_RIGHT
+    end
     local temp_button = Button:new{ icon = "chevron.first", bordersize = 0 }
-    self.footer_height = temp_button:getSize().h
+    local btn_h = temp_button:getSize().h
     temp_button:free()
+    local pag_style = getPaginationStyle()
+    self.footer_height = (pag_style == "scrollbar") and 0 or btn_h
     self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
     self:applyFilter()
     self:calculatePages()
@@ -747,6 +764,9 @@ function NotesListWidget:calculatePages()
     local do_hide_dup_title = getHideDupTitle()
     local do_hide_dup_info = getHideDupInfo()
     local always_show_first = getAlwaysShowFirstOnPage()
+    local sb_track_center = (self.sb_x or 0) + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2) + math.floor(SB_TRACK_WIDTH / 2)
+    local sb_reserve = (getPaginationStyle() == "scrollbar") and (self.width - sb_track_center) or 0
+    local note_width = self.width - sb_reserve
     for i, note in ipairs(self.filtered_notes) do
         local is_first_on_page = (#current_page_notes == 0)
         local skip_title = do_hide_dup_title
@@ -755,7 +775,7 @@ function NotesListWidget:calculatePages()
         local skip_info = do_hide_dup_info
             and not (always_show_first and is_first_on_page)
             and (getNoteInfoKey(note, dedup_fields) == dedup_prev_info_key)
-        local temp_widget = NoteItemWidget:new{ width = self.width, note = note, show_parent = self, skip_title = skip_title, skip_info = skip_info }
+        local temp_widget = NoteItemWidget:new{ width = note_width, note = note, show_parent = self, skip_title = skip_title, skip_info = skip_info }
         local item_height = temp_widget.dimen.h
         local spacing = (#current_page_notes > 0) and note_spacing or 0
         local next_height = current_height + spacing + item_height
@@ -775,80 +795,162 @@ function NotesListWidget:calculatePages()
     self.total_pages = #self.pages
 end
 function NotesListWidget:createFooter()
-    local RightContainer = require("ui/widget/container/rightcontainer")
-    local chevron_left = "chevron.left"
-    local chevron_right = "chevron.right"
-    local chevron_first = "chevron.first"
-    local chevron_last = "chevron.last"
-    if BD.mirroredUILayout() then
-        chevron_left, chevron_right = chevron_right, chevron_left
-        chevron_first, chevron_last = chevron_last, chevron_first
+    local style = getPaginationStyle()
+
+    if style == "scrollbar" then
+        -- Vertical scrollbar on the right edge, no bottom footer
+        if self.total_pages <= 1 then return VerticalGroup:new{} end
+        local sb_track_width  = SB_TRACK_WIDTH
+        local sb_thumb_width  = SB_THUMB_WIDTH
+        local sb_margin_v_top    = SB_MARGIN_V_TOP
+        local sb_margin_v_bottom = SB_MARGIN_V_BOTTOM
+        local sb_x            = self.sb_x  -- left edge of thumb, centered on close button
+        local sb_height       = self.height - self.title_height - sb_margin_v_top - sb_margin_v_bottom
+        local low  = (self.current_page - 1) / self.total_pages
+        local high = self.current_page / self.total_pages
+        local thumb_h     = math.max(Screen:scaleBySize(16), math.floor(sb_height * (high - low)))
+        local thumb_y_off = math.min(math.floor(low * sb_height), sb_height - thumb_h)
+        -- Custom widget: dark track + white thumb (colors reversed from default)
+        local CustomScrollBar = InputContainer:extend{
+            width  = sb_thumb_width,
+            height = sb_height,
+        }
+        function CustomScrollBar:init()
+            self.dimen = Geom:new{ w = self.width, h = self.height }
+        end
+        function CustomScrollBar:paintTo(bb, x, y)
+            -- track centered within thumb width
+            local track_x = x + math.floor((sb_thumb_width - sb_track_width) / 2)
+            -- draw track (dark, full height)
+            bb:paintRect(track_x, y, sb_track_width, self.height, BlitBuffer.COLOR_BLACK)
+            -- draw thumb (white, rounded)
+            local radius = math.floor(sb_thumb_width / 2)
+            bb:paintRoundedRect(x, y + thumb_y_off, sb_thumb_width, thumb_h, BlitBuffer.COLOR_WHITE, radius)
+            bb:paintBorder(x, y + thumb_y_off, sb_thumb_width, thumb_h, 2, BlitBuffer.COLOR_BLACK, radius)
+        end
+        local sb = CustomScrollBar:new{}
+        return VerticalGroup:new{
+            VerticalSpan:new{ width = self.title_height + sb_margin_v_top },
+            HorizontalGroup:new{
+                HorizontalSpan:new{ width = sb_x },
+                sb,
+            },
+        }
+    elseif style == "default" then
+        -- KOReader file manager style: centered chevrons with spacers
+        local chevron_left = "chevron.left"
+        local chevron_right = "chevron.right"
+        local chevron_first = "chevron.first"
+        local chevron_last = "chevron.last"
+        if BD.mirroredUILayout() then
+            chevron_left, chevron_right = chevron_right, chevron_left
+            chevron_first, chevron_last = chevron_last, chevron_first
+        end
+        local spacer = HorizontalSpan:new{ width = Screen:scaleBySize(32) }
+        local first_chev = Button:new{ icon = chevron_first, callback = function() self.current_page = 1; self:updatePage() end, bordersize = 0, show_parent = self }
+        local left_chev  = Button:new{ icon = chevron_left,  callback = function() self:onGotoPrevPage() end, bordersize = 0, show_parent = self }
+        local page_text  = Button:new{ text = string.format(_("Page %1 of %2"):gsub("%%1", self.current_page):gsub("%%2", self.total_pages), ""), text_font_bold = false, bordersize = 0, show_parent = self }
+        local right_chev = Button:new{ icon = chevron_right, callback = function() self:onGotoNextPage() end, bordersize = 0, show_parent = self }
+        local last_chev  = Button:new{ icon = chevron_last,  callback = function() self.current_page = self.total_pages; self:updatePage() end, bordersize = 0, show_parent = self }
+        -- Use plain text fallback for page label
+        first_chev:enableDisable(self.current_page > 1)
+        left_chev:enableDisable(self.current_page > 1)
+        right_chev:enableDisable(self.current_page < self.total_pages)
+        last_chev:enableDisable(self.current_page < self.total_pages)
+        local page_info = HorizontalGroup:new{
+            first_chev, spacer, left_chev, spacer, page_text, spacer, right_chev, spacer, last_chev,
+        }
+        local FrameContainer = require("ui/widget/container/framecontainer")
+        return BottomContainer:new{
+            dimen = Geom:new{ w = self.width, h = self.height },
+            FrameContainer:new{
+                width = self.width,
+                height = page_info:getSize().h,
+                padding = 0, margin = 0, bordersize = 0,
+                background = BlitBuffer.COLOR_WHITE,
+                CenterContainer:new{
+                    dimen = Geom:new{ w = self.width, h = page_info:getSize().h },
+                    page_info,
+                },
+            },
+        }
+    elseif style == "left" then
+        -- Left-aligned chevrons style
+        local chevron_left = "chevron.left"
+        local chevron_right = "chevron.right"
+        local chevron_first = "chevron.first"
+        local chevron_last = "chevron.last"
+        if BD.mirroredUILayout() then
+            chevron_left, chevron_right = chevron_right, chevron_left
+            chevron_first, chevron_last = chevron_last, chevron_first
+        end
+        local first_chev = Button:new{ icon = chevron_first, callback = function() self.current_page = 1; self:updatePage() end, bordersize = 0, show_parent = self }
+        local left_chev  = Button:new{ icon = chevron_left,  callback = function() self:onGotoPrevPage() end, bordersize = 0, show_parent = self }
+        local page_text  = Button:new{ text = string.format("%d of %d", self.current_page, self.total_pages), text_font_bold = false, text_font_face = "pgfont", bordersize = 0, show_parent = self }
+        local right_chev = Button:new{ icon = chevron_right, callback = function() self:onGotoNextPage() end, bordersize = 0, show_parent = self }
+        local last_chev  = Button:new{ icon = chevron_last,  callback = function() self.current_page = self.total_pages; self:updatePage() end, bordersize = 0, show_parent = self }
+        first_chev:enableDisable(self.current_page > 1)
+        left_chev:enableDisable(self.current_page > 1)
+        right_chev:enableDisable(self.current_page < self.total_pages)
+        last_chev:enableDisable(self.current_page < self.total_pages)
+        local page_info = HorizontalGroup:new{
+            first_chev, left_chev, page_text, right_chev, last_chev,
+        }
+        local LeftContainer = require("ui/widget/container/leftcontainer")
+        local page_info_container = LeftContainer:new{
+            dimen = Geom:new{ w = math.floor(self.width * 0.98), h = page_info:getSize().h },
+            page_info,
+        }
+        local FrameContainer = require("ui/widget/container/framecontainer")
+        return BottomContainer:new{
+            dimen = Geom:new{ w = self.width, h = self.height },
+            FrameContainer:new{
+                width = self.width,
+                height = page_info_container:getSize().h,
+                padding = 0, margin = 0, bordersize = 0,
+                background = BlitBuffer.COLOR_WHITE,
+                page_info_container,
+            },
+        }
+    else
+        -- right-aligned chevrons style
+        local RightContainer = require("ui/widget/container/rightcontainer")
+        local chevron_left = "chevron.left"
+        local chevron_right = "chevron.right"
+        local chevron_first = "chevron.first"
+        local chevron_last = "chevron.last"
+        if BD.mirroredUILayout() then
+            chevron_left, chevron_right = chevron_right, chevron_left
+            chevron_first, chevron_last = chevron_last, chevron_first
+        end
+        local first_chev = Button:new{ icon = chevron_first, callback = function() self.current_page = 1; self:updatePage() end, bordersize = 0, show_parent = self }
+        local left_chev  = Button:new{ icon = chevron_left,  callback = function() self:onGotoPrevPage() end, bordersize = 0, show_parent = self }
+        local page_text  = Button:new{ text = string.format("%d of %d", self.current_page, self.total_pages), text_font_bold = false, text_font_face = "pgfont", bordersize = 0, show_parent = self }
+        local right_chev = Button:new{ icon = chevron_right, callback = function() self:onGotoNextPage() end, bordersize = 0, show_parent = self }
+        local last_chev  = Button:new{ icon = chevron_last,  callback = function() self.current_page = self.total_pages; self:updatePage() end, bordersize = 0, show_parent = self }
+        first_chev:enableDisable(self.current_page > 1)
+        left_chev:enableDisable(self.current_page > 1)
+        right_chev:enableDisable(self.current_page < self.total_pages)
+        last_chev:enableDisable(self.current_page < self.total_pages)
+        local page_info = HorizontalGroup:new{
+            first_chev, left_chev, page_text, right_chev, last_chev,
+        }
+        local page_info_container = RightContainer:new{
+            dimen = Geom:new{ w = math.floor(self.width * 0.98), h = page_info:getSize().h },
+            page_info,
+        }
+        local FrameContainer = require("ui/widget/container/framecontainer")
+        return BottomContainer:new{
+            dimen = Geom:new{ w = self.width, h = self.height },
+            FrameContainer:new{
+                width = self.width,
+                height = page_info_container:getSize().h,
+                padding = 0, margin = 0, bordersize = 0,
+                background = BlitBuffer.COLOR_WHITE,
+                page_info_container,
+            },
+        }
     end
-
-    self.page_info_first_chev = Button:new{
-        icon = chevron_first,
-        callback = function() self.current_page = 1; self:updatePage() end,
-        bordersize = 0,
-        show_parent = self,
-    }
-    self.page_info_left_chev = Button:new{
-        icon = chevron_left,
-        callback = function() self:onGotoPrevPage() end,
-        bordersize = 0,
-        show_parent = self,
-    }
-    self.page_info_text = Button:new{
-        text = string.format("%d / %d", self.current_page, self.total_pages),
-        text_font_bold = false,
-        text_font_face = "pgfont",
-        bordersize = 0,
-        show_parent = self,
-    }
-    self.page_info_right_chev = Button:new{
-        icon = chevron_right,
-        callback = function() self:onGotoNextPage() end,
-        bordersize = 0,
-        show_parent = self,
-    }
-    self.page_info_last_chev = Button:new{
-        icon = chevron_last,
-        callback = function() self.current_page = self.total_pages; self:updatePage() end,
-        bordersize = 0,
-        show_parent = self,
-    }
-
-    self.page_info_first_chev:enableDisable(self.current_page > 1)
-    self.page_info_left_chev:enableDisable(self.current_page > 1)
-    self.page_info_right_chev:enableDisable(self.current_page < self.total_pages)
-    self.page_info_last_chev:enableDisable(self.current_page < self.total_pages)
-
-    self.page_info = HorizontalGroup:new{
-        self.page_info_first_chev,
-        self.page_info_left_chev,
-        self.page_info_text,
-        self.page_info_right_chev,
-        self.page_info_last_chev,
-    }
-
-
-    local page_info_container = RightContainer:new{
-        dimen = Geom:new{ w = math.floor(self.width * 0.98), h = self.page_info:getSize().h },
-        self.page_info,
-    }
-
-    local FrameContainer = require("ui/widget/container/framecontainer")
-    return BottomContainer:new{
-        dimen = Geom:new{ w = self.width, h = self.height },
-        FrameContainer:new{
-            width = self.width,
-            height = page_info_container:getSize().h,
-            padding = 0,
-            margin = 0,
-            bordersize = 0,
-            background = BlitBuffer.COLOR_WHITE,
-            page_info_container,
-        },
-    }
 end
 function NotesListWidget:updatePage()
     self.width = Screen:getWidth()
@@ -867,12 +969,23 @@ function NotesListWidget:updatePage()
         close_callback = function() end,
     }
     self.title_height = temp_title:getHeight()
+    -- Recompute close button center x (screen may have rotated)
+    if temp_title.right_button then
+        local bp = Screen:scaleBySize(5)
+        local icon_w = math.floor((temp_title.right_button.dimen.w - bp) / 3)
+        local close_center_x = self.width - bp - math.floor(icon_w / 2)
+        self.sb_x = close_center_x - math.floor(SB_THUMB_WIDTH / 2)
+    else
+        self.sb_x = self.width - SB_THUMB_WIDTH - SB_MARGIN_RIGHT
+    end
     local temp_button = Button:new{ icon = "chevron.first", bordersize = 0 }
-    self.footer_height = temp_button:getSize().h
+    local btn_h = temp_button:getSize().h
     temp_button:free()
+    local pag_style = getPaginationStyle()
+    self.footer_height = (pag_style == "scrollbar") and 0 or btn_h
     self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
-    
-    
+
+
 local function filterToString(filter)
     if not filter then return "" end
     local parts = {}
@@ -955,6 +1068,9 @@ end
     local do_hide_dup_title = getHideDupTitle()
     local do_hide_dup_info = getHideDupInfo()
     local always_show_first = getAlwaysShowFirstOnPage()
+    local _sb_track_center = (self.sb_x or 0) + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2) + math.floor(SB_TRACK_WIDTH / 2)
+    local _sb_reserve = (pag_style == "scrollbar") and (self.width - _sb_track_center) or 0
+    local note_width = self.width - _sb_reserve
     -- determine dedup state from last note of previous page
     local dedup_prev_title = nil
     local dedup_prev_info_key = nil
@@ -984,7 +1100,7 @@ end
             local skip_info = do_hide_dup_info
                 and not (always_show_first and is_first_on_page)
                 and (getNoteInfoKey(note, dedup_fields) == dedup_prev_info_key)
-            local note_widget = NoteItemWidget:new{ width = self.width, note = note, show_parent = self, skip_title = skip_title, skip_info = skip_info }
+            local note_widget = NoteItemWidget:new{ width = note_width, note = note, show_parent = self, skip_title = skip_title, skip_info = skip_info }
             table.insert(notes_group, note_widget)
             if i == #page_indices then last_note_widget = note_widget end
             dedup_prev_title = note.book_title
@@ -1007,7 +1123,7 @@ end
                 local preview_skip_title = do_hide_dup_title and (next_note.book_title == dedup_prev_title)
                 local preview_skip_info = do_hide_dup_info and (getNoteInfoKey(next_note, dedup_fields) == dedup_prev_info_key)
                 local preview_widget = NoteItemWidget:new{
-                    width = self.width,
+                    width = note_width,
                     note = next_note,
                     show_parent = self,
                     is_preview = true,
@@ -1018,7 +1134,7 @@ end
                 local FrameContainer = require("ui/widget/container/framecontainer")
                 local AlphaContainer = require("ui/widget/container/alphacontainer")
                 local bordered_preview = FrameContainer:new{
-                    width = self.width,
+                    width = note_width,
                     height = available_height,
                     padding = 0,
                     margin = 0,
@@ -1263,6 +1379,10 @@ function NotesListWidget:showSettingsMenu()
             self:showDedupInfoFieldsMenu()
         end }},
         {{ text = _("Show Repeat Headers On First Page Entry: ") .. always_first_text, callback = makeToggleSetting("always_show_first_on_page", getAlwaysShowFirstOnPage) }},
+        {{ text = _("Pagination Style..."), callback = function()
+            UIManager:close(self.settings_dialog)
+            self:showPaginationStyleMenu()
+        end }},
         {{ text = _("Back"), callback = function()
             UIManager:close(self.settings_dialog)
             self:showMainMenu()
@@ -1270,6 +1390,28 @@ function NotesListWidget:showSettingsMenu()
     }
     self.settings_dialog = ButtonDialogTitle:new{ title = _("Settings"), buttons = buttons }
     UIManager:show(self.settings_dialog)
+end
+function NotesListWidget:showPaginationStyleMenu()
+    local current = getPaginationStyle()
+    local function check(v) return current == v and "\u{2713} " or "  " end
+    local function apply(v)
+        setSetting("pagination_style", v)
+        UIManager:close(self.pagination_style_dialog)
+        self:refresh()
+        self:showSettingsMenu()
+    end
+    local buttons = {
+        {{ text = check("right")   .. _("Project Title - Right"), callback = function() apply("right")   end }},
+        {{ text = check("left")      .. _("Project Title - Left"),  callback = function() apply("left")      end }},
+        {{ text = check("default")   .. _("Default (centered chevrons)"),         callback = function() apply("default")   end }},
+        {{ text = check("scrollbar") .. _("Scrollbar"),                           callback = function() apply("scrollbar") end }},
+        {{ text = _("Back"), callback = function()
+            UIManager:close(self.pagination_style_dialog)
+            self:showSettingsMenu()
+        end }},
+    }
+    self.pagination_style_dialog = ButtonDialogTitle:new{ title = _("Pagination Style"), buttons = buttons }
+    UIManager:show(self.pagination_style_dialog)
 end
 function NotesListWidget:showInfoFieldsMenu()
     local fields_setting = getInfoFields()
@@ -1747,8 +1889,6 @@ function AllNotesViewer:init()
         event = "ShowCurrentBookAnnotations",
         title = _("Show current book annotations"),
         reader = true,
-        rolling = true,
-        paging = true,
     })
     if not self.ui.document then
         self.ui.menu:registerToMainMenu(self)
