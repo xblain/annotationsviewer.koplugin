@@ -696,7 +696,12 @@ function NotesListWidget:init()
         self.key_events.Close = { { Input.group.Back } }  
     end
     if not G_reader_settings:isTrue("page_turns_disable_swipe") then
-        self.ges_events = { Swipe = { GestureRange:new{ ges = "swipe", range = self.dimen } } }
+        self.ges_events = {
+            SwipeWest  = { GestureRange:new{ ges = "swipe", range = self.dimen, direction = "west"  } },
+            SwipeEast  = { GestureRange:new{ ges = "swipe", range = self.dimen, direction = "east"  } },
+            SwipeNorth = { GestureRange:new{ ges = "swipe", range = self.dimen, direction = "north" } },
+            SwipeSouth = { GestureRange:new{ ges = "swipe", range = self.dimen, direction = "south" } },
+        }
     else
         self.ges_events = {}
     end
@@ -1851,12 +1856,111 @@ function NotesListWidget:onGotoPrevPage()
     self:updatePage()
     return true
 end
-function NotesListWidget:onSwipe(_, ges)
-    if ges.direction == "west" then return self:onGotoNextPage()
-    elseif ges.direction == "north" then return self:onGotoNextPage()
-    elseif ges.direction == "east" then return self:onGotoPrevPage()
-    elseif ges.direction == "south" then return self:onGotoPrevPage()
+function NotesListWidget:onSwipeWest()  return self:onGotoNextPage() end
+function NotesListWidget:onSwipeNorth() return self:onGotoNextPage() end
+function NotesListWidget:onSwipeEast()  return self:onGotoPrevPage() end
+function NotesListWidget:onSwipeSouth() return self:onGotoPrevPage() end
+-- Forward an unhandled gesture to the KOReader gestures plugin by directly
+-- resolving the canonical gesture name and calling gestureAction(). This
+-- bypasses the event-stack limitation where UIManager only propagates events
+-- to is_always_active widgets after the top widget.
+local function _forwardGestureToPlugin(ges_event)
+    local g
+    local ReaderUI = require("apps/reader/readerui")
+    if ReaderUI.instance then g = ReaderUI.instance.gestures end
+    if not g then
+        local FileManager = require("apps/filemanager/filemanager")
+        if FileManager.instance then g = FileManager.instance.gestures end
     end
+    if not g then return end
+
+    local sw  = Screen:getWidth()
+    local sh  = Screen:getHeight()
+    local pos = ges_event.pos
+    if not pos then return end
+    local x, y = pos.x, pos.y
+    local gt  = ges_event.ges
+    local dir = ges_event.direction
+
+    local function readZone(key)
+        local d = G_defaults:readSetting(key)
+        if not d then return nil end
+        return { ratio_x = d.x, ratio_y = d.y, ratio_w = d.w, ratio_h = d.h }
+    end
+    local function inZone(z)
+        if not z then return false end
+        return x >= z.ratio_x * sw and x < (z.ratio_x + z.ratio_w) * sw
+           and y >= z.ratio_y * sh and y < (z.ratio_y + z.ratio_h) * sh
+    end
+
+    local candidates = {}
+
+    if gt == "swipe" then
+        local is_diag = dir == "northeast" or dir == "northwest"
+                     or dir == "southeast" or dir == "southwest"
+        if is_diag then
+            if ges_event.distance and ges_event.distance <= Screen:scaleBySize(300) then
+                candidates[#candidates+1] = "short_diagonal_swipe"
+            end
+        else
+            local le = readZone("DSWIPE_ZONE_LEFT_EDGE")
+            local re = readZone("DSWIPE_ZONE_RIGHT_EDGE")
+            local te = readZone("DSWIPE_ZONE_TOP_EDGE")
+            local be = readZone("DSWIPE_ZONE_BOTTOM_EDGE")
+            if inZone(le) then
+                if dir == "south" then candidates[#candidates+1] = "one_finger_swipe_left_edge_down"
+                elseif dir == "north" then candidates[#candidates+1] = "one_finger_swipe_left_edge_up" end
+            elseif inZone(re) then
+                if dir == "south" then candidates[#candidates+1] = "one_finger_swipe_right_edge_down"
+                elseif dir == "north" then candidates[#candidates+1] = "one_finger_swipe_right_edge_up" end
+            elseif inZone(te) then
+                if dir == "east" then candidates[#candidates+1] = "one_finger_swipe_top_edge_right"
+                elseif dir == "west" then candidates[#candidates+1] = "one_finger_swipe_top_edge_left" end
+            elseif inZone(be) then
+                if dir == "east" then candidates[#candidates+1] = "one_finger_swipe_bottom_edge_right"
+                elseif dir == "west" then candidates[#candidates+1] = "one_finger_swipe_bottom_edge_left" end
+            end
+        end
+    elseif gt == "two_finger_swipe" then
+        local map = {
+            east="two_finger_swipe_east", west="two_finger_swipe_west",
+            north="two_finger_swipe_north", south="two_finger_swipe_south",
+            northeast="two_finger_swipe_northeast", northwest="two_finger_swipe_northwest",
+            southeast="two_finger_swipe_southeast", southwest="two_finger_swipe_southwest",
+        }
+        if map[dir] then candidates[#candidates+1] = map[dir] end
+    elseif gt == "multiswipe" then
+        local orig = UIManager.sendEvent
+        UIManager.sendEvent = function(um, ev) return UIManager:broadcastEvent(ev) end
+        pcall(g.multiswipeAction, g, ges_event.multiswipe_directions, ges_event)
+        UIManager.sendEvent = orig
+        return true
+    elseif gt == "spread" then candidates[#candidates+1] = "spread_gesture"
+    elseif gt == "pinch"  then candidates[#candidates+1] = "pinch_gesture"
+    elseif gt == "rotate" then
+        if dir == "cw"  then candidates[#candidates+1] = "rotate_cw"
+        elseif dir == "ccw" then candidates[#candidates+1] = "rotate_ccw" end
+    end
+
+    if #candidates == 0 then return end
+
+    local ges_name = candidates[1]
+    for _, name in ipairs(candidates) do
+        if g.gestures and g.gestures[name] ~= nil then ges_name = name; break end
+    end
+
+    local orig = UIManager.sendEvent
+    UIManager.sendEvent = function(um, ev) return UIManager:broadcastEvent(ev) end
+    pcall(g.gestureAction, g, ges_name, ges_event)
+    UIManager.sendEvent = orig
+    return true
+end
+
+function NotesListWidget:onGesture(ev)
+    -- Let InputContainer handle registered ges_events / touch zones first
+    local InputContainer = require("ui/widget/container/inputcontainer")
+    if InputContainer.onGesture(self, ev) then return true end
+    return _forwardGestureToPlugin(ev)
 end
 function NotesListWidget:onTap(_, ges)
     if not ges or not ges.pos then return end
