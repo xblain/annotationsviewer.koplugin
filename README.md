@@ -7,19 +7,21 @@ Key behaviors:
 - Shows book title, date, chapter, highlighted text and any user note for each annotation
 - Lets you open the source book at the annotated location
 - Edit or delete annotations, change highlight style or color
-- Filter annotations by highlight color, style, books and tags
-- Configure font sizes, margins, truncation length and other display options from the plugin Settings menu
+- Extensive annotations filtering system enabling filtering by highlight color, style, books,tags, chapters, words in highlights and notes using inclusion and exclusion
+- Caches annotations for faster viewing
+- Configure font sizes, margins, truncation length and other many more display options from the plugin Settings menu for lots of customization
 
 ## Features
 
 - Unified view of all annotations across books
 - Pagination for long annotation lists
-- Filter by highlight color, style (underline/strikeout/invert/lighten), book titles or tags
+- Pagination customisation
+- Filter by highlight color, style (underline/strikeout/invert/lighten), book titles, tags, highlight text, note text using inclusions and/or exclusions
 - Edit note text in-place and save back to the book's settings
 - Change highlight style and color and persist back to book settings
-- Delete annotations from the book settings
+- Delete annotations
 - Go to the highlighted location in the reader
-- Customize fonts, margins, truncation and other presentation options
+- Customize fonts, margins, truncation and many other presentation options
 - Preview Annotations on next page
 
 
