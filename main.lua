@@ -444,7 +444,7 @@ function NoteItemWidget:init()
     if show_info_header then
         if info_fields["date"] and date_text ~= "" then table.insert(info_parts, date_text) end
         local display_authors = note_wrapper:getDisplayAuthors()
-        if info_fields["author"] and display_authors then
+        if info_fields["author"] and display_authors and not self.skip_title then
             table.insert(info_parts, display_authors)
         end
         if info_fields["chapter"] and self.note.chapter and self.note.chapter ~= "" then
@@ -1742,19 +1742,55 @@ function AllNotesViewer:init()
         title = _("Show all annotations"),
         filemanager = true,
     })
+    Dispatcher:registerAction("show_current_book_annotations", {
+        category = "none",
+        event = "ShowCurrentBookAnnotations",
+        title = _("Show current book annotations"),
+        reader = true,
+        rolling = true,
+        paging = true,
+    })
     if not self.ui.document then
+        self.ui.menu:registerToMainMenu(self)
+    else
         self.ui.menu:registerToMainMenu(self)
     end
 end
 function AllNotesViewer:onShowAllAnnotations()
     self:showAllNotes()
 end
+function AllNotesViewer:onShowCurrentBookAnnotations()
+    self:showCurrentBookNotes()
+end
+function AllNotesViewer:showCurrentBookNotes()
+    local ReaderUI = require("apps/reader/readerui")
+    local ui = self.ui or (ReaderUI and ReaderUI.instance)
+    if not ui or not ui.document then return end
+    local book_path = ui.document.file
+    if not book_path then return end
+    local annotations = self:loadBookAnnotations(book_path)
+    if not annotations or #annotations == 0 then
+        UIManager:show(InfoMessage:new{ text = _("No annotations found for this book.") })
+        return
+    end
+    local book_info = self:getBookInfo(book_path)
+    local book_title = book_info and book_info.title or (book_path:match("([^/\\]+)$") or book_path)
+    self:showNotesForBook(book_path, book_title, annotations)
+end
 function AllNotesViewer:addToMainMenu(menu_items)
-    menu_items.all_notes_viewer = {
-        text = _("Annotations"),
-        sorting_hint = "filemanager_settings",
-        callback = function() self:showAllNotes() end,
-    }
+    if self.ui and self.ui.document then
+        menu_items.current_book_notes_viewer = {
+            text = _("Book Annotations"),
+            sorting_hint = "navi",
+            callback = function() self:showCurrentBookNotes() end,
+        }
+    else
+        menu_items.all_notes_viewer = {
+            text = _("Annotations"),
+            sorting_hint = "filemanager_settings",
+            callback = function() self:showAllNotes() end,
+        }
+    end
 end
 function AllNotesViewer:loadBookAnnotations(book_path)
     local annotations = {}
@@ -1852,6 +1888,47 @@ function AllNotesViewer:findAllNotes()
         end
     end
     return notes_data
+end
+function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations)
+    local book_info = self:getBookInfo(book_path)
+    local notes_list = {}
+    local function split_tags(val)
+        if not val then return nil end
+        if type(val) == "table" then return val end
+        if type(val) == "string" then
+            local t = {}
+            for tag in val:gmatch("[^,;\n|\t]+") do
+                tag = tag:match("^%s*(.-)%s*$")
+                if tag ~= "" then table.insert(t, tag) end
+            end
+            return t
+        end
+        return nil
+    end
+    local book_tags_table = split_tags(book_info and book_info.tags)
+    for _, note in ipairs(raw_annotations) do
+        local note_tags = split_tags(note.tags) or book_tags_table or {}
+        local tag_set = {}
+        for _, tag in ipairs(note_tags) do if tag ~= "" then tag_set[tag] = true end end
+        local all_tags = {}
+        for tag in pairs(tag_set) do table.insert(all_tags, tag) end
+        table.sort(all_tags)
+        table.insert(notes_list, {
+            book_title = book_title,
+            book_authors = book_info and book_info.authors or nil,
+            book_filename = book_path:match("([^/\\]+)$") or book_path,
+            book_path = book_path,
+            page = note.page, chapter = note.chapter,
+            pos0 = note.pos0, pos1 = note.pos1,
+            highlighted_text = note.text, user_note = note.notes,
+            datetime = note.datetime, drawer = note.drawer, color = note.color,
+            tags = all_tags,
+        })
+    end
+    if #notes_list == 0 then return end
+    local sort_mode = getSetting("sort_mode", "date_newest")
+    NotesListWidget:sortNotesList(notes_list, sort_mode)
+    UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self })
 end
 function AllNotesViewer:showAllNotes()
     local all_notes_by_book = self:findAllNotes()
