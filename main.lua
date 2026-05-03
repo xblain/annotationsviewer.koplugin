@@ -105,11 +105,11 @@ local function getShowInfo() return getSetting("show_info", true) ~= false end
 local function getInfoFields() return getSetting("info_fields", "date,author,chapter") end
 local function getAlwaysShowFirstOnPage() return getSetting("always_show_first_on_page", true) ~= false end
 local function getPaginationStyle() return getSetting("pagination_style", "right") end
-local SB_THUMB_WIDTH  = Screen:scaleBySize(8)   -- scrollbar thumb width
-local SB_MARGIN_RIGHT = Screen:scaleBySize(20.2)  -- scrollbar gap from screen edge
-local SB_TRACK_WIDTH  = Screen:scaleBySize(1)   -- scrollbar track width
-local SB_MARGIN_V_TOP    = Screen:scaleBySize(16)  -- scrollbar gap above thumb
-local SB_MARGIN_V_BOTTOM = Screen:scaleBySize(32)  -- scrollbar gap below thumb
+local SB_THUMB_WIDTH  = Screen:scaleBySize(8)
+local SB_MARGIN_RIGHT = Screen:scaleBySize(20.2)
+local SB_TRACK_WIDTH  = Screen:scaleBySize(1)
+local SB_MARGIN_V_TOP    = Screen:scaleBySize(16)
+local SB_MARGIN_V_BOTTOM = Screen:scaleBySize(26)
 
 local function getNoteInfoKey(note, fields_setting)
     local parts = {}
@@ -804,13 +804,12 @@ function NotesListWidget:createFooter()
         local sb_thumb_width  = SB_THUMB_WIDTH
         local sb_margin_v_top    = SB_MARGIN_V_TOP
         local sb_margin_v_bottom = SB_MARGIN_V_BOTTOM
-        local sb_x            = self.sb_x  -- left edge of thumb, centered on close button
-        local sb_height       = self.height - self.title_height - sb_margin_v_top - sb_margin_v_bottom
+        local sb_x = self.sb_x  
+        local sb_height = self.height - self.title_height - sb_margin_v_top - sb_margin_v_bottom
         local low  = (self.current_page - 1) / self.total_pages
         local high = self.current_page / self.total_pages
         local thumb_h     = math.max(Screen:scaleBySize(16), math.floor(sb_height * (high - low)))
         local thumb_y_off = math.min(math.floor(low * sb_height), sb_height - thumb_h)
-        -- Custom widget: dark track + white thumb (colors reversed from default)
         local CustomScrollBar = InputContainer:extend{
             width  = sb_thumb_width,
             height = sb_height,
@@ -819,7 +818,6 @@ function NotesListWidget:createFooter()
             self.dimen = Geom:new{ w = self.width, h = self.height }
         end
         function CustomScrollBar:paintTo(bb, x, y)
-            -- track centered within thumb width
             local track_x = x + math.floor((sb_thumb_width - sb_track_width) / 2)
             -- draw track (dark, full height)
             bb:paintRect(track_x, y, sb_track_width, self.height, BlitBuffer.COLOR_BLACK)
@@ -852,7 +850,6 @@ function NotesListWidget:createFooter()
         local page_text  = Button:new{ text = string.format(_("Page %1 of %2"):gsub("%%1", self.current_page):gsub("%%2", self.total_pages), ""), text_font_bold = false, bordersize = 0, show_parent = self }
         local right_chev = Button:new{ icon = chevron_right, callback = function() self:onGotoNextPage() end, bordersize = 0, show_parent = self }
         local last_chev  = Button:new{ icon = chevron_last,  callback = function() self.current_page = self.total_pages; self:updatePage() end, bordersize = 0, show_parent = self }
-        -- Use plain text fallback for page label
         first_chev:enableDisable(self.current_page > 1)
         left_chev:enableDisable(self.current_page > 1)
         right_chev:enableDisable(self.current_page < self.total_pages)
@@ -1040,7 +1037,33 @@ end
         left_icon_tap_callback = function() self:showMainMenu() end,
         show_parent = self,
     }
-    
+
+    -- Add a "clear filters" button next to the menu button when filters are active
+    if filter_text ~= "" and title_bar.left_button then
+        local IconButton = require("ui/widget/iconbutton")
+        local bp = Screen:scaleBySize(5)
+        -- Derive the icon pixel size from the left_button widget dimensions:
+        local lb_w = title_bar.left_button:getSize().w
+        local icon_size = math.floor((lb_w - bp) / 3)
+        local btn_x = bp + icon_size + Screen:scaleBySize(12)
+        -- Trim the menu button's extended tap zone so it doesn't swallow taps on the cancel button
+        title_bar.left_button.padding_right = btn_x - bp - icon_size - 1
+        title_bar.left_button:update()
+        local clear_btn = IconButton:new{
+            icon = "cancel",
+            width = icon_size,
+            height = icon_size,
+            padding = 0,
+            overlap_offset = { btn_x, bp },
+            callback = function()
+                self.active_filter = nil
+                self:refresh()
+            end,
+            show_parent = self,
+        }
+        table.insert(title_bar, clear_btn)
+    end
+
     local subtitle_widget = nil
     local subtitle_height = 0
     if filter_text ~= "" then
