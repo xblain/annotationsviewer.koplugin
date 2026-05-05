@@ -100,6 +100,8 @@ local function getTopPadding() return Screen:scaleBySize(getSetting("top_padding
 local function getPreviewFudge() return tonumber(getSetting("preview_fudge", DEFAULT_PREVIEW_FUDGE)) end
 local function getHideDupTitle() return getSetting("hide_dup_title", true) ~= false end
 local function getHideDupInfo() return getSetting("hide_dup_info", true) ~= false end
+local function getFilterTitlebarBtn() return getSetting("filter_titlebar_btn", true) ~= false end
+local function getSwipeSetting() return getSetting("swipe_direction", "both") end
 local function getDedupInfoFields() return getSetting("dedup_info_fields", "date,author,chapter") end
 local function getShowInfo() return getSetting("show_info", true) ~= false end
 local function getInfoFields() return getSetting("info_fields", "date,author,chapter") end
@@ -163,7 +165,7 @@ local SPIN_MENUS = {
     },
     section_margin = {
         dialog_name = "section_margin_dialog",
-        title = _("Section Margins"),
+        title = _("Space Between Notes"),
         settings = {
             { label = _("After Title: "), key = "title_margin", default = DEFAULT_TITLE_MARGIN, min = 0, max = 30, step = 1, getter = function() return getSetting("title_margin", DEFAULT_TITLE_MARGIN) end },
             { label = _("After Info: "), key = "info_margin", default = DEFAULT_INFO_MARGIN, min = 0, max = 30, step = 1, getter = function() return getSetting("info_margin", DEFAULT_INFO_MARGIN) end },
@@ -171,7 +173,7 @@ local SPIN_MENUS = {
     },
     margins = {
         dialog_name = "margin_dialog",
-        title = _("Margins"),
+        title = _("Page Margins"),
         settings = {
             { label = _("Top Padding: "), key = "top_padding", default = DEFAULT_TOP_PADDING, min = 0, max = 100, step = 5, getter = function() return getSetting("top_padding", DEFAULT_TOP_PADDING) end },
             { label = _("Horizontal Margin: "), key = "h_margin", default = DEFAULT_H_MARGIN, min = 5, max = 60, step = 5, getter = function() return getSetting("h_margin", DEFAULT_H_MARGIN) end },
@@ -678,9 +680,14 @@ function NotesListWidget:init()
         local bp = Screen:scaleBySize(5)
         local icon_w = math.floor((temp_title.right_button.dimen.w - bp) / 3)
         local close_center_x = self.width - bp - math.floor(icon_w / 2)
-        self.sb_x = close_center_x - math.floor(SB_THUMB_WIDTH / 2)
+        self.close_center_x = close_center_x
+        self.close_btn_w = icon_w
+        self.sb_x = self.width - icon_w
     else
-        self.sb_x = self.width - SB_THUMB_WIDTH - SB_MARGIN_RIGHT
+        local fallback_w = SB_THUMB_WIDTH + SB_MARGIN_RIGHT
+        self.close_center_x = self.width - SB_MARGIN_RIGHT - math.floor(SB_THUMB_WIDTH / 2)
+        self.close_btn_w = fallback_w
+        self.sb_x = self.width - fallback_w
     end
     local temp_button = Button:new{ icon = "chevron.first", bordersize = 0 }
     local btn_h = temp_button:getSize().h
@@ -696,13 +703,18 @@ function NotesListWidget:init()
         self.key_events.GotoNextPage = { { Input.group.PgFwd } }
         self.key_events.Close = { { Input.group.Back } }  
     end
-    if not G_reader_settings:isTrue("page_turns_disable_swipe") then
-        self.ges_events = {
-            SwipeWest  = { GestureRange:new{ ges = "swipe", range = self.dimen, direction = "west"  } },
-            SwipeEast  = { GestureRange:new{ ges = "swipe", range = self.dimen, direction = "east"  } },
-            SwipeNorth = { GestureRange:new{ ges = "swipe", range = self.dimen, direction = "north" } },
-            SwipeSouth = { GestureRange:new{ ges = "swipe", range = self.dimen, direction = "south" } },
-        }
+    local swipe_setting = getSwipeSetting()
+    if swipe_setting ~= "disabled" and not G_reader_settings:isTrue("page_turns_disable_swipe") then
+        local swipe_dimen = self.dimen
+        self.ges_events = {}
+        if swipe_setting == "horizontal" or swipe_setting == "both" then
+            self.ges_events.SwipeWest = { GestureRange:new{ ges = "swipe", range = swipe_dimen, direction = "west" } }
+            self.ges_events.SwipeEast = { GestureRange:new{ ges = "swipe", range = swipe_dimen, direction = "east" } }
+        end
+        if swipe_setting == "vertical" or swipe_setting == "both" then
+            self.ges_events.SwipeNorth = { GestureRange:new{ ges = "swipe", range = swipe_dimen, direction = "north" } }
+            self.ges_events.SwipeSouth = { GestureRange:new{ ges = "swipe", range = swipe_dimen, direction = "south" } }
+        end
     else
         self.ges_events = {}
     end
@@ -796,6 +808,15 @@ function NotesListWidget:applyFilter()
                     match = false
                 end
             end
+            -- Notes presence
+            if match and af.notes_presence then
+                local has_note = note.user_note and note.user_note ~= ""
+                if af.notes_presence == "only" then
+                    match = has_note ~= false and has_note ~= nil
+                elseif af.notes_presence == "exclude" then
+                    match = not (has_note ~= false and has_note ~= nil)
+                end
+            end
         end
         if match then table.insert(self.filtered_notes, note) end
     end
@@ -817,7 +838,8 @@ function NotesListWidget:calculatePages()
         (self.active_filter.search_note and self.active_filter.search_note ~= "") or
         (self.active_filter.search_note_exclude and self.active_filter.search_note_exclude ~= "") or
         (self.active_filter.chapters and next(self.active_filter.chapters)) or
-        (self.active_filter.chapters_exclude and next(self.active_filter.chapters_exclude))
+        (self.active_filter.chapters_exclude and next(self.active_filter.chapters_exclude)) or
+        (self.active_filter.notes_presence ~= nil)
     ) or false
     
     local subtitle_height = 0
@@ -861,8 +883,10 @@ function NotesListWidget:calculatePages()
             table.insert(current_page_notes, i)
         else
             if #current_page_notes > 0 then table.insert(self.pages, current_page_notes) end
+            -- Re-measure as first-on-page: always_show_first may restore title/info headers
+            local first_widget = NoteItemWidget:new{ width = note_width, note = note, show_parent = self, skip_title = false, skip_info = false }
             current_page_notes = {i}
-            current_height = item_height
+            current_height = first_widget.dimen.h
         end
         dedup_prev_title = note.book_title
         dedup_prev_info_key = getNoteInfoKey(note, dedup_fields)
@@ -874,41 +898,133 @@ end
 function NotesListWidget:createFooter()
     local style = getPaginationStyle()
 
-    if style == "scrollbar" then
+    if style == "scrollbar" or style == "scrollbar_chevrons" then
         -- Vertical scrollbar on the right edge, no bottom footer
         if self.total_pages <= 1 then return VerticalGroup:new{} end
-        local sb_track_width  = SB_TRACK_WIDTH
-        local sb_thumb_width  = SB_THUMB_WIDTH
+        local has_chevrons = (style == "scrollbar_chevrons")
+        local sb_track_width     = SB_TRACK_WIDTH
+        local sb_thumb_width     = SB_THUMB_WIDTH
         local sb_margin_v_top    = SB_MARGIN_V_TOP
         local sb_margin_v_bottom = SB_MARGIN_V_BOTTOM
-        local sb_x = self.sb_x  
-        local sb_height = self.height - self.title_height - sb_margin_v_top - sb_margin_v_bottom
+        -- sb_x = self.width - close_btn_w, so strip_w == close_btn_w exactly
+        local strip_w = Screen:scaleBySize(32+16+3)
+        local sb_x    = self.width - strip_w
+        local chev_h  = has_chevrons and strip_w or 0
+        local chev_gap = has_chevrons and Screen:scaleBySize(4) or 0
+        local full_sb_height = self.height - self.title_height - sb_margin_v_top - sb_margin_v_bottom
+        --local sb_height = has_chevrons and (full_sb_height - chev_h * 2 - chev_gap * 2) or full_sb_height
+        local sb_height = has_chevrons and (full_sb_height - chev_h * 2) or full_sb_height
         local low  = (self.current_page - 1) / self.total_pages
         local high = self.current_page / self.total_pages
         local thumb_h     = math.max(Screen:scaleBySize(16), math.floor(sb_height * (high - low)))
-        local thumb_y_off = math.min(math.floor(low * sb_height), sb_height - thumb_h)
+        -- Map so thumb is flush at top on page 1 and flush at bottom on last page
+        local travel      = sb_height - thumb_h
+        local thumb_y_off = math.floor(low / (1 - 1 / self.total_pages) * travel + 0.5)
+        thumb_y_off       = math.max(0, math.min(travel, thumb_y_off))
+        local self_ref = self
+        local hit_x      = sb_x
+        local hit_width  = strip_w
+        --local hit_y_top  = self.title_height + sb_margin_v_top + chev_h + chev_gap
+        local hit_y_top  = self.title_height + sb_margin_v_top + chev_h
+        local hit_height = sb_height
         local CustomScrollBar = InputContainer:extend{
-            width  = sb_thumb_width,
+            width  = strip_w,
             height = sb_height,
         }
         function CustomScrollBar:init()
-            self.dimen = Geom:new{ w = self.width, h = self.height }
+            self.dimen = Geom:new{ x = hit_x, y = hit_y_top, w = hit_width, h = hit_height }
+            self.ges_events = {
+                TapScrollBar = {
+                    GestureRange:new{ ges = "tap", range = self.dimen },
+                },
+            }
+        end
+        function CustomScrollBar:onTapScrollBar(_, ges)
+            if not ges or not ges.pos then return end
+            local rel = (ges.pos.y - hit_y_top) / hit_height
+            rel = math.max(0, math.min(1, rel))
+            local page = math.max(1, math.min(self_ref.total_pages, math.ceil(rel * self_ref.total_pages)))
+            self_ref.current_page = page
+            self_ref:updatePage()
+            return true
         end
         function CustomScrollBar:paintTo(bb, x, y)
-            local track_x = x + math.floor((sb_thumb_width - sb_track_width) / 2)
-            -- draw track (dark, full height)
+            -- center thumb within strip_w
+            local thumb_x = x + math.floor((strip_w - sb_thumb_width) / 2)
+            local track_x = thumb_x + math.floor((sb_thumb_width - sb_track_width) / 2)
             bb:paintRect(track_x, y, sb_track_width, self.height, BlitBuffer.COLOR_BLACK)
-            -- draw thumb (white, rounded)
             local radius = math.floor(sb_thumb_width / 2)
-            bb:paintRoundedRect(x, y + thumb_y_off, sb_thumb_width, thumb_h, BlitBuffer.COLOR_WHITE, radius)
-            bb:paintBorder(x, y + thumb_y_off, sb_thumb_width, thumb_h, 2, BlitBuffer.COLOR_BLACK, radius)
+            bb:paintRoundedRect(thumb_x, y + thumb_y_off, sb_thumb_width, thumb_h, BlitBuffer.COLOR_WHITE, radius)
+            bb:paintBorder(thumb_x, y + thumb_y_off, sb_thumb_width, thumb_h, 2, BlitBuffer.COLOR_BLACK, radius)
         end
         local sb = CustomScrollBar:new{}
+        if not has_chevrons then
+            return VerticalGroup:new{
+                VerticalSpan:new{ width = self.title_height + sb_margin_v_top },
+                HorizontalGroup:new{
+                    HorizontalSpan:new{ width = sb_x },
+                    sb,
+                },
+            }
+        end
+        -- scrollbar_chevrons: one widget for the full strip — paints chevrons+scrollbar, dispatches taps by Y
+        local up_enabled = self.current_page > 1
+        local dn_enabled = self.current_page < self.total_pages
+        local IconWidget = require("ui/widget/iconwidget")
+        local btn_h = strip_w  -- square buttons
+        local up_abs_y = self.title_height + sb_margin_v_top
+        local dn_abs_y = up_abs_y + btn_h + sb_height
+        local icon_size = Screen:scaleBySize(32)
+        local icon_ox = math.floor((strip_w - icon_size) / 2)
+
+        local up_icon = IconWidget:new{ icon = "chevron.up", width = icon_size, height = icon_size, dim = not up_enabled }
+        local dn_icon = IconWidget:new{ icon = "chevron.up", rotation_angle = 180, width = icon_size, height = icon_size, dim = not dn_enabled }
+
+        local full_strip_h = btn_h * 2 + sb_height
+        local strip_range = Geom:new{ x = sb_x, y = up_abs_y, w = strip_w, h = full_strip_h }
+        local ChevronStrip = InputContainer:extend{ width = strip_w, height = full_strip_h }
+        function ChevronStrip:init()
+            self.dimen = strip_range
+            self.ges_events = { Tap = { GestureRange:new{ ges = "tap", range = strip_range } } }
+        end
+        function ChevronStrip:onTap(_, ges)
+            if not ges or not ges.pos then return end
+            if ges.pos.x < sb_x then return end
+            local y = ges.pos.y
+            if y < up_abs_y + btn_h then
+                if up_enabled then self_ref:onGotoPrevPage() end
+            elseif y >= dn_abs_y then
+                if dn_enabled then self_ref:onGotoNextPage() end
+            else
+                -- scrollbar tap
+                local rel = (y - (up_abs_y + btn_h)) / sb_height
+                rel = math.max(0, math.min(1, rel))
+                local page = math.max(1, math.min(self_ref.total_pages, math.ceil(rel * self_ref.total_pages)))
+                self_ref.current_page = page
+                self_ref:updatePage()
+            end
+            return true
+        end
+        function ChevronStrip:paintTo(bb, x, y)
+            -- up chevron: centered horizontally, at top of strip
+            up_icon:paintTo(bb, x + icon_ox, y)
+            -- scrollbar track + thumb
+            local sb_y = y + btn_h
+            local thumb_x = x + math.floor((strip_w - sb_thumb_width) / 2)
+            local track_x = thumb_x + math.floor((sb_thumb_width - sb_track_width) / 2)
+            bb:paintRect(track_x, sb_y, sb_track_width, sb_height, BlitBuffer.COLOR_BLACK)
+            local radius = math.floor(sb_thumb_width / 2)
+            bb:paintRoundedRect(thumb_x, sb_y + thumb_y_off, sb_thumb_width, thumb_h, BlitBuffer.COLOR_WHITE, radius)
+            bb:paintBorder(thumb_x, sb_y + thumb_y_off, sb_thumb_width, thumb_h, 2, BlitBuffer.COLOR_BLACK, radius)
+            -- dn chevron: centered horizontally, at bottom of strip
+            dn_icon:paintTo(bb, x + icon_ox, y + btn_h + sb_height + math.floor(btn_h - icon_size))
+        end
+
         return VerticalGroup:new{
             VerticalSpan:new{ width = self.title_height + sb_margin_v_top },
             HorizontalGroup:new{
                 HorizontalSpan:new{ width = sb_x },
-                sb,
+                ChevronStrip:new{},
             },
         }
     elseif style == "default" then
@@ -1048,8 +1164,10 @@ function NotesListWidget:updatePage()
         local bp = Screen:scaleBySize(5)
         local icon_w = math.floor((temp_title.right_button.dimen.w - bp) / 3)
         local close_center_x = self.width - bp - math.floor(icon_w / 2)
+        self.close_center_x = close_center_x
         self.sb_x = close_center_x - math.floor(SB_THUMB_WIDTH / 2)
     else
+        self.close_center_x = self.width - SB_MARGIN_RIGHT - math.floor(SB_THUMB_WIDTH / 2)
         self.sb_x = self.width - SB_THUMB_WIDTH - SB_MARGIN_RIGHT
     end
     local temp_button = Button:new{ icon = "chevron.first", bordersize = 0 }
@@ -1174,31 +1292,32 @@ end
         left_icon_tap_callback = function() self:showMainMenu() end,
         show_parent = self,
     }
+    -- Clamp close button tap area to the title bar height to prevent overlap with the scrollbar chevron
+    if title_bar.right_button and title_bar.right_button.dimen then
+        title_bar.right_button.dimen.h = math.min(title_bar.right_button.dimen.h, title_bar:getHeight())
+    end
 
-    -- Add a "clear filters" button next to the menu button when filters are active
-    if filter_text ~= "" and title_bar.left_button then
+    -- Add "open filters menu" button next to the menu button
+    if getFilterTitlebarBtn() then
         local IconButton = require("ui/widget/iconbutton")
         local bp = Screen:scaleBySize(5)
-        -- Derive the icon pixel size from the left_button widget dimensions:
         local lb_w = title_bar.left_button:getSize().w
         local icon_size = math.floor((lb_w - bp) / 3)
         local btn_x = bp + icon_size + Screen:scaleBySize(12)
-        -- Trim the menu button's extended tap zone so it doesn't swallow taps on the cancel button
         title_bar.left_button.padding_right = btn_x - bp - icon_size - 1
         title_bar.left_button:update()
-        local clear_btn = IconButton:new{
-            icon = "cancel",
+        local filter_btn = IconButton:new{
+            icon = "appbar.search",
             width = icon_size,
             height = icon_size,
             padding = 0,
             overlap_offset = { btn_x, bp },
             callback = function()
-                self.active_filter = nil
-                self:refresh()
+                self:showFilterMenu(false)
             end,
             show_parent = self,
         }
-        table.insert(title_bar, clear_btn)
+        table.insert(title_bar, filter_btn)
     end
 
     local subtitle_widget = nil
@@ -1229,7 +1348,7 @@ end
     local do_hide_dup_info = getHideDupInfo()
     local always_show_first = getAlwaysShowFirstOnPage()
     local _sb_track_center = (self.sb_x or 0) + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2) + math.floor(SB_TRACK_WIDTH / 2)
-    local _sb_reserve = (pag_style == "scrollbar") and (self.width - _sb_track_center) or 0
+    local _sb_reserve = (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and (self.width - _sb_track_center) or 0
     local note_width = self.width - _sb_reserve
     -- determine dedup state from last note of previous page
     local dedup_prev_title = nil
@@ -1348,7 +1467,36 @@ end
     
     self.ges_events = self.ges_events or {}
     local tap_height = self.height - self.title_height - self.footer_height
-    self.ges_events.Tap = { GestureRange:new{ ges = "tap", range = Geom:new{ x = 0, y = self.title_height, w = self.width, h = tap_height } } }
+    -- In scrollbar mode, exclude the scrollbar column so taps/swipes there reach CustomScrollBar
+    local tap_width = self.width
+    if (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and self.sb_x then
+        tap_width = self.sb_x
+    end
+    self.ges_events.Tap = { GestureRange:new{ ges = "tap", range = Geom:new{ x = 0, y = self.title_height, w = tap_width, h = tap_height } } }
+    -- Narrow swipe range so the scrollbar column isn't claimed by page-turn swipes
+    local swipe_range = Geom:new{ x = 0, y = 0, w = tap_width, h = self.height }
+    local swipe_setting = getSwipeSetting()
+    if swipe_setting ~= "disabled" then
+        if swipe_setting == "horizontal" or swipe_setting == "both" then
+            self.ges_events.SwipeWest = { GestureRange:new{ ges = "swipe", range = swipe_range, direction = "west" } }
+            self.ges_events.SwipeEast = { GestureRange:new{ ges = "swipe", range = swipe_range, direction = "east" } }
+        else
+            self.ges_events.SwipeWest = nil
+            self.ges_events.SwipeEast = nil
+        end
+        if swipe_setting == "vertical" or swipe_setting == "both" then
+            self.ges_events.SwipeNorth = { GestureRange:new{ ges = "swipe", range = swipe_range, direction = "north" } }
+            self.ges_events.SwipeSouth = { GestureRange:new{ ges = "swipe", range = swipe_range, direction = "south" } }
+        else
+            self.ges_events.SwipeNorth = nil
+            self.ges_events.SwipeSouth = nil
+        end
+    else
+        self.ges_events.SwipeWest  = nil
+        self.ges_events.SwipeEast  = nil
+        self.ges_events.SwipeNorth = nil
+        self.ges_events.SwipeSouth = nil
+    end
     
     UIManager:setDirty(self, "ui")
 end
@@ -1356,7 +1504,7 @@ function NotesListWidget:showMainMenu()
     local buttons = {
         {{ text = _("Filter"), callback = function()
             UIManager:close(self.main_menu)
-            self:showFilterMenu()
+            self:showFilterMenu(true)
         end }},
         {{ text = _("Sort"), callback = function()
             UIManager:close(self.main_menu)
@@ -1373,83 +1521,50 @@ function NotesListWidget:showMainMenu()
 end
 function NotesListWidget:showSortMenu()
     local sort_mode = getSetting("sort_mode", "date_newest")
-    
-    local function getCurrentPrimarySort()
-        if sort_mode:match("^date") then return "date"
-        elseif sort_mode:match("^author") then return "author"
-        elseif sort_mode:match("^book") then return "book"
-        elseif sort_mode:match("^location") then return "location"
-        elseif sort_mode:match("^filename") then return "filename"
-        else return "date" end
+    local function check(mode) return sort_mode == mode and "\u{2713} " or "  " end
+    local function apply(mode)
+        setSetting("sort_mode", mode)
+        self:applySort()
+        self:refresh()
+        UIManager:close(self.sort_dialog)
+        self:showMainMenu()
     end
-    
-    local function getSortIndicator(primary)
-        return getCurrentPrimarySort() == primary and "✓ " or "  "
-    end
-    
-    local buttons = {
-        {{ text = getSortIndicator("date") .. _("Date"), callback = function()
-            UIManager:close(self.sort_dialog)
-            self:showSecondarySortMenu("date")
-        end }},
-        {{ text = getSortIndicator("author") .. _("Author"), callback = function()
-            UIManager:close(self.sort_dialog)
-            self:showSecondarySortMenu("author")
-        end }},
-        {{ text = getSortIndicator("book") .. _("Book"), callback = function()
-            UIManager:close(self.sort_dialog)
-            self:showSecondarySortMenu("book")
-        end }},
-        {{ text = getSortIndicator("filename") .. _("Filename"), callback = function()
-            UIManager:close(self.sort_dialog)
-            self:showSecondarySortMenu("filename")
-        end }},
-        {{ text = _("Back"), callback = function()
-            UIManager:close(self.sort_dialog)
-            self:showMainMenu()
-        end }},
+
+    local categories = {
+        { key = "date",     label = "Date" },
+        { key = "author",   label = "Author" },
+        { key = "book",     label = "Book" },
+        { key = "filename", label = "Filename" },
     }
+
+    local buttons = {}
+    for _, cat in ipairs(categories) do
+        table.insert(buttons, {})
+        table.insert(buttons, {{ text = cat.label, enabled = false }})
+        local modes = SORT_CATEGORIES[cat.key] or {}
+        local i = 1
+        while i <= #modes do
+            local row = {}
+            local m1 = modes[i]
+            if m1 and SORT_MODES[m1] then
+                table.insert(row, { text = check(m1) .. SORT_MODES[m1].label, callback = function() apply(m1) end })
+            end
+            local m2 = modes[i + 1]
+            if m2 and SORT_MODES[m2] then
+                table.insert(row, { text = check(m2) .. SORT_MODES[m2].label, callback = function() apply(m2) end })
+            end
+            if #row > 0 then table.insert(buttons, row) end
+            i = i + 2
+        end
+    end
+
+    table.insert(buttons, {{ text = _("Back"), callback = function()
+        UIManager:close(self.sort_dialog)
+        self:showMainMenu()
+    end }})
+
     self.sort_dialog = ButtonDialogTitle:new{ title = _("Sort By"), buttons = buttons }
     UIManager:show(self.sort_dialog)
-end
-
-function NotesListWidget:showSecondarySortMenu(primary)
-    local sort_mode = getSetting("sort_mode", "date_newest")
-    
-    local function getSecondaryIndicator(mode)
-        return sort_mode == mode and "✓ " or "  "
-    end
-    
-    local function createSortCallback(mode)
-        return function()
-            setSetting("sort_mode", mode)
-            self:applySort()
-            self:refresh()
-            UIManager:close(self.secondary_sort_dialog)
-            self:showMainMenu()
-        end
-    end
-    
-    local buttons = {}
-    local sort_modes = SORT_CATEGORIES[primary] or {}
-    
-    for _, mode in ipairs(sort_modes) do
-        local mode_info = SORT_MODES[mode]
-        if mode_info then
-            table.insert(buttons, {{
-                text = getSecondaryIndicator(mode) .. mode_info.label,
-                callback = createSortCallback(mode)
-            }})
-        end
-    end
-    
-    table.insert(buttons, {{ text = _("Back"), callback = function()
-        UIManager:close(self.secondary_sort_dialog)
-        self:showSortMenu()
-    end }})
-    
-    self.secondary_sort_dialog = ButtonDialogTitle:new{ title = _("Sort Direction"), buttons = buttons }
-    UIManager:show(self.secondary_sort_dialog)
 end
 function NotesListWidget:showSpinMenu(menu_key, parent_callback)
     local menu_config = SPIN_MENUS[menu_key]
@@ -1496,53 +1611,94 @@ function NotesListWidget:showSettingsMenu()
             self:showSettingsMenu()
         end
     end
-    
-    local justify_text = getJustify() == true and "On" or "Off"
-    local show_total_text = getShowTotalNotes() == true and "On" or "Off"
-    local hide_dup_title_text = getHideDupTitle() and "On" or "Off"
-    local hide_dup_info_text = getHideDupInfo() and "On" or "Off"
-    local show_info_text = getShowInfo() and "On" or "Off"
-    local always_first_text = getAlwaysShowFirstOnPage() and "On" or "Off"
-    
+    local function sub(fn)
+        return function()
+            UIManager:close(self.settings_dialog)
+            fn()
+        end
+    end
+
+    local function onoff(v) return v and "On" or "Off" end
+    local function check(v) return v and "\u{2713}" or "○" end
+
+    -- Info fields helpers (inline toggles, no submenu)
+    local info_active = {}
+    for f in getInfoFields():gmatch("[^,]+") do info_active[f] = true end
+    local function toggleInfoField(f)
+        UIManager:close(self.settings_dialog)
+        if info_active[f] then info_active[f] = nil else info_active[f] = true end
+        local parts = {}
+        for _, k in ipairs({"date","author","chapter"}) do if info_active[k] then table.insert(parts, k) end end
+        setSetting("info_fields", #parts > 0 and table.concat(parts,",") or "date")
+        self:refresh(); self:showSettingsMenu()
+    end
+    local dedup_active = {}
+    for f in getDedupInfoFields():gmatch("[^,]+") do dedup_active[f] = true end
+    local function toggleDedupField(f)
+        UIManager:close(self.settings_dialog)
+        if dedup_active[f] then dedup_active[f] = nil else dedup_active[f] = true end
+        local parts = {}
+        for _, k in ipairs({"date","author","chapter"}) do if dedup_active[k] then table.insert(parts, k) end end
+        setSetting("dedup_info_fields", #parts > 0 and table.concat(parts,",") or "date")
+        self:refresh(); self:showSettingsMenu()
+    end
+
     local buttons = {
-        {{ text = _("Font Sizes..."), callback = function()
-            UIManager:close(self.settings_dialog)
-            self:showSpinMenu("font_size", function() self:showSettingsMenu() end)
-        end }},
-        {{ text = _("Fonts..."), callback = function()
-            UIManager:close(self.settings_dialog)
-            self:showFontsMenu()
-        end }},
-        {{ text = _("Section Margins..."), callback = function()
-            UIManager:close(self.settings_dialog)
-            self:showSpinMenu("section_margin", function() self:showSettingsMenu() end)
-        end }},
-        {{ text = _("Margins..."), callback = function()
-            UIManager:close(self.settings_dialog)
-            self:showSpinMenu("margins", function() self:showSettingsMenu() end)
-        end }},
-        {{ text = _("Truncate Lines: ") .. getTruncateLines(), callback = function()
-            UIManager:close(self.settings_dialog)
-            self:showSpinSetting(_("Truncate Lines"), "truncate_lines", DEFAULT_TRUNCATE_LINES, 1, 20, 1, function() self:showSettingsMenu() end)
-        end }},
-        {{ text = _("Justify Text: ") .. justify_text, callback = makeToggleSetting("justify", getJustify) }},
-        {{ text = _("Show Total: ") .. show_total_text, callback = makeToggleSetting("show_total", getShowTotalNotes) }},
-        {{ text = _("Show Info Header: ") .. show_info_text, callback = makeToggleSetting("show_info", getShowInfo) }},
-        {{ text = _("Show Info Header: Fields..."), callback = function()
-            UIManager:close(self.settings_dialog)
-            self:showInfoFieldsMenu()
-        end }},
-        {{ text = _("Hide Repeat Title: ") .. hide_dup_title_text, callback = makeToggleSetting("hide_dup_title", getHideDupTitle) }},
-        {{ text = _("Hide Repeat Info: ") .. hide_dup_info_text, callback = makeToggleSetting("hide_dup_info", getHideDupInfo) }},
-        {{ text = _("Hide Repeat Info: Match By Fields..."), callback = function()
-            UIManager:close(self.settings_dialog)
-            self:showDedupInfoFieldsMenu()
-        end }},
-        {{ text = _("Show Repeat Headers On First Page Entry: ") .. always_first_text, callback = makeToggleSetting("always_show_first_on_page", getAlwaysShowFirstOnPage) }},
-        {{ text = _("Pagination Style..."), callback = function()
-            UIManager:close(self.settings_dialog)
-            self:showPaginationStyleMenu()
-        end }},
+        -- Section: Appearance
+        {},
+        {{ text = _("Appearance"), enabled = false }},
+        {
+            { text = _("Font Sizes..."),     callback = sub(function() self:showSpinMenu("font_size",      function() self:showSettingsMenu() end) end) },
+            { text = _("Typefaces..."),      callback = sub(function() self:showFontsMenu() end) },
+        },
+        {
+            { text = _("Page Margins..."),   callback = sub(function() self:showSpinMenu("margins",        function() self:showSettingsMenu() end) end) },
+            { text = _("Space Between Notes..."),  callback = sub(function() self:showSpinMenu("section_margin", function() self:showSettingsMenu() end) end) },
+        },
+        {
+            { text = _("Max Lines Per Highlight: ") .. getTruncateLines(), callback = sub(function()
+                self:showSpinSetting(_("Max Lines per Highlight"), "truncate_lines", DEFAULT_TRUNCATE_LINES, 1, 20, 1, function() self:showSettingsMenu() end)
+            end) },
+            { text = _("Justify Text: ") .. onoff(getJustify()), callback = makeToggleSetting("justify", getJustify) },
+        },
+        -- Section: Content
+        {},
+        {{ text = _("Content"), enabled = false }},
+        {
+            { text = _("Count in Title: ") .. onoff(getShowTotalNotes()),  callback = makeToggleSetting("show_total",           getShowTotalNotes) },
+            { text = _("Filter Button: ")        .. onoff(getFilterTitlebarBtn()),callback = makeToggleSetting("filter_titlebar_btn", getFilterTitlebarBtn) },
+        },
+        {
+            { text = _("Show Book / Info Row: ") .. onoff(getShowInfo()),              callback = makeToggleSetting("show_info",                  getShowInfo) },
+            { text = _("Show Book title on Every Page: ") .. onoff(getAlwaysShowFirstOnPage()), callback = makeToggleSetting("always_show_first_on_page", getAlwaysShowFirstOnPage) },
+        },
+        {
+            { text = _("Hide Duplicate Book Header: ") .. onoff(getHideDupTitle()), callback = makeToggleSetting("hide_dup_title", getHideDupTitle) },
+            { text = _("Hide Duplicate Info Header: ") .. onoff(getHideDupInfo()),  callback = makeToggleSetting("hide_dup_info",  getHideDupInfo) },
+        },
+        -- Info header fields row (what shows in the book/info row)
+        {},
+        {{ text = _("Info Row Fields"), enabled = false }},
+        {
+            { text = check(info_active["date"])    .. " Date",    callback = function() toggleInfoField("date")    end },
+            { text = check(info_active["author"])  .. " Author",  callback = function() toggleInfoField("author")  end },
+            { text = check(info_active["chapter"]) .. " Chapter", callback = function() toggleInfoField("chapter") end },
+        },
+        -- Dedup match fields row (which fields count as "duplicate info")
+        {},
+        {{ text = _("Duplicate Info Check Fields"), enabled = false }},
+        {
+            { text = check(dedup_active["date"])    .. " Date",    callback = function() toggleDedupField("date")    end },
+            { text = check(dedup_active["author"])  .. " Author",  callback = function() toggleDedupField("author")  end },
+            { text = check(dedup_active["chapter"]) .. " Chapter", callback = function() toggleDedupField("chapter") end },
+        },
+        -- Section: Navigation
+        {},
+        {{ text = _("Navigation"), enabled = false }},
+        {
+            { text = _("Pagination Style..."), callback = sub(function() self:showPaginationStyleMenu() end) },
+            { text = _("Swipe Gestures..."),  callback = sub(function() self:showSwipeSettingMenu() end) },
+        },
         {{ text = _("Back"), callback = function()
             UIManager:close(self.settings_dialog)
             self:showMainMenu()
@@ -1563,8 +1719,9 @@ function NotesListWidget:showPaginationStyleMenu()
     local buttons = {
         {{ text = check("right")   .. _("Project Title - Right"), callback = function() apply("right")   end }},
         {{ text = check("left")      .. _("Project Title - Left"),  callback = function() apply("left")      end }},
-        {{ text = check("default")   .. _("Default (centered chevrons)"),         callback = function() apply("default")   end }},
+        {{ text = check("default")   .. _("Default"),         callback = function() apply("default")   end }},
         {{ text = check("scrollbar") .. _("Scrollbar"),                           callback = function() apply("scrollbar") end }},
+        {{ text = check("scrollbar_chevrons") .. _("Scrollbar + Buttons"),        callback = function() apply("scrollbar_chevrons") end }},
         {{ text = _("Back"), callback = function()
             UIManager:close(self.pagination_style_dialog)
             self:showSettingsMenu()
@@ -1572,6 +1729,28 @@ function NotesListWidget:showPaginationStyleMenu()
     }
     self.pagination_style_dialog = ButtonDialogTitle:new{ title = _("Pagination Style"), buttons = buttons }
     UIManager:show(self.pagination_style_dialog)
+end
+function NotesListWidget:showSwipeSettingMenu()
+    local current = getSwipeSetting()
+    local function check(v) return current == v and "\u{2713} " or "  " end
+    local function apply(v)
+        setSetting("swipe_direction", v)
+        UIManager:close(self.swipe_dialog)
+        self:refresh()
+        self:showSettingsMenu()
+    end
+    local buttons = {
+        {{ text = check("both")       .. _("Both (horizontal + vertical)"), callback = function() apply("both")       end }},
+        {{ text = check("horizontal") .. _("Horizontal only"),              callback = function() apply("horizontal") end }},
+        {{ text = check("vertical")   .. _("Vertical only"),                callback = function() apply("vertical")   end }},
+        {{ text = check("disabled")   .. _("Disabled"),                     callback = function() apply("disabled")   end }},
+        {{ text = _("Back"), callback = function()
+            UIManager:close(self.swipe_dialog)
+            self:showSettingsMenu()
+        end }},
+    }
+    self.swipe_dialog = ButtonDialogTitle:new{ title = _("Swipe Gestures"), buttons = buttons }
+    UIManager:show(self.swipe_dialog)
 end
 function NotesListWidget:showInfoFieldsMenu()
     local fields_setting = getInfoFields()
@@ -1744,7 +1923,7 @@ function NotesListWidget:showSpinSetting(title, key, default, min, max, step, ba
         end,
     })
 end
-function NotesListWidget:showFilterMenu()
+function NotesListWidget:showFilterMenu(show_back)
     local ButtonDialog = require("ui/widget/buttondialog")
     local RadioButtonWidget = require("ui/widget/radiobuttonwidget")
     
@@ -1756,7 +1935,7 @@ function NotesListWidget:showFilterMenu()
 
     local showFilterMenu  -- forward reference
 
-    local function showToggleFilter(config)
+    local function showToggleFilter(config, restore_offset)
         local data = config.collector(self.notes_list)
         local keys = {}
         for key in pairs(data) do table.insert(keys, key) end
@@ -1789,23 +1968,50 @@ function NotesListWidget:showFilterMenu()
 
         local dialog
         local buttons = {}
+
+        -- Determine column count
+        local ncols
+        if config.columns == "auto" then
+            ncols = #keys > 20 and 3 or #keys > 10 and 2 or 1
+        elseif config.columns == "auto2" then
+            ncols = #keys > 10 and 2 or 1
+        else
+            ncols = config.columns or 1
+        end
+
+        -- Build item button definitions first, then pack into rows
+        local item_btns = {}
         for _, key in ipairs(keys) do
             local state = getState(key)
             local mark = state == "include" and "[+] " or state == "exclude" and "[-] " or "[ ] "
             local display_text = config.formatter(key, data[key])
-            table.insert(buttons, {
-                { text = mark .. display_text, callback = function()
-                    cycleState(key)
+            local k = key
+            table.insert(item_btns, {
+                text = mark .. display_text,
+                callback = function()
+                    local offset = dialog:getScrolledOffset()
+                    cycleState(k)
                     UIManager:close(dialog)
-                    showToggleFilter(config)
-                end },
+                    showToggleFilter(config, offset)
+                end,
             })
+        end
+        local i = 1
+        while i <= #item_btns do
+            local row = {}
+            for c = 1, ncols do
+                if item_btns[i] then
+                    table.insert(row, item_btns[i])
+                    i = i + 1
+                end
+            end
+            table.insert(buttons, row)
         end
         table.insert(buttons, {
             { text = _(config.apply_label), callback = function()
                 UIManager:close(dialog)
                 self:refresh()
-                showFilterMenu()
+                showFilterMenu(show_back)
             end },
         })
         table.insert(buttons, {
@@ -1815,7 +2021,7 @@ function NotesListWidget:showFilterMenu()
                 self.active_filter[config.exclude_filter_key] = nil
                 UIManager:close(dialog)
                 self:refresh()
-                showFilterMenu()
+                showFilterMenu(show_back)
             end },
         })
         dialog = ButtonDialog:new{
@@ -1824,6 +2030,9 @@ function NotesListWidget:showFilterMenu()
             width_factor = 0.7,
         }
         UIManager:show(dialog)
+        if restore_offset then
+            dialog:setScrolledOffset(restore_offset)
+        end
     end
     
     local FILTER_CONFIGS = {
@@ -1832,7 +2041,7 @@ function NotesListWidget:showFilterMenu()
             exclude_filter_key = "books_exclude",
             dialog_title = "Filter by Book",
             apply_label = "Apply Book Filter",
-            clear_label = "Clear Book Filter",
+            columns = "auto2",
             collector = function(notes_list)
                 local books = {}
                 for _, note in ipairs(notes_list) do
@@ -1860,13 +2069,17 @@ function NotesListWidget:showFilterMenu()
             dialog_title = "Filter by Tags",
             apply_label = "Apply Tags Filter",
             clear_label = "Clear Tags Filter",
+            columns = "auto",
             collector = function(notes_list)
                 local tags = {}
+                local book_filter = self.active_filter and self.active_filter.books
                 for _, note in ipairs(notes_list) do
-                    local note_wrapper = NoteWrapper:new(note)
-                    local note_tags = note_wrapper:getTags()
-                    for _, tag in ipairs(note_tags) do
-                        if tag ~= "" then tags[tag] = true end
+                    if not book_filter or not next(book_filter) or book_filter[note.book_title] then
+                        local note_wrapper = NoteWrapper:new(note)
+                        local note_tags = note_wrapper:getTags()
+                        for _, tag in ipairs(note_tags) do
+                            if tag ~= "" then tags[tag] = true end
+                        end
                     end
                 end
                 return tags
@@ -1878,12 +2091,15 @@ function NotesListWidget:showFilterMenu()
             exclude_filter_key = "chapters_exclude",
             dialog_title = "Filter by Chapter",
             apply_label = "Apply Chapter Filter",
-            clear_label = "Clear Chapter Filter",
+            columns = "auto2",
             collector = function(notes_list)
                 local chapters = {}
+                local book_filter = self.active_filter and self.active_filter.books
                 for _, note in ipairs(notes_list) do
-                    if note.chapter and note.chapter ~= "" then
-                        chapters[note.chapter] = true
+                    if not book_filter or not next(book_filter) or book_filter[note.book_title] then
+                        if note.chapter and note.chapter ~= "" then
+                            chapters[note.chapter] = true
+                        end
                     end
                 end
                 return chapters
@@ -1979,7 +2195,7 @@ function NotesListWidget:showFilterMenu()
                     self.active_filter[value_key] = nil
                 end
                 self:refresh()
-                showFilterMenu()
+                showFilterMenu(show_back)
             end,
             colorful = true,
             dithered = true,
@@ -2039,7 +2255,7 @@ function NotesListWidget:showFilterMenu()
                                 self.active_filter[case_key]   = nil
                             end
                             self:refresh()
-                            showFilterMenu()
+                            showFilterMenu(show_back)
                         end },
                         { text = is_exclude and _("Exclude") or _("Search"), is_enter_default = true, callback = function()
                             local q = input_dialog:getInputText()
@@ -2049,7 +2265,7 @@ function NotesListWidget:showFilterMenu()
                             self.active_filter[mode_key]   = dialog_mode
                             self.active_filter[case_key]   = dialog_case
                             self:refresh()
-                            showFilterMenu()
+                            showFilterMenu(show_back)
                         end },
                     },
                 },
@@ -2083,12 +2299,12 @@ function NotesListWidget:showFilterMenu()
         return (isActive(keys) and "✓ " or "") .. label
     end
 
-    showFilterMenu = function()
+    showFilterMenu = function(show_back)
         if self.filter_dialog then UIManager:close(self.filter_dialog) end
         local af = self.active_filter or {}
         local main_buttons = {}
 
-        -- 1. Filter by Book (hidden in single-book mode)
+        -- Group 1: Scope
         if not self.single_book then
             table.insert(main_buttons, {
                 { text = mark({"books","books_exclude"}, _("Filter by Book")), callback = function()
@@ -2096,8 +2312,6 @@ function NotesListWidget:showFilterMenu()
                 end },
             })
         end
-
-        -- 2. Filter by Chapter (single-book context only)
         if isSingleBookContext() then
             table.insert(main_buttons, {
                 { text = mark({"chapters","chapters_exclude"}, _("Filter by Chapter")), callback = function()
@@ -2106,25 +2320,23 @@ function NotesListWidget:showFilterMenu()
                 end },
             })
         end
-
-        -- 3. Filter by Tags
         table.insert(main_buttons, {
             { text = mark({"tags","tags_exclude"}, _("Filter by Tags")), callback = function()
                 showTagsFilter()
             end },
         })
 
-        -- 4. Color/Style: open dialog | toggle Filter↔Exclude mode
+        -- Group 2: Color / Style
+        table.insert(main_buttons, {})
         local cs_action_label = cs_exclude and _("Exclude Color/Style") or _("Filter by Color/Style")
         local cs_active = isActive({"type","value","type_exclude","value_exclude"})
         local cs_toggle_label = cs_exclude and _("Mode: Exclude") or _("Mode: Filter")
         table.insert(main_buttons, {
-            { text = (cs_active and "✓ " or "") .. cs_action_label, callback = function()
+            { text = (cs_active and "\u{2713} " or "") .. cs_action_label, callback = function()
                 showColorStyleFilter(cs_exclude)
             end },
             { text = cs_toggle_label, callback = function()
                 cs_exclude = not cs_exclude
-                -- clear whichever side is now the opposite so there's no stale filter
                 ensureFilter()
                 if cs_exclude then
                     self.active_filter.type  = nil
@@ -2134,11 +2346,12 @@ function NotesListWidget:showFilterMenu()
                     self.active_filter.value_exclude = nil
                 end
                 self:refresh()
-                showFilterMenu()
+                showFilterMenu(show_back)
             end },
         })
 
-        -- 5. Highlight text filter | exclude
+        -- Group 3: Text search
+        table.insert(main_buttons, {})
         table.insert(main_buttons, {
             { text = mark({"search_highlight"}, _("Filter by Highlight Text")), callback = function()
                 UIManager:close(self.filter_dialog)
@@ -2149,8 +2362,6 @@ function NotesListWidget:showFilterMenu()
                 showTextSearchFilter("search_highlight", "Exclude Highlight Text", _("Words to hide highlighted text…"), true)
             end },
         })
-
-        -- 6. Note text filter | exclude
         table.insert(main_buttons, {
             { text = mark({"search_note"}, _("Filter by Note Text")), callback = function()
                 UIManager:close(self.filter_dialog)
@@ -2162,23 +2373,50 @@ function NotesListWidget:showFilterMenu()
             end },
         })
 
-        -- 7. Clear all
+        -- Group 4: Notes presence (3-state cycle)
+        table.insert(main_buttons, {})
+        local np = af.notes_presence
+        local np_label
+        if np == "only" then
+            np_label = "\u{2713} With Notes Only"
+        elseif np == "exclude" then
+            np_label = "\u{2713} Highlights Only (no notes)"
+        else
+            np_label = "Notes: All"
+        end
+        table.insert(main_buttons, {
+            { text = np_label, callback = function()
+                ensureFilter()
+                if np == nil then
+                    self.active_filter.notes_presence = "only"
+                elseif np == "only" then
+                    self.active_filter.notes_presence = "exclude"
+                else
+                    self.active_filter.notes_presence = nil
+                end
+                self:refresh()
+                showFilterMenu(show_back)
+            end },
+        })
+
+        -- Group 5: Clear / Back
+        table.insert(main_buttons, {})
         table.insert(main_buttons, {
             { text = _("Clear All Filters"), callback = function()
                 self.active_filter = {}
                 cs_exclude = false
                 self:refresh()
-                showFilterMenu()
+                showFilterMenu(show_back)
             end },
         })
-
-        -- 8. Back
-        table.insert(main_buttons, {
-            { text = _("Back"), callback = function()
-                if self.filter_dialog then UIManager:close(self.filter_dialog) end
-                self:showMainMenu()
-            end },
-        })
+        if show_back then
+            table.insert(main_buttons, {
+                { text = _("Back"), callback = function()
+                    if self.filter_dialog then UIManager:close(self.filter_dialog) end
+                    self:showMainMenu()
+                end },
+            })
+        end
 
         self.filter_dialog = ButtonDialog:new{
             title = _("Annotation Filters"),
@@ -2187,7 +2425,7 @@ function NotesListWidget:showFilterMenu()
         }
         UIManager:show(self.filter_dialog)
     end
-    showFilterMenu()
+    showFilterMenu(show_back)
 end
 function NotesListWidget:refresh()
     self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
@@ -2323,35 +2561,100 @@ function NotesListWidget:onGesture(ev)
 end
 function NotesListWidget:onTap(_, ges)
     if not ges or not ges.pos then return end
-    
+    -- exclude scrollbar column
+    local pag_style = getPaginationStyle()
+    if (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and self.sb_x and ges.pos.x >= self.sb_x then
+        return
+    end
     local tap_y = ges.pos.y
     if tap_y < self.title_height then
         return
     end
-    
+
+    -- Compute the same note_width as the render loop
+    local _sb_track_center = (self.sb_x or 0) + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2) + math.floor(SB_TRACK_WIDTH / 2)
+    local _sb_reserve = (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and (self.width - _sb_track_center) or 0
+    local note_width = self.width - _sb_reserve
+
+    -- Compute subtitle height (same as render)
+    local subtitle_height = 0
+    if self.active_filter then
+        local has_filter = (
+            (self.active_filter.value and (self.active_filter.type == "color" or self.active_filter.type == "style")) or
+            (self.active_filter.value_exclude and (self.active_filter.type_exclude == "color" or self.active_filter.type_exclude == "style")) or
+            (self.active_filter.books and next(self.active_filter.books)) or
+            (self.active_filter.books_exclude and next(self.active_filter.books_exclude)) or
+            (self.active_filter.tags and next(self.active_filter.tags)) or
+            (self.active_filter.tags_exclude and next(self.active_filter.tags_exclude)) or
+            (self.active_filter.search_highlight and self.active_filter.search_highlight ~= "") or
+            (self.active_filter.search_highlight_exclude and self.active_filter.search_highlight_exclude ~= "") or
+            (self.active_filter.search_note and self.active_filter.search_note ~= "") or
+            (self.active_filter.search_note_exclude and self.active_filter.search_note_exclude ~= "") or
+            (self.active_filter.chapters and next(self.active_filter.chapters)) or
+            (self.active_filter.chapters_exclude and next(self.active_filter.chapters_exclude))
+        )
+        if has_filter then
+            local TextWidget = require("ui/widget/textwidget")
+            local Font = require("ui/font")
+            local sw = TextWidget:new{ text = "[filter]", face = Font:getFace("cfont", 14) }
+            subtitle_height = sw:getSize().h
+            sw:free()
+        end
+    end
+
+    -- Replicate dedup state from previous page
+    local dedup_fields = getDedupInfoFields()
+    local do_hide_dup_title = getHideDupTitle()
+    local do_hide_dup_info = getHideDupInfo()
+    local always_show_first = getAlwaysShowFirstOnPage()
+    local dedup_prev_title = nil
+    local dedup_prev_info_key = nil
+    if do_hide_dup_title or do_hide_dup_info then
+        for p = 1, self.current_page - 1 do
+            local prev_page = self.pages[p] or {}
+            if #prev_page > 0 then
+                local last_idx = prev_page[#prev_page]
+                local prev_note = self.filtered_notes[last_idx]
+                if prev_note then
+                    dedup_prev_title = prev_note.book_title
+                    dedup_prev_info_key = getNoteInfoKey(prev_note, dedup_fields)
+                end
+            end
+        end
+    end
+
     -- Find which note was tapped based on Y coordinate
-    local current_y = self.title_height + getTopPadding()
+    local current_y = self.title_height + subtitle_height + getTopPadding()
     local page_indices = self.pages[self.current_page] or {}
     local note_spacing = getNoteSpacing()
-    
-    for _, idx in ipairs(page_indices) do
+
+    for i, idx in ipairs(page_indices) do
         local note = self.filtered_notes[idx]
         if note then
-            local temp_widget = NoteItemWidget:new{ width = self.width, note = note, show_parent = self }
+            local is_first_on_page = (i == 1)
+            local skip_title = do_hide_dup_title
+                and not (always_show_first and is_first_on_page)
+                and (note.book_title == dedup_prev_title)
+            local skip_info = do_hide_dup_info
+                and not (always_show_first and is_first_on_page)
+                and (getNoteInfoKey(note, dedup_fields) == dedup_prev_info_key)
+            local temp_widget = NoteItemWidget:new{ width = note_width, note = note, show_parent = self, skip_title = skip_title, skip_info = skip_info }
             local note_height = temp_widget.dimen.h
             temp_widget:free()
-            
+
             local note_y_end = current_y + note_height
-            
+
             if tap_y >= current_y and tap_y < note_y_end then
                 self:onNoteSelected(note)
                 return true
             end
-            
+
+            dedup_prev_title = note.book_title
+            dedup_prev_info_key = getNoteInfoKey(note, dedup_fields)
             current_y = note_y_end + note_spacing
         end
     end
-    
+
     return false
 end
 function NotesListWidget:onNoteSelected(note)
@@ -2570,21 +2873,58 @@ function AllNotesViewer:getBookInfo(book_path)
 end
 function AllNotesViewer:findAllNotes()
     local notes_data = {}
-    local history = ReadHistory.hist
-    if not history then return notes_data end
-    for _, item in ipairs(history) do
-        local book_path = item.file
-        if book_path and lfs.attributes(book_path, "mode") then
-            local annotations = self:loadBookAnnotations(book_path)
-            if #annotations > 0 then
-                local book_info = self:getBookInfo(book_path)
-                table.insert(notes_data, {
-                    path = book_path, filename = book_info.filename,
-                    title = book_info.title, authors = book_info.authors, tags = book_info.tags, notes = annotations,
-                })
+    local seen = {}  -- deduplicate by book_path
+
+    -- Helper: load annotations for a path and add to notes_data if any found
+    local function addBook(book_path)
+        if seen[book_path] then return end
+        if not lfs.attributes(book_path, "mode") then return end
+        local annotations = self:loadBookAnnotations(book_path)
+        if #annotations > 0 then
+            seen[book_path] = true
+            local book_info = self:getBookInfo(book_path)
+            table.insert(notes_data, {
+                path = book_path, filename = book_info.filename,
+                title = book_info.title, authors = book_info.authors,
+                tags = book_info.tags, notes = annotations,
+            })
+        end
+    end
+
+    -- Source 1: BookInfoManager SQLite DB (all books ever browsed in file manager)
+    local ok_sq, SQ3 = pcall(require, "lua-ljsqlite3/init")
+    local ok_ds, DataStorage = pcall(require, "datastorage")
+    if ok_sq and ok_ds then
+        local db_path = DataStorage:getDataDir() .. "/bookinfo_cache.db"
+        if lfs.attributes(db_path, "mode") then
+            local ok_db, db = pcall(SQ3.open, db_path)
+            if ok_db and db then
+                local ok_stmt, stmt = pcall(function()
+                    return db:prepare("SELECT directory, filename FROM bookinfo WHERE directory IS NOT NULL AND filename IS NOT NULL")
+                end)
+                if ok_stmt and stmt then
+                    local ok_iter, err = pcall(function()
+                        for row in stmt:nrows() do
+                            local sep = row.directory:sub(-1) == "/" and "" or "/"
+                            local book_path = row.directory .. sep .. row.filename
+                            addBook(book_path)
+                        end
+                    end)
+                    pcall(function() stmt:close() end)
+                end
+                pcall(function() db:close() end)
             end
         end
     end
+
+    -- Source 2: ReadHistory (books opened but possibly not browsed via file manager)
+    local history = ReadHistory.hist
+    if history then
+        for _, item in ipairs(history) do
+            if item.file then addBook(item.file) end
+        end
+    end
+
     return notes_data
 end
 function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations)
