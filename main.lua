@@ -1670,7 +1670,7 @@ function NotesListWidget:showSettingsMenu()
         },
         {
             { text = _("Show Book / Info Row: ") .. onoff(getShowInfo()),              callback = makeToggleSetting("show_info",                  getShowInfo) },
-            { text = _("Show Book Title on Every Page: ") .. onoff(getAlwaysShowFirstOnPage()), callback = makeToggleSetting("always_show_first_on_page", getAlwaysShowFirstOnPage) },
+            { text = _("Show Book title on Every Page: ") .. onoff(getAlwaysShowFirstOnPage()), callback = makeToggleSetting("always_show_first_on_page", getAlwaysShowFirstOnPage) },
         },
         {
             { text = _("Hide Duplicate Book Header: ") .. onoff(getHideDupTitle()), callback = makeToggleSetting("hide_dup_title", getHideDupTitle) },
