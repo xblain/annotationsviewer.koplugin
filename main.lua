@@ -2819,21 +2819,98 @@ function NotesListWidget:onNoteSelected(note)
 end
 function NotesListWidget:onClose() UIManager:close(self) return true end
 
--- Module-level caches: survive across plugin open/close within the same KOReader session.
-local _annotation_cache = {}  -- [book_path] = { data = {...}, mtime = N }
-local _book_info_cache   = {}  -- [book_path] = { data = {...}, mtime = N }
-local function getSidecarMtime(book_path)
-    local ok, sidecar = pcall(function() return DocSettings:findSidecarFile(book_path, true) end)
-    if not ok or not sidecar then
+-- Module-level caches: survive across plugin open/close within the same KOReader session,
+-- and are saved to disk (see loadPersistentCache) so they also survive restarts.
+-- "mtime" holds a key describing the sidecar's state (modification time and size); an entry
+-- is only used while the key still matches.
+local _annotation_cache = {}  -- [book_path] = { data = {...}, mtime = key }
+local _book_info_cache   = {}  -- [book_path] = { data = {...}, mtime = key }
+
+local function fileStamp(path)
+    local attr = path and lfs.attributes(path)
+    if attr and attr.mode == "file" then
+        return attr.modification .. ":" .. attr.size
+    end
+end
+
+-- Returns a key for the current state of a book's sidecar, plus the sidecar path.
+-- The second value is false when the book definitely has no sidecar (so no annotations),
+-- and nil when that can't be determined (KOReader < 2023).
+local function getSidecarKey(book_path)
+    local ok, sidecar = pcall(DocSettings.findSidecarFile, DocSettings, book_path)
+    if not ok then
         -- Fallback: KOReader < 2023 API
-        ok, sidecar = pcall(function() return DocSettings:getSidecarFile(book_path) end)
+        local ok_old, old_sidecar = pcall(DocSettings.getSidecarFile, DocSettings, book_path)
+        sidecar = ok_old and old_sidecar or nil
     end
-    if sidecar then
-        local attr = lfs.attributes(sidecar, "modification")
-        if attr then return attr end
+    local stamp = sidecar and fileStamp(sidecar)
+    if stamp then return stamp, sidecar end
+    -- Fall back to the book file itself
+    return "book:" .. (fileStamp(book_path) or ""), (ok and false or nil)
+end
+
+-- Key for the book info (title/authors/tags): the sidecar key plus the custom metadata file,
+-- which KOReader keeps next to the sidecar and updates when book info is edited.
+local function getBookInfoKey(sidecar_key, sidecar)
+    local dir = sidecar and sidecar:match("^(.*)/")
+    return sidecar_key .. "|" .. ((dir and fileStamp(dir .. "/custom_metadata.lua")) or "")
+end
+
+-- On-disk copy of the caches above, so a KOReader restart doesn't mean parsing every
+-- book's sidecar again. Bump CACHE_VERSION whenever the cached data's shape changes.
+local CACHE_VERSION = 1
+local _persist = nil        -- LuaSettings object, loaded on the first scan
+local _persist_dirty = false
+local _persist_count = 0
+
+local function loadPersistentCache()
+    if _persist then return end
+    local ok_ds, DataStorage = pcall(require, "datastorage")
+    local ok_ls, LuaSettings = pcall(require, "luasettings")
+    if not (ok_ds and ok_ls) then return end
+    local dir = DataStorage:getDataDir() .. "/cache"
+    if lfs.attributes(dir, "mode") ~= "directory" then lfs.mkdir(dir) end
+    local ok, settings = pcall(LuaSettings.open, LuaSettings, dir .. "/annotationsviewer.lua")
+    if not ok or not settings then return end
+    _persist = settings
+    local d = settings.data
+    if d.version ~= CACHE_VERSION or type(d.books) ~= "table" then
+        settings.data = { version = CACHE_VERSION, books = {} }
+        _persist_dirty = true
+        return
     end
-    -- Fall back to the book file mtime itself
-    return lfs.attributes(book_path, "modification")
+    _persist_count = 0
+    for path, b in pairs(d.books) do
+        _persist_count = _persist_count + 1
+        if not _annotation_cache[path] and b.key and b.annotations then
+            _annotation_cache[path] = { data = b.annotations, mtime = b.key }
+        end
+        if not _book_info_cache[path] and b.info_key and b.info then
+            _book_info_cache[path] = { data = b.info, mtime = b.info_key }
+        end
+    end
+end
+
+-- Writes the caches for the given books (the ones found by the last scan) back to disk,
+-- but only if something was read from a sidecar since the last save.
+local function savePersistentCache(paths)
+    if not _persist then return end
+    if not _persist_dirty and #paths == _persist_count then return end
+    local books = {}
+    for _, path in ipairs(paths) do
+        local a, i = _annotation_cache[path], _book_info_cache[path]
+        if a then
+            books[path] = {
+                key = a.mtime, annotations = a.data,
+                info_key = i and i.mtime, info = i and i.data,
+            }
+        end
+    end
+    _persist.data = { version = CACHE_VERSION, books = books }
+    local ok, err = pcall(_persist.flush, _persist)
+    if not ok then logger.warn("AnnotationsViewer: could not save cache:", err) end
+    _persist_dirty = false
+    _persist_count = #paths
 end
 
 local AllNotesViewer = WidgetContainer:extend{ name = "allnotesviewer", is_doc_only = false }
@@ -2935,16 +3012,18 @@ function AllNotesViewer:convertLiveAnnotations(live)
     end
     return annotations
 end
-function AllNotesViewer:loadBookAnnotations(book_path)
+-- key/sidecar are optional: pass them when getSidecarKey() was already called for this book.
+function AllNotesViewer:loadBookAnnotations(book_path, key, sidecar)
     local annotations = {}
     if not book_path then return annotations end
-    local mtime = getSidecarMtime(book_path)
+    if not key then key, sidecar = getSidecarKey(book_path) end
     local cached = _annotation_cache[book_path]
-    if cached and cached.mtime == mtime then
+    if cached and cached.mtime == key then
         return cached.data
     end
     local ok, doc_settings = pcall(DocSettings.open, DocSettings, book_path)
     if not ok or not doc_settings then return annotations end
+    _persist_dirty = true
     local data = doc_settings.data
     if not data then return annotations end
     
@@ -2986,18 +3065,21 @@ function AllNotesViewer:loadBookAnnotations(book_path)
         end
     end
     table.sort(annotations, function(a, b) return (a.datetime or "") > (b.datetime or "") end)
-    _annotation_cache[book_path] = { data = annotations, mtime = mtime }
+    _annotation_cache[book_path] = { data = annotations, mtime = key }
     -- Fill the book info cache from the same file, so getBookInfo() doesn't open it again
-    if #annotations > 0 then self:getBookInfo(book_path, data, mtime) end
+    if #annotations > 0 then self:getBookInfo(book_path, data, key, sidecar) end
     return annotations
 end
--- data/mtime are optional: pass them when the book's settings are already open.
-function AllNotesViewer:getBookInfo(book_path, data, mtime)
-    mtime = mtime or getSidecarMtime(book_path)
+-- data/key/sidecar are optional: pass data when the book's settings are already open, and
+-- key/sidecar when getSidecarKey() was already called for this book.
+function AllNotesViewer:getBookInfo(book_path, data, key, sidecar)
+    if not key then key, sidecar = getSidecarKey(book_path) end
+    local info_key = getBookInfoKey(key, sidecar)
     local cached = _book_info_cache[book_path]
-    if cached and cached.mtime == mtime then
+    if cached and cached.mtime == info_key then
         return cached.data
     end
+    _persist_dirty = true
     local opened = data ~= nil
     if not data then
         local ok, doc_settings = pcall(DocSettings.open, DocSettings, book_path)
@@ -3030,24 +3112,27 @@ function AllNotesViewer:getBookInfo(book_path, data, mtime)
     if not title or title == "" then title = filename:gsub("%.[^.]+$", "") end
     
     local info = { path = book_path, filename = filename, title = title or filename, authors = authors or "Unknown", tags = tags }
-    _book_info_cache[book_path] = { data = info, mtime = mtime }
+    _book_info_cache[book_path] = { data = info, mtime = info_key }
     return info
 end
 function AllNotesViewer:findAllNotes()
     local notes_data = {}
     local seen = {}  -- deduplicate by book_path
+    local scanned = {} -- books with a sidecar, kept in the on-disk cache
+    loadPersistentCache()
 
     -- Helper: load annotations for a path and add to notes_data if any found
     local function addBook(book_path)
         if seen[book_path] then return end
         seen[book_path] = true
         if not lfs.attributes(book_path, "mode") then return end
+        local key, sidecar = getSidecarKey(book_path)
         -- Books without a sidecar have no annotations: skip opening their settings
-        local ok_sc, has_sidecar = pcall(DocSettings.hasSidecarFile, DocSettings, book_path)
-        if ok_sc and not has_sidecar then return end
-        local annotations = self:loadBookAnnotations(book_path)
+        if sidecar == false then return end
+        table.insert(scanned, book_path)
+        local annotations = self:loadBookAnnotations(book_path, key, sidecar)
         if #annotations > 0 then
-            local book_info = self:getBookInfo(book_path)
+            local book_info = self:getBookInfo(book_path, nil, key, sidecar)
             table.insert(notes_data, {
                 path = book_path, filename = book_info.filename,
                 title = book_info.title, authors = book_info.authors,
@@ -3094,6 +3179,7 @@ function AllNotesViewer:findAllNotes()
         end
     end
 
+    savePersistentCache(scanned)
     return notes_data
 end
 function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations)
