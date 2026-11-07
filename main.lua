@@ -807,6 +807,101 @@ function NoteItemWidget:formatDate(datetime)
     elseif note_time >= today_start - 86400 then return "Yesterday"
     else return os.date("%d %b %Y", note_time) end
 end
+-- Text of the active-filter label shown under the title; "" means no filter is shown.
+local function filterToString(filter)
+    if not filter then return "" end
+    local parts = {}
+    -- Color / Style include
+    if filter.type == "color" or filter.type == "style" then
+        local prefix = filter.type == "color" and "C: " or "S: "
+        local name = nil
+        if filter.type == "color" then
+            for _, v in ipairs(ReaderHighlight.highlight_colors) do
+                if v[2] == filter.value then name = v[1]; break end
+            end
+        end
+        table.insert(parts, prefix .. (name or (filter.value:sub(1,1):upper() .. filter.value:sub(2))))
+    end
+    -- Color / Style exclude
+    if filter.type_exclude == "color" or filter.type_exclude == "style" then
+        local prefix = filter.type_exclude == "color" and "C≠ " or "S≠ "
+        local name = nil
+        if filter.type_exclude == "color" then
+            for _, v in ipairs(ReaderHighlight.highlight_colors) do
+                if v[2] == filter.value_exclude then name = v[1]; break end
+            end
+        end
+        table.insert(parts, prefix .. (name or (filter.value_exclude:sub(1,1):upper() .. filter.value_exclude:sub(2))))
+    end
+    -- Books include / exclude
+    if filter.books and next(filter.books) then
+        local books = {}
+        for k in pairs(filter.books) do table.insert(books, k) end
+        table.insert(parts, "B: " .. table.concat(books, ", "))
+    end
+    if filter.books_exclude and next(filter.books_exclude) then
+        local books = {}
+        for k in pairs(filter.books_exclude) do table.insert(books, k) end
+        table.insert(parts, "B≠ " .. table.concat(books, ", "))
+    end
+    -- Tags include / exclude
+    if filter.tags and next(filter.tags) then
+        local tags = {}
+        for k in pairs(filter.tags) do table.insert(tags, k) end
+        table.insert(parts, "T: " .. table.concat(tags, ", "))
+    end
+    if filter.tags_exclude and next(filter.tags_exclude) then
+        local tags = {}
+        for k in pairs(filter.tags_exclude) do table.insert(tags, k) end
+        table.insert(parts, "T≠ " .. table.concat(tags, ", "))
+    end
+    -- Highlight text include / exclude
+    if filter.search_highlight and filter.search_highlight ~= "" then
+        local mode = filter.search_highlight_mode or "all"
+        local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
+        local case_str = filter.search_highlight_case and " [Aa]" or ""
+        table.insert(parts, "H: \"" .. filter.search_highlight .. "\"" .. mode_str .. case_str)
+    end
+    if filter.search_highlight_exclude and filter.search_highlight_exclude ~= "" then
+        local mode = filter.search_highlight_exclude_mode or "all"
+        local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
+        local case_str = filter.search_highlight_exclude_case and " [Aa]" or ""
+        table.insert(parts, "H≠ \"" .. filter.search_highlight_exclude .. "\"" .. mode_str .. case_str)
+    end
+    -- Note text include / exclude
+    if filter.search_note and filter.search_note ~= "" then
+        local mode = filter.search_note_mode or "all"
+        local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
+        local case_str = filter.search_note_case and " [Aa]" or ""
+        table.insert(parts, "N: \"" .. filter.search_note .. "\"" .. mode_str .. case_str)
+    end
+    if filter.search_note_exclude and filter.search_note_exclude ~= "" then
+        local mode = filter.search_note_exclude_mode or "all"
+        local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
+        local case_str = filter.search_note_exclude_case and " [Aa]" or ""
+        table.insert(parts, "N≠ \"" .. filter.search_note_exclude .. "\"" .. mode_str .. case_str)
+    end
+    -- Chapters include / exclude
+    if filter.chapters and next(filter.chapters) then
+        local chs = {}
+        for k in pairs(filter.chapters) do table.insert(chs, k) end
+        table.sort(chs)
+        table.insert(parts, "Ch: " .. table.concat(chs, ", "))
+    end
+    if filter.chapters_exclude and next(filter.chapters_exclude) then
+        local chs = {}
+        for k in pairs(filter.chapters_exclude) do table.insert(chs, k) end
+        table.sort(chs)
+        table.insert(parts, "Ch≠ " .. table.concat(chs, ", "))
+    end
+    if filter.notes_presence == "only" then
+        table.insert(parts, _("Notes only"))
+    elseif filter.notes_presence == "exclude" then
+        table.insert(parts, _("Without notes"))
+    end
+    return #parts > 0 and table.concat(parts, "; ") or ""
+end
+
 local NotesListWidget = InputContainer:extend{
     width = nil, height = nil, notes_list = nil, filtered_notes = nil,
     viewer = nil, current_page = 1, pages = nil, active_filter = nil,
@@ -855,7 +950,6 @@ function NotesListWidget:init()
     self:applyFilter()
     self:calculatePages()
     if Device:hasKeys() then
-        logger.info("[AnnotationsViewer]Available Input.group keys:", Input.group)
         self.key_events.GotoPrevPage = { { Input.group.PgBack } }
         self.key_events.GotoNextPage = { { Input.group.PgFwd } }
         self.key_events.Close = { { Input.group.Back } }  
@@ -983,21 +1077,7 @@ function NotesListWidget:calculatePages()
     local note_spacing = getNoteSpacing()
     local current_page_notes, current_height = {}, 0
     
-    local filter_text = self.active_filter and (
-        (self.active_filter.value and (self.active_filter.type == "color" or self.active_filter.type == "style")) or
-        (self.active_filter.value_exclude and (self.active_filter.type_exclude == "color" or self.active_filter.type_exclude == "style")) or
-        (self.active_filter.books and next(self.active_filter.books)) or
-        (self.active_filter.books_exclude and next(self.active_filter.books_exclude)) or
-        (self.active_filter.tags and next(self.active_filter.tags)) or
-        (self.active_filter.tags_exclude and next(self.active_filter.tags_exclude)) or
-        (self.active_filter.search_highlight and self.active_filter.search_highlight ~= "") or
-        (self.active_filter.search_highlight_exclude and self.active_filter.search_highlight_exclude ~= "") or
-        (self.active_filter.search_note and self.active_filter.search_note ~= "") or
-        (self.active_filter.search_note_exclude and self.active_filter.search_note_exclude ~= "") or
-        (self.active_filter.chapters and next(self.active_filter.chapters)) or
-        (self.active_filter.chapters_exclude and next(self.active_filter.chapters_exclude)) or
-        (self.active_filter.notes_presence ~= nil)
-    ) or false
+    local filter_text = filterToString(self.active_filter) ~= ""
     
     local subtitle_height = 0
     if filter_text then
@@ -1335,99 +1415,6 @@ function NotesListWidget:updatePage()
     self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
 
 
-local function filterToString(filter)
-    if not filter then return "" end
-    local parts = {}
-    -- Color / Style include
-    if filter.type == "color" or filter.type == "style" then
-        local prefix = filter.type == "color" and "C: " or "S: "
-        local name = nil
-        if filter.type == "color" then
-            for _, v in ipairs(ReaderHighlight.highlight_colors) do
-                if v[2] == filter.value then name = v[1]; break end
-            end
-        end
-        table.insert(parts, prefix .. (name or (filter.value:sub(1,1):upper() .. filter.value:sub(2))))
-    end
-    -- Color / Style exclude
-    if filter.type_exclude == "color" or filter.type_exclude == "style" then
-        local prefix = filter.type_exclude == "color" and "C≠ " or "S≠ "
-        local name = nil
-        if filter.type_exclude == "color" then
-            for _, v in ipairs(ReaderHighlight.highlight_colors) do
-                if v[2] == filter.value_exclude then name = v[1]; break end
-            end
-        end
-        table.insert(parts, prefix .. (name or (filter.value_exclude:sub(1,1):upper() .. filter.value_exclude:sub(2))))
-    end
-    -- Books include / exclude
-    if filter.books and next(filter.books) then
-        local books = {}
-        for k in pairs(filter.books) do table.insert(books, k) end
-        table.insert(parts, "B: " .. table.concat(books, ", "))
-    end
-    if filter.books_exclude and next(filter.books_exclude) then
-        local books = {}
-        for k in pairs(filter.books_exclude) do table.insert(books, k) end
-        table.insert(parts, "B≠ " .. table.concat(books, ", "))
-    end
-    -- Tags include / exclude
-    if filter.tags and next(filter.tags) then
-        local tags = {}
-        for k in pairs(filter.tags) do table.insert(tags, k) end
-        table.insert(parts, "T: " .. table.concat(tags, ", "))
-    end
-    if filter.tags_exclude and next(filter.tags_exclude) then
-        local tags = {}
-        for k in pairs(filter.tags_exclude) do table.insert(tags, k) end
-        table.insert(parts, "T≠ " .. table.concat(tags, ", "))
-    end
-    -- Highlight text include / exclude
-    if filter.search_highlight and filter.search_highlight ~= "" then
-        local mode = filter.search_highlight_mode or "all"
-        local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
-        local case_str = filter.search_highlight_case and " [Aa]" or ""
-        table.insert(parts, "H: \"" .. filter.search_highlight .. "\"" .. mode_str .. case_str)
-    end
-    if filter.search_highlight_exclude and filter.search_highlight_exclude ~= "" then
-        local mode = filter.search_highlight_exclude_mode or "all"
-        local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
-        local case_str = filter.search_highlight_exclude_case and " [Aa]" or ""
-        table.insert(parts, "H≠ \"" .. filter.search_highlight_exclude .. "\"" .. mode_str .. case_str)
-    end
-    -- Note text include / exclude
-    if filter.search_note and filter.search_note ~= "" then
-        local mode = filter.search_note_mode or "all"
-        local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
-        local case_str = filter.search_note_case and " [Aa]" or ""
-        table.insert(parts, "N: \"" .. filter.search_note .. "\"" .. mode_str .. case_str)
-    end
-    if filter.search_note_exclude and filter.search_note_exclude ~= "" then
-        local mode = filter.search_note_exclude_mode or "all"
-        local mode_str = mode == "any" and " (any word)" or mode == "phrase" and " (phrase)" or ""
-        local case_str = filter.search_note_exclude_case and " [Aa]" or ""
-        table.insert(parts, "N≠ \"" .. filter.search_note_exclude .. "\"" .. mode_str .. case_str)
-    end
-    -- Chapters include / exclude
-    if filter.chapters and next(filter.chapters) then
-        local chs = {}
-        for k in pairs(filter.chapters) do table.insert(chs, k) end
-        table.sort(chs)
-        table.insert(parts, "Ch: " .. table.concat(chs, ", "))
-    end
-    if filter.chapters_exclude and next(filter.chapters_exclude) then
-        local chs = {}
-        for k in pairs(filter.chapters_exclude) do table.insert(chs, k) end
-        table.sort(chs)
-        table.insert(parts, "Ch≠ " .. table.concat(chs, ", "))
-    end
-    if filter.notes_presence == "only" then
-        table.insert(parts, _("Notes only"))
-    elseif filter.notes_presence == "exclude" then
-        table.insert(parts, _("Without notes"))
-    end
-    return #parts > 0 and table.concat(parts, "; ") or ""
-end
 
 local filter_text = filterToString(self.active_filter)
 
@@ -1504,6 +1491,10 @@ end
 
     local page_indices = self.pages[self.current_page] or {}
     local last_note_widget = nil
+    -- vertical extent of each drawn annotation (relative to the top of the notes area),
+    -- used by onTap() to find what was tapped
+    local tap_rows = {}
+    local row_y = top_padding
     local note_spacing = getNoteSpacing()
     local dedup_fields = getDedupInfoFields()
     local do_hide_dup_title = getHideDupTitle()
@@ -1533,6 +1524,7 @@ end
         if note then
             if i > 1 then
                 table.insert(notes_group, VerticalSpan:new{ width = note_spacing })
+                row_y = row_y + note_spacing
             end
             local is_first_on_page = (i == 1)
             local skip_title = do_hide_dup_title
@@ -1543,6 +1535,8 @@ end
                 and (getNoteInfoKey(note, dedup_fields) == dedup_prev_info_key)
             local note_widget = NoteItemWidget:new{ width = note_width, note = note, show_parent = self, skip_title = skip_title, skip_info = skip_info }
             table.insert(notes_group, note_widget)
+            table.insert(tap_rows, { top = row_y, bottom = row_y + note_widget.dimen.h, note = note })
+            row_y = row_y + note_widget.dimen.h
             if i == #page_indices then last_note_widget = note_widget end
             dedup_prev_title = note.book_title
             dedup_prev_info_key = getNoteInfoKey(note, dedup_fields)
@@ -1608,6 +1602,8 @@ end
     end
     
     local title_area_height = title_content:getSize().h
+    self.tap_rows = tap_rows
+    self.tap_rows_origin_y = title_area_height
     local adjusted_content_height = self.height - title_area_height - self.footer_height - getTopPadding()
 
     local content = OverlapGroup:new{
@@ -2733,89 +2729,14 @@ function NotesListWidget:onTap(_, ges)
         return
     end
 
-    -- Compute the same note_width as the render loop
-    local _sb_track_center = (self.sb_x or 0) + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2) + math.floor(SB_TRACK_WIDTH / 2)
-    local _sb_reserve = (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and (self.width - _sb_track_center) or 0
-    local note_width = self.width - _sb_reserve
-
-    -- Compute subtitle height (same as render)
-    local subtitle_height = 0
-    if self.active_filter then
-        local has_filter = (
-            (self.active_filter.value and (self.active_filter.type == "color" or self.active_filter.type == "style")) or
-            (self.active_filter.value_exclude and (self.active_filter.type_exclude == "color" or self.active_filter.type_exclude == "style")) or
-            (self.active_filter.books and next(self.active_filter.books)) or
-            (self.active_filter.books_exclude and next(self.active_filter.books_exclude)) or
-            (self.active_filter.tags and next(self.active_filter.tags)) or
-            (self.active_filter.tags_exclude and next(self.active_filter.tags_exclude)) or
-            (self.active_filter.search_highlight and self.active_filter.search_highlight ~= "") or
-            (self.active_filter.search_highlight_exclude and self.active_filter.search_highlight_exclude ~= "") or
-            (self.active_filter.search_note and self.active_filter.search_note ~= "") or
-            (self.active_filter.search_note_exclude and self.active_filter.search_note_exclude ~= "") or
-            (self.active_filter.chapters and next(self.active_filter.chapters)) or
-            (self.active_filter.chapters_exclude and next(self.active_filter.chapters_exclude)) or
-            (self.active_filter.notes_presence ~= nil)
-        )
-        if has_filter then
-            local TextWidget = require("ui/widget/textwidget")
-            local Font = require("ui/font")
-            local sw = TextWidget:new{ text = "[filter]", face = Font:getFace("cfont", 14) }
-            subtitle_height = sw:getSize().h
-            sw:free()
+    -- Use the positions recorded when the page was drawn
+    local rel_y = tap_y - (self.tap_rows_origin_y or self.title_height)
+    for _, row in ipairs(self.tap_rows or {}) do
+        if rel_y >= row.top and rel_y < row.bottom then
+            self:onNoteSelected(row.note)
+            return true
         end
     end
-
-    -- Replicate dedup state from previous page
-    local dedup_fields = getDedupInfoFields()
-    local do_hide_dup_title = getHideDupTitle()
-    local do_hide_dup_info = getHideDupInfo()
-    local always_show_first = getAlwaysShowFirstOnPage()
-    local dedup_prev_title = nil
-    local dedup_prev_info_key = nil
-    if do_hide_dup_title or do_hide_dup_info then
-        for p = 1, self.current_page - 1 do
-            local prev_page = self.pages[p] or {}
-            if #prev_page > 0 then
-                local last_idx = prev_page[#prev_page]
-                local prev_note = self.filtered_notes[last_idx]
-                if prev_note then
-                    dedup_prev_title = prev_note.book_title
-                    dedup_prev_info_key = getNoteInfoKey(prev_note, dedup_fields)
-                end
-            end
-        end
-    end
-
-    -- Find which note was tapped based on Y coordinate
-    local current_y = self.title_height + subtitle_height + getTopPadding()
-    local page_indices = self.pages[self.current_page] or {}
-    local note_spacing = getNoteSpacing()
-
-    for i, idx in ipairs(page_indices) do
-        local note = self.filtered_notes[idx]
-        if note then
-            local is_first_on_page = (i == 1)
-            local skip_title = do_hide_dup_title
-                and not (always_show_first and is_first_on_page)
-                and (note.book_title == dedup_prev_title)
-            local skip_info = do_hide_dup_info
-                and not (always_show_first and is_first_on_page)
-                and (getNoteInfoKey(note, dedup_fields) == dedup_prev_info_key)
-            local note_height = getNoteHeight(note, note_width, skip_title, skip_info, getLayoutSignature(note_width))
-
-            local note_y_end = current_y + note_height
-
-            if tap_y >= current_y and tap_y < note_y_end then
-                self:onNoteSelected(note)
-                return true
-            end
-
-            dedup_prev_title = note.book_title
-            dedup_prev_info_key = getNoteInfoKey(note, dedup_fields)
-            current_y = note_y_end + note_spacing
-        end
-    end
-
     return false
 end
 function NotesListWidget:onNoteSelected(note)
@@ -3361,6 +3282,13 @@ function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations)
     UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self, single_book = true })
 end
 function AllNotesViewer:showAllNotes()
+    -- The first open after starting KOReader may have to read many books: say so
+    local loading
+    if not _persist then
+        loading = InfoMessage:new{ text = _("Loading annotations…") }
+        UIManager:show(loading)
+        UIManager:forceRePaint()
+    end
     local all_notes_by_book = self:findAllNotes()
     local notes_list = {}
     
@@ -3400,12 +3328,15 @@ function AllNotesViewer:showAllNotes()
         end
     end
     if #notes_list == 0 then
+        if loading then UIManager:close(loading) end
         UIManager:show(InfoMessage:new{ text = _("No annotations found.") })
         return
     end
     local sort_mode = getSetting("sort_mode", "date_newest")
     NotesListWidget:sortNotesList(notes_list, sort_mode)
-    UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self })
+    local widget = NotesListWidget:new{ notes_list = notes_list, viewer = self }
+    if loading then UIManager:close(loading) end
+    UIManager:show(widget)
 end
 function AllNotesViewer:showNoteDetails(note, parent_widget)
     
