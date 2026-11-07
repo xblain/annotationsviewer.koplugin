@@ -350,21 +350,95 @@ function NoteWrapper:hasUserNote()
     return self._note.user_note and self._note.user_note ~= "" or false
 end
 
+-- Text measurement caches. Font:getFace() returns cached face objects, so a face's
+-- table identity is a stable key; weak keys let unused faces be collected.
+local _word_width_cache = setmetatable({}, { __mode = "k" })  -- [face][word] = px
+local _line_height_cache = setmetatable({}, { __mode = "k" }) -- [face] = px
+local _box_height_cache = setmetatable({}, { __mode = "k" })  -- [face]["w:bold:text"] = px
+
+local function measureTextWidth(text, face)
+    local tw = TextWidget:new{ text = text, face = face }
+    local w = tw:getSize().w
+    tw:free()
+    return w
+end
+
+local function getWordWidths(face)
+    local fc = _word_width_cache[face]
+    if not fc then
+        fc = {}
+        -- Words never contain spaces, so " " is free to hold the width of one space.
+        fc[" "] = measureTextWidth("x x", face) - 2 * measureTextWidth("x", face)
+        _word_width_cache[face] = fc
+    end
+    return fc
+end
+
+-- Height of one TextWidget line in this face (TextWidget height does not depend on the text).
+local function getLineHeight(face)
+    local h = _line_height_cache[face]
+    if not h then
+        local tw = TextWidget:new{ text = "x", face = face }
+        h = tw:getSize().h
+        tw:free()
+        _line_height_cache[face] = h
+    end
+    return h
+end
+
+-- Height of a wrapped TextBoxWidget (book title / info row), cached by text and width.
+local function getBoxHeight(text, face, width, bold)
+    local fc = _box_height_cache[face]
+    if not fc then fc = {}; _box_height_cache[face] = fc end
+    local key = width .. (bold and ":b:" or ":n:") .. text
+    local h = fc[key]
+    if not h then
+        local tb = TextBoxWidget:new{ text = text, face = face, width = width, alignment = "left", bold = bold }
+        h = tb:getSize().h
+        tb:free()
+        fc[key] = h
+    end
+    return h
+end
+
+-- Greedy word wrap. Same result as measuring every candidate line, but word widths are
+-- measured once per face and summed; only lines that end up within the rounding error of
+-- max_width are measured for real, so the line breaks are unchanged.
 local function wrapText(text, face, max_width)
     local lines = {}
-    local words = {}
-    for word in text:gmatch("%S+") do table.insert(words, word) end
-    local current_line = ""
-    for _, word in ipairs(words) do
-        local test_line = current_line == "" and word or (current_line .. " " .. word)
-        local tw = TextWidget:new{ text = test_line, face = face }
-        local w = tw:getSize().w
-        tw:free()
-        if w <= max_width then
-            current_line = test_line
+    local widths = getWordWidths(face)
+    local space_w = widths[" "]
+    local current_line, current_w, words_since_exact = "", 0, 0
+    for word in text:gmatch("%S+") do
+        local ww = widths[word]
+        if not ww then
+            ww = measureTextWidth(word, face)
+            widths[word] = ww
+        end
+        if current_line == "" then
+            current_line, current_w, words_since_exact = word, ww, 0
         else
-            if current_line ~= "" then table.insert(lines, current_line) end
-            current_line = word
+            local est = current_w + space_w + ww
+            -- each summed width can be off by about a pixel of rounding
+            local slack = 2 + words_since_exact
+            local fits
+            if est <= max_width - slack then
+                fits = true
+                current_w = est
+                words_since_exact = words_since_exact + 1
+            elseif est > max_width + slack then
+                fits = false
+            else
+                local exact = measureTextWidth(current_line .. " " .. word, face)
+                fits = exact <= max_width
+                if fits then current_w, words_since_exact = exact, 0 end
+            end
+            if fits then
+                current_line = current_line .. " " .. word
+            else
+                table.insert(lines, current_line)
+                current_line, current_w, words_since_exact = word, ww, 0
+            end
         end
     end
     if current_line ~= "" then table.insert(lines, current_line) end
@@ -416,6 +490,111 @@ function UnderlineWidget:paintTo(bb, x, y)
     bb:paintRect(x, y + self.height - 2, self.width, 2, BlitBuffer.COLOR_BLACK)
 end
 local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_parent = nil, is_last = false, is_preview = false, disable_tap = false, skip_title = false, skip_info = false }
+
+-- Faces used by NoteItemWidget (shared by the real layout and the height measurement).
+local function getNoteFaces()
+    local title_font, info_font, content_font = getTitleFont(), getInfoFont(), getContentFont()
+    local title_size, info_size, content_size = getTitleFontSize(), getInfoFontSize(), getContentFontSize()
+    local title_face = (title_font and title_font ~= "" and Font:getFace(title_font, title_size)) or Font:getFace("cfont", title_size)
+    local info_face = (info_font and info_font ~= "" and Font:getFace(info_font, info_size)) or Font:getFace("cfont", info_size)
+    local content_face = (content_font and content_font ~= "" and Font:getFace(content_font, content_size)) or Font:getFace("cfont", content_size)
+    return title_face, info_face, content_face
+end
+
+-- Text of the info row (date | author | chapter), or "" when the row is turned off.
+local function buildInfoText(note, note_wrapper, skip_title)
+    if not getShowInfo() then return "" end
+    local info_fields = {}
+    for f in getInfoFields():gmatch("[^,]+") do info_fields[f] = true end
+    local info_parts = {}
+    local date_text = NoteItemWidget:formatDate(note.datetime) or ""
+    if info_fields["date"] and date_text ~= "" then table.insert(info_parts, date_text) end
+    local display_authors = note_wrapper:getDisplayAuthors()
+    if info_fields["author"] and display_authors and not skip_title then
+        table.insert(info_parts, display_authors)
+    end
+    if info_fields["chapter"] and note.chapter and note.chapter ~= "" then
+        table.insert(info_parts, note.chapter)
+    end
+    return table.concat(info_parts, " | ")
+end
+
+local NOTE_ICON_CHAR = "\u{F040}"
+
+-- Height NoteItemWidget:init() would produce for these params, computed without building
+-- any widgets. Must mirror the layout in NoteItemWidget:init().
+local function measureNoteHeight(note, width, skip_title, skip_info)
+    local h_margin = getHMargin()
+    local text_margin = getTextMargin()
+    local inner_width = width - h_margin * 2
+    local content_width = inner_width - Size.padding.default * 2
+    local line_width = content_width - text_margin * 2 - Size.padding.small * 2
+    local title_face, info_face, content_face = getNoteFaces()
+    local note_wrapper = NoteWrapper:new(note)
+
+    local h = 0
+    if not skip_title then
+        h = h + getBoxHeight(note.book_title or "Unknown", title_face, content_width, true) + getTitleMargin()
+    end
+    local info_text = buildInfoText(note, note_wrapper, skip_title)
+    local info_visible = not skip_info and info_text ~= ""
+    if info_visible then
+        h = h + getBoxHeight(info_text, info_face, content_width, false)
+    end
+    if (not skip_title) or info_visible then
+        h = h + getInfoMargin()
+    end
+    local line_h = getLineHeight(content_face)
+    if note_wrapper:hasHighlightedText() then
+        local n = #wrapText(note.highlighted_text or "", content_face, line_width)
+        local max_lines = getTruncateLines() or math.huge
+        if n > max_lines then n = max_lines end
+        h = h + n * (line_h + 2) -- each line has 1px padding above and below
+    end
+    if note_wrapper:hasUserNote() then
+        h = h + Screen:scaleBySize(8)
+        local widths = getWordWidths(content_face)
+        local icon_w = widths[NOTE_ICON_CHAR]
+        if not icon_w then
+            icon_w = measureTextWidth(NOTE_ICON_CHAR, content_face)
+            widths[NOTE_ICON_CHAR] = icon_w
+        end
+        local n = #wrapText(note.user_note, content_face, line_width - icon_w - Screen:scaleBySize(6))
+        h = h + math.max(line_h, n * line_h)
+    end
+    return h
+end
+
+-- Measured heights, kept across refreshes. Invalidated per note when its text changes and
+-- for all notes when anything that affects layout changes (see getLayoutSignature).
+local _note_height_cache = setmetatable({}, { __mode = "k" })
+
+local function getLayoutSignature(width)
+    return table.concat({
+        width, getHMargin(), getTextMargin(), getTitleMargin(), getInfoMargin(),
+        getTitleFontSize(), getInfoFontSize(), getContentFontSize(),
+        tostring(getTitleFont()), tostring(getInfoFont()), tostring(getContentFont()),
+        tostring(getTruncateLines()), tostring(getShowInfo()), getInfoFields(),
+        os.date("%Y%m%d"), -- "Today"/"Yesterday" labels change the info row text
+    }, "|")
+end
+
+local function getNoteHeight(note, width, skip_title, skip_info, signature)
+    local entry = _note_height_cache[note]
+    if not entry or entry.sig ~= signature
+            or entry.hl ~= note.highlighted_text or entry.un ~= note.user_note then
+        entry = { sig = signature, hl = note.highlighted_text, un = note.user_note }
+        _note_height_cache[note] = entry
+    end
+    local key = (skip_title and 2 or 0) + (skip_info and 1 or 0)
+    local h = entry[key]
+    if not h then
+        h = measureNoteHeight(note, width, skip_title, skip_info)
+        entry[key] = h
+    end
+    return h
+end
+
 function NoteItemWidget:init()
     local h_margin = getHMargin()
     local text_margin = getTextMargin()
@@ -425,9 +604,6 @@ function NoteItemWidget:init()
     local inner_width = self.width - h_margin * 2
     self.dimen = Geom:new{ w = self.width, h = 0 }
 
-    local content_font_size = getContentFontSize()
-    local title_font_size = getTitleFontSize()
-    local info_font_size = getInfoFontSize()
     local h_padding = Size.padding.default
     local content_width = inner_width - h_padding * 2
     local justify = getJustify()
@@ -435,34 +611,16 @@ function NoteItemWidget:init()
     local note_wrapper = NoteWrapper:new(self.note)
     local title_text = self.note.book_title or "Unknown"
 
-    local title_font = getTitleFont()
-    local title_face = (title_font and title_font ~= "" and Font:getFace(title_font, title_font_size)) or Font:getFace("cfont", title_font_size)
+    local title_face, info_face, content_face = getNoteFaces()
     local title_widget = TextBoxWidget:new{
         text = title_text, face = title_face,
         width = content_width, alignment = "left", bold = true,
     }
 
-    local date_text = self:formatDate(self.note.datetime) or ""
     local drawer = self.note.drawer or "lighten"
     local show_info_header = getShowInfo()
-    local info_fields_str = getInfoFields()
-    local info_fields = {}
-    for f in info_fields_str:gmatch("[^,]+") do info_fields[f] = true end
-    local info_parts = {}
-    if show_info_header then
-        if info_fields["date"] and date_text ~= "" then table.insert(info_parts, date_text) end
-        local display_authors = note_wrapper:getDisplayAuthors()
-        if info_fields["author"] and display_authors and not self.skip_title then
-            table.insert(info_parts, display_authors)
-        end
-        if info_fields["chapter"] and self.note.chapter and self.note.chapter ~= "" then
-            table.insert(info_parts, self.note.chapter)
-        end
-    end
-    local info_text = table.concat(info_parts, " | ")
+    local info_text = buildInfoText(self.note, note_wrapper, self.skip_title)
 
-    local info_font = getInfoFont()
-    local info_face = (info_font and info_font ~= "" and Font:getFace(info_font, info_font_size)) or Font:getFace("cfont", info_font_size)
     local date_widget = TextBoxWidget:new{
         text = info_text, face = info_face,
         width = content_width, alignment = "left",
@@ -482,8 +640,6 @@ function NoteItemWidget:init()
         bg_color = getHighlightColor(self.note.color)
     end
 
-    local content_font = getContentFont()
-    local content_face = (content_font and content_font ~= "" and Font:getFace(content_font, content_font_size)) or Font:getFace("cfont", content_font_size)
     local text_content_width = content_width - text_margin * 2
     local line_width = text_content_width - Size.padding.small * 2
 
@@ -602,7 +758,7 @@ function NoteItemWidget:init()
     if note_wrapper:hasUserNote() then
         table.insert(note_content, VerticalSpan:new{ width = Screen:scaleBySize(8) })
 
-        local note_icon_char = "\u{F040}"
+        local note_icon_char = NOTE_ICON_CHAR
         local icon_margin = Screen:scaleBySize(6)
         local note_icon = TextWidget:new{
             text = note_icon_char,
@@ -682,12 +838,13 @@ function NotesListWidget:init()
         local close_center_x = self.width - bp - math.floor(icon_w / 2)
         self.close_center_x = close_center_x
         self.close_btn_w = icon_w
-        self.sb_x = self.width - icon_w
+        -- same position updatePage() uses, so the first page split matches what is drawn
+        self.sb_x = close_center_x - math.floor(SB_THUMB_WIDTH / 2)
     else
         local fallback_w = SB_THUMB_WIDTH + SB_MARGIN_RIGHT
         self.close_center_x = self.width - SB_MARGIN_RIGHT - math.floor(SB_THUMB_WIDTH / 2)
         self.close_btn_w = fallback_w
-        self.sb_x = self.width - fallback_w
+        self.sb_x = self.width - SB_THUMB_WIDTH - SB_MARGIN_RIGHT
     end
     local temp_button = Button:new{ icon = "chevron.first", bordersize = 0 }
     local btn_h = temp_button:getSize().h
@@ -867,6 +1024,7 @@ function NotesListWidget:calculatePages()
     local pag_style = getPaginationStyle()
     local sb_reserve = (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and (self.width - sb_track_center) or 0
     local note_width = self.width - sb_reserve
+    local layout_sig = getLayoutSignature(note_width)
     for i, note in ipairs(self.filtered_notes) do
         local is_first_on_page = (#current_page_notes == 0)
         local skip_title = do_hide_dup_title
@@ -875,8 +1033,7 @@ function NotesListWidget:calculatePages()
         local skip_info = do_hide_dup_info
             and not (always_show_first and is_first_on_page)
             and (getNoteInfoKey(note, dedup_fields) == dedup_prev_info_key)
-        local temp_widget = NoteItemWidget:new{ width = note_width, note = note, show_parent = self, skip_title = skip_title, skip_info = skip_info }
-        local item_height = temp_widget.dimen.h
+        local item_height = getNoteHeight(note, note_width, skip_title, skip_info, layout_sig)
         local spacing = (#current_page_notes > 0) and note_spacing or 0
         local next_height = current_height + spacing + item_height
         if next_height <= effective_content_height then
@@ -885,9 +1042,8 @@ function NotesListWidget:calculatePages()
         else
             if #current_page_notes > 0 then table.insert(self.pages, current_page_notes) end
             -- Re-measure as first-on-page: always_show_first may restore title/info headers
-            local first_widget = NoteItemWidget:new{ width = note_width, note = note, show_parent = self, skip_title = false, skip_info = false }
             current_page_notes = {i}
-            current_height = first_widget.dimen.h
+            current_height = getNoteHeight(note, note_width, false, false, layout_sig)
         end
         dedup_prev_title = note.book_title
         dedup_prev_info_key = getNoteInfoKey(note, dedup_fields)
@@ -2639,9 +2795,7 @@ function NotesListWidget:onTap(_, ges)
             local skip_info = do_hide_dup_info
                 and not (always_show_first and is_first_on_page)
                 and (getNoteInfoKey(note, dedup_fields) == dedup_prev_info_key)
-            local temp_widget = NoteItemWidget:new{ width = note_width, note = note, show_parent = self, skip_title = skip_title, skip_info = skip_info }
-            local note_height = temp_widget.dimen.h
-            temp_widget:free()
+            local note_height = getNoteHeight(note, note_width, skip_title, skip_info, getLayoutSignature(note_width))
 
             local note_y_end = current_y + note_height
 
@@ -2833,20 +2987,27 @@ function AllNotesViewer:loadBookAnnotations(book_path)
     end
     table.sort(annotations, function(a, b) return (a.datetime or "") > (b.datetime or "") end)
     _annotation_cache[book_path] = { data = annotations, mtime = mtime }
+    -- Fill the book info cache from the same file, so getBookInfo() doesn't open it again
+    if #annotations > 0 then self:getBookInfo(book_path, data, mtime) end
     return annotations
 end
-function AllNotesViewer:getBookInfo(book_path)
-    local mtime = getSidecarMtime(book_path)
+-- data/mtime are optional: pass them when the book's settings are already open.
+function AllNotesViewer:getBookInfo(book_path, data, mtime)
+    mtime = mtime or getSidecarMtime(book_path)
     local cached = _book_info_cache[book_path]
     if cached and cached.mtime == mtime then
         return cached.data
     end
-    local ok, doc_settings = pcall(DocSettings.open, DocSettings, book_path)
-    local data = ok and doc_settings and doc_settings.data or {}
+    local opened = data ~= nil
+    if not data then
+        local ok, doc_settings = pcall(DocSettings.open, DocSettings, book_path)
+        opened = ok and doc_settings ~= nil
+        data = opened and doc_settings.data or {}
+    end
     local filename = book_path:match("([^/\\]+)$") or book_path
     
     local custom_metadata = {}
-    if doc_settings then
+    if opened then
         local custom_metadata_file = DocSettings:findCustomMetadataFile(book_path)
         if custom_metadata_file then
             local ok_cm, cm_data = pcall(dofile, custom_metadata_file)
