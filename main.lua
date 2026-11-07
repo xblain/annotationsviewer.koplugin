@@ -864,7 +864,8 @@ function NotesListWidget:calculatePages()
     local do_hide_dup_info = getHideDupInfo()
     local always_show_first = getAlwaysShowFirstOnPage()
     local sb_track_center = (self.sb_x or 0) + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2) + math.floor(SB_TRACK_WIDTH / 2)
-    local sb_reserve = (getPaginationStyle() == "scrollbar") and (self.width - sb_track_center) or 0
+    local pag_style = getPaginationStyle()
+    local sb_reserve = (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and (self.width - sb_track_center) or 0
     local note_width = self.width - sb_reserve
     for i, note in ipairs(self.filtered_notes) do
         local is_first_on_page = (#current_page_notes == 0)
@@ -2878,10 +2879,13 @@ function AllNotesViewer:findAllNotes()
     -- Helper: load annotations for a path and add to notes_data if any found
     local function addBook(book_path)
         if seen[book_path] then return end
+        seen[book_path] = true
         if not lfs.attributes(book_path, "mode") then return end
+        -- Books without a sidecar have no annotations: skip opening their settings
+        local ok_sc, has_sidecar = pcall(DocSettings.hasSidecarFile, DocSettings, book_path)
+        if ok_sc and not has_sidecar then return end
         local annotations = self:loadBookAnnotations(book_path)
         if #annotations > 0 then
-            seen[book_path] = true
             local book_info = self:getBookInfo(book_path)
             table.insert(notes_data, {
                 path = book_path, filename = book_info.filename,
@@ -2891,28 +2895,32 @@ function AllNotesViewer:findAllNotes()
         end
     end
 
-    -- Source 1: BookInfoManager SQLite DB (all books ever browsed in file manager)
+    -- Source 1: cover browser book info databases (every book ever shown in the file browser).
+    -- KOReader's CoverBrowser keeps it in <settings>/bookinfo_cache.sqlite3; the Project Title
+    -- plugin keeps its own copy. Opened read-only so a missing file is never created.
     local ok_sq, SQ3 = pcall(require, "lua-ljsqlite3/init")
     local ok_ds, DataStorage = pcall(require, "datastorage")
     if ok_sq and ok_ds then
-        local db_path = DataStorage:getDataDir() .. "/bookinfo_cache.db"
-        if lfs.attributes(db_path, "mode") then
-            local ok_db, db = pcall(SQ3.open, db_path)
-            if ok_db and db then
-                local ok_stmt, stmt = pcall(function()
-                    return db:prepare("SELECT directory, filename FROM bookinfo WHERE directory IS NOT NULL AND filename IS NOT NULL")
-                end)
-                if ok_stmt and stmt then
-                    local ok_iter, err = pcall(function()
-                        for row in stmt:nrows() do
-                            local sep = row.directory:sub(-1) == "/" and "" or "/"
-                            local book_path = row.directory .. sep .. row.filename
-                            addBook(book_path)
+        local settings_dir = DataStorage:getSettingsDir()
+        for _, db_name in ipairs({ "bookinfo_cache.sqlite3", "PT_bookinfo_cache.sqlite3" }) do
+            local db_path = settings_dir .. "/" .. db_name
+            if lfs.attributes(db_path, "mode") == "file" then
+                local ok_db, db = pcall(SQ3.open, db_path, "ro")
+                if ok_db and db then
+                    local ok_q, res = pcall(db.exec, db,
+                        "SELECT directory, filename FROM bookinfo WHERE directory IS NOT NULL AND filename IS NOT NULL")
+                    if ok_q and res and res[1] then
+                        local dirs, files = res[1], res[2]
+                        for i = 1, #dirs do
+                            local dir = dirs[i]
+                            local sep = dir:sub(-1) == "/" and "" or "/"
+                            addBook(dir .. sep .. files[i])
                         end
-                    end)
-                    pcall(function() stmt:close() end)
+                    elseif not ok_q then
+                        logger.warn("AnnotationsViewer: could not read", db_path, res)
+                    end
+                    pcall(db.close, db)
                 end
-                pcall(function() db:close() end)
             end
         end
     end
