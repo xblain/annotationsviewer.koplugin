@@ -1421,6 +1421,11 @@ local function filterToString(filter)
         table.sort(chs)
         table.insert(parts, "Ch≠ " .. table.concat(chs, ", "))
     end
+    if filter.notes_presence == "only" then
+        table.insert(parts, _("Notes only"))
+    elseif filter.notes_presence == "exclude" then
+        table.insert(parts, _("Without notes"))
+    end
     return #parts > 0 and table.concat(parts, "; ") or ""
 end
 
@@ -2748,7 +2753,8 @@ function NotesListWidget:onTap(_, ges)
             (self.active_filter.search_note and self.active_filter.search_note ~= "") or
             (self.active_filter.search_note_exclude and self.active_filter.search_note_exclude ~= "") or
             (self.active_filter.chapters and next(self.active_filter.chapters)) or
-            (self.active_filter.chapters_exclude and next(self.active_filter.chapters_exclude))
+            (self.active_filter.chapters_exclude and next(self.active_filter.chapters_exclude)) or
+            (self.active_filter.notes_presence ~= nil)
         )
         if has_filter then
             local TextWidget = require("ui/widget/textwidget")
@@ -2818,6 +2824,41 @@ function NotesListWidget:onNoteSelected(note)
     end
 end
 function NotesListWidget:onClose() UIManager:close(self) return true end
+-- Screen rotated or window resized: rebuild the layout for the new size and stay on the
+-- page that shows the annotation that was at the top before.
+function NotesListWidget:onScreenResize()
+    local page = self.pages and self.pages[self.current_page]
+    local first_idx = page and page[1]
+    self.current_page = 1
+    self:init()
+    if first_idx then
+        for p, indices in ipairs(self.pages) do
+            if indices[#indices] and indices[#indices] >= first_idx then
+                if p ~= self.current_page then
+                    self.current_page = p
+                    self:updatePage()
+                end
+                break
+            end
+        end
+    end
+    UIManager:setDirty(self, "full")
+    return false
+end
+-- Rotation doesn't always reach this widget as an event, so also check the size whenever
+-- we're painted and re-layout (outside the paint) if the screen changed.
+function NotesListWidget:paintTo(bb, x, y)
+    if (self.width ~= Screen:getWidth() or self.height ~= Screen:getHeight()) and not self._resize_pending then
+        self._resize_pending = true
+        UIManager:nextTick(function()
+            self._resize_pending = nil
+            if self.width ~= Screen:getWidth() or self.height ~= Screen:getHeight() then
+                self:onScreenResize()
+            end
+        end)
+    end
+    InputContainer.paintTo(self, bb, x, y)
+end
 
 -- Module-level caches: survive across plugin open/close within the same KOReader session,
 -- and are saved to disk (see loadPersistentCache) so they also survive restarts.
