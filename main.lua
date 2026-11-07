@@ -2913,6 +2913,95 @@ local function savePersistentCache(paths)
     _persist_count = #paths
 end
 
+-- Write-back helpers -------------------------------------------------------------------
+
+local function positionsEqual(a, b)
+    if a == b then return true end
+    if type(a) == "table" and type(b) == "table" then -- PDF/CBZ positions
+        return a.x == b.x and a.y == b.y and a.page == b.page
+    end
+    return false
+end
+
+-- Does a stored or live annotation item correspond to this plugin note?
+-- Matches on date, highlighted text and position, so two highlights saved in the same
+-- second with the same text are told apart.
+local function itemMatchesNote(item, note)
+    if item.datetime ~= note.datetime then return false end
+    if (item.text or "") ~= (note.highlighted_text or "") then return false end
+    if note.pos0 ~= nil then
+        return positionsEqual(item.pos0, note.pos0) and positionsEqual(item.pos1, note.pos1)
+    end
+    return true
+end
+
+-- Returns the ReaderUI if this book is currently open, so changes go through KOReader.
+local function getLiveReader(book_path)
+    local ReaderUI = require("apps/reader/readerui")
+    local ui = ReaderUI and ReaderUI.instance
+    if ui and ui.document and ui.document.file == book_path
+            and ui.annotation and ui.annotation.annotations then
+        return ui
+    end
+end
+
+local function findLiveIndex(ui, note)
+    for i, item in ipairs(ui.annotation.annotations) do
+        if itemMatchesNote(item, note) then return i end
+    end
+end
+
+-- Finds the annotation for `note` in its (closed) book's sidecar, calls fn(item, list, index)
+-- on it and saves the sidecar. Returns true if the annotation was found.
+local function editStoredAnnotation(note, fn)
+    local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
+    if not ok or not doc_settings or not doc_settings.data then return false end
+    local data = doc_settings.data
+    local found = false
+    if type(data.annotations) == "table" then
+        for i, item in ipairs(data.annotations) do
+            if itemMatchesNote(item, note) then
+                fn(item, data.annotations, i)
+                found = true
+                break
+            end
+        end
+    end
+    if not found then -- legacy format (KOReader < 2024)
+        for _, page_highlights in pairs(data.highlight or {}) do
+            if type(page_highlights) == "table" then
+                for i, hl in ipairs(page_highlights) do
+                    if itemMatchesNote(hl, note) then
+                        fn(hl, page_highlights, i)
+                        found = true
+                        break
+                    end
+                end
+            end
+            if found then break end
+        end
+    end
+    if found then doc_settings:flush() end
+    return found
+end
+
+local function nowStamp() return os.date("%Y-%m-%d %H:%M:%S") end
+
+-- Changes the style or colour of a highlight in the open book, the way ReaderHighlight does
+-- (including the PDF annotation), and tells KOReader about the real item.
+local function setLiveHighlightField(ui, index, field, value)
+    local item = ui.annotation.annotations[index]
+    local hl = ui.highlight
+    local pdf = hl and hl.writePdfAnnotation
+    if pdf then hl:writePdfAnnotation("delete", item) end
+    item[field] = value
+    if pdf and ui.paging then
+        hl:writePdfAnnotation("save", item)
+        if item.note then hl:writePdfAnnotation("content", item, item.note) end
+    end
+    ui:handleEvent(Event:new("AnnotationsModified", { item }))
+end
+
 local AllNotesViewer = WidgetContainer:extend{ name = "allnotesviewer", is_doc_only = false }
 AllNotesViewer.is_doc_only = false
 function AllNotesViewer:init()
@@ -3126,11 +3215,18 @@ function AllNotesViewer:findAllNotes()
         if seen[book_path] then return end
         seen[book_path] = true
         if not lfs.attributes(book_path, "mode") then return end
+        local live_ui = getLiveReader(book_path)
         local key, sidecar = getSidecarKey(book_path)
         -- Books without a sidecar have no annotations: skip opening their settings
-        if sidecar == false then return end
-        table.insert(scanned, book_path)
-        local annotations = self:loadBookAnnotations(book_path, key, sidecar)
+        if sidecar == false and not live_ui then return end
+        local annotations
+        if live_ui then
+            -- The open book's sidecar is only written on close/autosave: use what's in memory
+            annotations = self:convertLiveAnnotations(live_ui.annotation.annotations)
+        else
+            table.insert(scanned, book_path)
+            annotations = self:loadBookAnnotations(book_path, key, sidecar)
+        end
         if #annotations > 0 then
             local book_info = self:getBookInfo(book_path, nil, key, sidecar)
             table.insert(notes_data, {
@@ -3411,115 +3507,45 @@ function AllNotesViewer:showStylePicker(note, parent_widget)
     dialog = ButtonDialog:new{ title = _("Select Style"), buttons = buttons }
     UIManager:show(dialog)
 end
-function AllNotesViewer:updateHighlightStyle(note, new_style, parent_widget)
+-- Updates the plugin's own list after a change and redraws it.
+local function updateListedNote(parent_widget, note, fn)
+    for i, n in ipairs(parent_widget.notes_list) do
+        if n == note or (n.book_path == note.book_path and itemMatchesNote(
+                { datetime = n.datetime, text = n.highlighted_text, pos0 = n.pos0, pos1 = n.pos1 }, note)) then
+            fn(n, i)
+            break
+        end
+    end
+    parent_widget:refresh()
+end
+
+function AllNotesViewer:setHighlightField(note, field, value, parent_widget, done_text)
     if not note.book_path then return end
-    local ReaderUI = require("apps/reader/readerui")
-    local live_ui = ReaderUI and ReaderUI.instance
-    local is_open = live_ui and live_ui.document and live_ui.document.file == note.book_path
     local updated = false
-    if is_open then
-        if live_ui.annotation and live_ui.annotation.annotations then
-            for _, item in ipairs(live_ui.annotation.annotations) do
-                if item.datetime == note.datetime and item.text == note.highlighted_text then
-                    item.drawer = new_style
-                    updated = true
-                    break
-                end
-            end
+    local ui = getLiveReader(note.book_path)
+    if ui then
+        local index = findLiveIndex(ui, note)
+        if index then
+            setLiveHighlightField(ui, index, field, value)
+            updated = true
         end
-        if updated then live_ui:handleEvent(Event:new("AnnotationsModified", { note })) end
     else
-        local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
-        if not ok or not doc_settings then return end
-        local data = doc_settings.data
-        if not data then return end
-        local items = data.annotations
-        if items and #items > 0 then
-            for _, item in ipairs(items) do
-                if item.datetime == note.datetime and item.text == note.highlighted_text then
-                    item.drawer = new_style; updated = true; break
-                end
-            end
-        end
-        if not updated then
-            for _, page_highlights in pairs(data.highlight or {}) do
-                if type(page_highlights) == "table" then
-                    for _, hl in ipairs(page_highlights) do
-                        if hl.datetime == note.datetime and hl.text == note.highlighted_text then
-                            hl.drawer = new_style; updated = true; break
-                        end
-                    end
-                end
-                if updated then break end
-            end
-        end
-        if updated then doc_settings:flush() end
+        updated = editStoredAnnotation(note, function(item)
+            item[field] = value
+            item.datetime_updated = nowStamp()
+        end)
     end
     if updated then
         self:clearBookCache(note.book_path)
-        for _, n in ipairs(parent_widget.notes_list) do
-            if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
-                n.drawer = new_style; break
-            end
-        end
-        parent_widget:refresh()
-        UIManager:show(require("ui/widget/infomessage"):new{ text = _("Style updated."), timeout = 1 })
+        updateListedNote(parent_widget, note, function(n) n[field] = value end)
+        UIManager:show(InfoMessage:new{ text = done_text, timeout = 1 })
     end
 end
+function AllNotesViewer:updateHighlightStyle(note, new_style, parent_widget)
+    self:setHighlightField(note, "drawer", new_style, parent_widget, _("Style updated."))
+end
 function AllNotesViewer:updateHighlightColor(note, new_color, parent_widget)
-    if not note.book_path then return end
-    local ReaderUI = require("apps/reader/readerui")
-    local live_ui = ReaderUI and ReaderUI.instance
-    local is_open = live_ui and live_ui.document and live_ui.document.file == note.book_path
-    local updated = false
-    if is_open then
-        if live_ui.annotation and live_ui.annotation.annotations then
-            for _, item in ipairs(live_ui.annotation.annotations) do
-                if item.datetime == note.datetime and item.text == note.highlighted_text then
-                    item.color = new_color
-                    updated = true
-                    break
-                end
-            end
-        end
-        if updated then live_ui:handleEvent(Event:new("AnnotationsModified", { note })) end
-    else
-        local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
-        if not ok or not doc_settings then return end
-        local data = doc_settings.data
-        if not data then return end
-        local items = data.annotations
-        if items and #items > 0 then
-            for _, item in ipairs(items) do
-                if item.datetime == note.datetime and item.text == note.highlighted_text then
-                    item.color = new_color; updated = true; break
-                end
-            end
-        end
-        if not updated then
-            for _, page_highlights in pairs(data.highlight or {}) do
-                if type(page_highlights) == "table" then
-                    for _, hl in ipairs(page_highlights) do
-                        if hl.datetime == note.datetime and hl.text == note.highlighted_text then
-                            hl.color = new_color; updated = true; break
-                        end
-                    end
-                end
-                if updated then break end
-            end
-        end
-        if updated then doc_settings:flush() end
-    end
-    if updated then
-        self:clearBookCache(note.book_path)
-        for _, n in ipairs(parent_widget.notes_list) do
-            if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
-                n.color = new_color; break
-            end
-        end
-        parent_widget:refresh()
-        UIManager:show(require("ui/widget/infomessage"):new{ text = _("Color updated."), timeout = 1 })
-    end
+    self:setHighlightField(note, "color", new_color, parent_widget, _("Color updated."))
 end
 function AllNotesViewer:confirmDelete(note, parent_widget)
     local ConfirmBox = require("ui/widget/confirmbox")
@@ -3533,59 +3559,38 @@ function AllNotesViewer:confirmDelete(note, parent_widget)
 end
 function AllNotesViewer:deleteAnnotation(note, parent_widget)
     if not note.book_path then return end
-    local ReaderUI = require("apps/reader/readerui")
-    local live_ui = ReaderUI and ReaderUI.instance
-    local is_open = live_ui and live_ui.document and live_ui.document.file == note.book_path
     local deleted = false
-    if is_open then
-        if live_ui.annotation and live_ui.annotation.annotations then
-            local items = live_ui.annotation.annotations
-            for i = #items, 1, -1 do
-                if items[i].datetime == note.datetime and items[i].text == note.highlighted_text then
-                    table.remove(items, i)
-                    deleted = true
-                    break
-                end
+    local ui = getLiveReader(note.book_path)
+    if ui then
+        local index = findLiveIndex(ui, note)
+        if index then
+            if ui.highlight and ui.highlight.deleteHighlight then
+                -- KOReader's own path: removes the PDF annotation, updates statistics,
+                -- the "has annotations" flag and the footer
+                ui.highlight:deleteHighlight(index)
+            else
+                local item = table.remove(ui.annotation.annotations, index)
+                ui:handleEvent(Event:new("AnnotationsModified", { item, index_modified = -index }))
             end
+            deleted = true
         end
-        if deleted then live_ui:handleEvent(Event:new("AnnotationsModified", { note })) end
     else
-        local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
-        if not ok or not doc_settings then return end
-        local data = doc_settings.data
-        if not data then return end
-        local items = data.annotations
-        if items and #items > 0 then
-            for i = #items, 1, -1 do
-                if items[i].datetime == note.datetime and items[i].text == note.highlighted_text then
-                    table.remove(items, i); deleted = true; break
-                end
+        local remaining
+        deleted = editStoredAnnotation(note, function(_, list, i)
+            table.remove(list, i)
+            remaining = #list
+        end)
+        if deleted and remaining == 0 then
+            -- keep the file browser's "has annotations" marker in sync
+            local ok_bl, BookList = pcall(require, "ui/widget/booklist")
+            if ok_bl and BookList.setBookInfoCacheProperty then
+                BookList.setBookInfoCacheProperty(note.book_path, "has_annotations", false)
             end
         end
-        if not deleted then
-            for _, page_highlights in pairs(data.highlight or {}) do
-                if type(page_highlights) == "table" then
-                    for i = #page_highlights, 1, -1 do
-                        local hl = page_highlights[i]
-                        if hl.datetime == note.datetime and hl.text == note.highlighted_text then
-                            table.remove(page_highlights, i); deleted = true; break
-                        end
-                    end
-                end
-                if deleted then break end
-            end
-        end
-        if deleted then doc_settings:flush() end
     end
     if deleted then
         self:clearBookCache(note.book_path)
-        for i = #parent_widget.notes_list, 1, -1 do
-            local n = parent_widget.notes_list[i]
-            if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
-                table.remove(parent_widget.notes_list, i); break
-            end
-        end
-        parent_widget:refresh()
+        updateListedNote(parent_widget, note, function(_, i) table.remove(parent_widget.notes_list, i) end)
     end
 end
 function AllNotesViewer:editNote(note, parent_widget)
@@ -3622,57 +3627,40 @@ function AllNotesViewer:editNote(note, parent_widget)
 end
 function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget)
     if not note.book_path then return end
-    local ReaderUI = require("apps/reader/readerui")
-    local live_ui = ReaderUI and ReaderUI.instance
-    local is_open = live_ui and live_ui.document and live_ui.document.file == note.book_path
+    local value = new_note_text ~= "" and new_note_text or nil -- blank input deletes the note, as in KOReader
     local updated = false
-    if is_open then
-        if live_ui.annotation and live_ui.annotation.annotations then
-            for _, item in ipairs(live_ui.annotation.annotations) do
-                if item.datetime == note.datetime and item.text == note.highlighted_text then
-                    item.note = new_note_text
-                    updated = true
-                    break
-                end
+    local ui = getLiveReader(note.book_path)
+    if ui then
+        local index = findLiveIndex(ui, note)
+        if index then
+            -- same steps as ReaderBookmark:setBookmarkNote()
+            local item = ui.annotation.annotations[index]
+            local getType = ui.bookmark and ui.bookmark.getBookmarkType
+            local type_before = getType and getType(item)
+            item.note = value
+            if ui.highlight and ui.highlight.writePdfAnnotation then
+                ui.highlight:writePdfAnnotation("content", item, value or "")
             end
+            local type_after = getType and getType(item)
+            if type_before == "highlight" and type_after == "note" then
+                ui:handleEvent(Event:new("AnnotationsModified", { item, nb_highlights_added = -1, nb_notes_added = 1 }))
+            elseif type_before == "note" and type_after == "highlight" then
+                ui:handleEvent(Event:new("AnnotationsModified", { item, nb_highlights_added = 1, nb_notes_added = -1 }))
+            else
+                ui:handleEvent(Event:new("AnnotationsModified", { item }))
+            end
+            updated = true
         end
-        if updated then live_ui:handleEvent(Event:new("AnnotationsModified", { note })) end
     else
-        local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
-        if not ok or not doc_settings then return end
-        local data = doc_settings.data
-        if not data then return end
-        local items = data.annotations
-        if items and #items > 0 then
-            for _, item in ipairs(items) do
-                if item.datetime == note.datetime and item.text == note.highlighted_text then
-                    item.note = new_note_text; updated = true; break
-                end
-            end
-        end
-        if not updated then
-            for _, page_highlights in pairs(data.highlight or {}) do
-                if type(page_highlights) == "table" then
-                    for _, hl in ipairs(page_highlights) do
-                        if hl.datetime == note.datetime and hl.text == note.highlighted_text then
-                            hl.note = new_note_text; updated = true; break
-                        end
-                    end
-                end
-                if updated then break end
-            end
-        end
-        if updated then doc_settings:flush() end
+        updated = editStoredAnnotation(note, function(item)
+            item.note = value
+            item.datetime_updated = nowStamp()
+        end)
     end
     if updated then
         self:clearBookCache(note.book_path)
-        for _, n in ipairs(parent_widget.notes_list) do
-            if n.datetime == note.datetime and n.highlighted_text == note.highlighted_text then
-                n.user_note = new_note_text; break
-            end
-        end
-        parent_widget:refresh()
-        UIManager:show(require("ui/widget/infomessage"):new{ text = _("Note saved."), timeout = 1 })
+        updateListedNote(parent_widget, note, function(n) n.user_note = value end)
+        UIManager:show(InfoMessage:new{ text = _("Note saved."), timeout = 1 })
     end
 end
 function AllNotesViewer:openBookAtNote(note)
