@@ -186,8 +186,26 @@ local SPIN_MENUS = {
 
 local HIGHLIGHT_COLORS = BlitBuffer.HIGHLIGHT_COLORS
 
+-- Sorting compares titles many times; normalise each title only once.
+local _normalized_title_cache = {}
+local _lower_cache = {}
+local function lowerCached(str)
+    str = str or ""
+    local l = _lower_cache[str]
+    if not l then l = str:lower(); _lower_cache[str] = l end
+    return l
+end
+local normalizeBookTitleUncached
 local function normalizeBookTitle(title)
     if not title then return "" end
+    local n = _normalized_title_cache[title]
+    if not n then
+        n = normalizeBookTitleUncached(title)
+        _normalized_title_cache[title] = n
+    end
+    return n
+end
+normalizeBookTitleUncached = function(title)
     local normalized = title:lower():gsub("^%s+", ""):gsub("%s+$", "")
     normalized = normalized:gsub("^the%s+", ""):gsub("^a%s+", ""):gsub("^an%s+", "")
     return normalized
@@ -259,8 +277,8 @@ local SORT_COMPARATORS = {
     end,
     
     filename_location_asc = function(a, b)
-        local filename_a = (a.book_filename or ""):lower()
-        local filename_b = (b.book_filename or ""):lower()
+        local filename_a = lowerCached(a.book_filename)
+        local filename_b = lowerCached(b.book_filename)
         if filename_a ~= filename_b then return filename_a < filename_b end
         local title_a = normalizeBookTitle(a.book_title)
         local title_b = normalizeBookTitle(b.book_title)
@@ -268,8 +286,8 @@ local SORT_COMPARATORS = {
         return compareByPosition(a, b)
     end,
     filename_location_desc = function(a, b)
-        local filename_a = (a.book_filename or ""):lower()
-        local filename_b = (b.book_filename or ""):lower()
+        local filename_a = lowerCached(a.book_filename)
+        local filename_b = lowerCached(b.book_filename)
         if filename_a ~= filename_b then return filename_a > filename_b end
         local title_a = normalizeBookTitle(a.book_title)
         local title_b = normalizeBookTitle(b.book_title)
@@ -278,14 +296,14 @@ local SORT_COMPARATORS = {
     end,
     
     filename_asc = function(a, b)
-        local filename_a = (a.book_filename or ""):lower()
-        local filename_b = (b.book_filename or ""):lower()
+        local filename_a = lowerCached(a.book_filename)
+        local filename_b = lowerCached(b.book_filename)
         if filename_a ~= filename_b then return filename_a < filename_b end
         return compareByDatetime(a, b)
     end,
     filename_desc = function(a, b)
-        local filename_a = (a.book_filename or ""):lower()
-        local filename_b = (b.book_filename or ""):lower()
+        local filename_a = lowerCached(a.book_filename)
+        local filename_b = lowerCached(b.book_filename)
         if filename_a ~= filename_b then return filename_a > filename_b end
         return compareByDatetime(a, b)
     end,
@@ -404,8 +422,7 @@ end
 -- Greedy word wrap. Same result as measuring every candidate line, but word widths are
 -- measured once per face and summed; only lines that end up within the rounding error of
 -- max_width are measured for real, so the line breaks are unchanged.
-local function wrapText(text, face, max_width)
-    local lines = {}
+local function wrapParagraph(text, face, max_width, lines)
     local widths = getWordWidths(face)
     local space_w = widths[" "]
     local current_line, current_w, words_since_exact = "", 0, 0
@@ -442,7 +459,19 @@ local function wrapText(text, face, max_width)
         end
     end
     if current_line ~= "" then table.insert(lines, current_line) end
-    return lines
+end
+
+-- Wraps text to max_width, keeping the text's paragraph breaks (blank lines are dropped).
+-- Returns the lines and a set of line numbers that end a paragraph (not to be justified).
+local function wrapText(text, face, max_width)
+    local lines, para_end = {}, {}
+    for paragraph in (text:gsub("\r", "") .. "\n"):gmatch("([^\n]*)\n") do
+        if paragraph:find("%S") then
+            wrapParagraph(paragraph, face, max_width, lines)
+            para_end[#lines] = true
+        end
+    end
+    return lines, para_end
 end
 local function createJustifiedLine(text, face, target_width, fgcolor)
     local words = {}
@@ -666,7 +695,7 @@ function NoteItemWidget:init()
     
     if note_wrapper:hasHighlightedText() then
         
-        local full_lines = wrapText(self.note.highlighted_text or "", content_face, line_width)
+        local full_lines, para_end = wrapText(self.note.highlighted_text or "", content_face, line_width)
         local max_lines = getTruncateLines() or math.huge
         local truncated = false
         local lines = full_lines
@@ -710,7 +739,7 @@ function NoteItemWidget:init()
                     line_widget = TextWidget:new{ text = (last_line_no_ell or line) .. ell, face = content_face, fgcolor = text_fgcolor }
                 end
             else
-                if justify == true and i < #lines and #lines > 1 then
+                if justify == true and i < #lines and #lines > 1 and not para_end[i] then
                     line_widget = createJustifiedLine(line, content_face, line_width, text_fgcolor)
                 else
                     line_widget = TextWidget:new{ text = line, face = content_face, fgcolor = text_fgcolor }
@@ -802,9 +831,15 @@ function NoteItemWidget:formatDate(datetime)
     local year, month, day = datetime:match("(%d+)-(%d+)-(%d+)")
     if not year then return datetime end
     local note_time = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day)})
-    local today_start = os.time({year = os.date("*t").year, month = os.date("*t").month, day = os.date("*t").day})
-    if note_time >= today_start then return "Today"
-    elseif note_time >= today_start - 86400 then return "Yesterday"
+    local today = os.date("*t")
+    local today_key = today.year * 10000 + today.month * 100 + today.day
+    if NoteItemWidget._today_key ~= today_key then
+        NoteItemWidget._today_key = today_key
+        NoteItemWidget._today_start = os.time({ year = today.year, month = today.month, day = today.day })
+    end
+    local today_start = NoteItemWidget._today_start
+    if note_time >= today_start then return _("Today")
+    elseif note_time >= today_start - 86400 then return _("Yesterday")
     else return os.date("%d %b %Y", note_time) end
 end
 -- Text of the active-filter label shown under the title; "" means no filter is shown.
@@ -945,7 +980,8 @@ function NotesListWidget:init()
     local btn_h = temp_button:getSize().h
     temp_button:free()
     local pag_style = getPaginationStyle()
-    self.footer_height = (pag_style == "scrollbar") and 0 or btn_h
+    -- both scrollbar styles draw their controls in the side strip, not in a bottom bar
+    self.footer_height = (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and 0 or btn_h
     self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
     self:applyFilter()
     self:calculatePages()
@@ -1411,7 +1447,8 @@ function NotesListWidget:updatePage()
     local btn_h = temp_button:getSize().h
     temp_button:free()
     local pag_style = getPaginationStyle()
-    self.footer_height = (pag_style == "scrollbar") and 0 or btn_h
+    -- both scrollbar styles draw their controls in the side strip, not in a bottom bar
+    self.footer_height = (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and 0 or btn_h
     self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
 
 
@@ -1672,11 +1709,74 @@ function NotesListWidget:showMainMenu()
             UIManager:close(self.main_menu)
             self:showSettingsMenu()
         end }},
+        {{ text = _("Export to Markdown"), callback = function()
+            UIManager:close(self.main_menu)
+            self:exportToMarkdown()
+        end }},
         {{ text = _("Cancel"), callback = function() UIManager:close(self.main_menu) end }},
     }
     self.main_menu = ButtonDialogTitle:new{ title = _("Menu"), buttons = buttons }
     UIManager:show(self.main_menu)
 end
+-- Builds Markdown for a list of notes, grouped under a heading per book (in list order).
+local function notesToMarkdown(notes, filter_label)
+    local out = { "# " .. _("Annotations"), "" }
+    if filter_label and filter_label ~= "" then
+        table.insert(out, "_" .. _("Filter") .. ": " .. filter_label .. "_")
+        table.insert(out, "")
+    end
+    local current_book
+    for _i, note in ipairs(notes) do
+        local book = note.book_title or "Unknown"
+        if book ~= current_book then
+            current_book = book
+            local authors = note.book_authors
+            table.insert(out, "## " .. book .. ((authors and authors ~= "") and (" — " .. tostring(authors)) or ""))
+            table.insert(out, "")
+        end
+        local meta = {}
+        if note.datetime and note.datetime ~= "" then table.insert(meta, note.datetime:sub(1, 10)) end
+        if note.chapter and note.chapter ~= "" then table.insert(meta, note.chapter) end
+        if note.page then table.insert(meta, _("page") .. " " .. tostring(note.page)) end
+        if #meta > 0 then table.insert(out, "*" .. table.concat(meta, " · ") .. "*") end
+        local text = note.highlighted_text or ""
+        if text:find("%S") then
+            for line in (text:gsub("\r", "") .. "\n"):gmatch("([^\n]*)\n") do
+                table.insert(out, "> " .. line)
+            end
+        end
+        local user_note = note.user_note or ""
+        if user_note:find("%S") then
+            table.insert(out, "")
+            table.insert(out, "**" .. _("Note") .. ":** " .. user_note:gsub("\r", ""):gsub("\n", "  \n"))
+        end
+        table.insert(out, "")
+    end
+    return table.concat(out, "\n")
+end
+
+-- Writes the annotations currently in the list (with the active filter and sort order)
+-- to a Markdown file in KOReader's data folder.
+function NotesListWidget:exportToMarkdown()
+    local notes = self.filtered_notes or {}
+    if #notes == 0 then
+        UIManager:show(InfoMessage:new{ text = _("Nothing to export.") })
+        return
+    end
+    local DataStorage = require("datastorage")
+    local dir = DataStorage:getDataDir() .. "/exports"
+    if lfs.attributes(dir, "mode") ~= "directory" then lfs.mkdir(dir) end
+    local path = dir .. "/annotations-" .. os.date("%Y%m%d-%H%M%S") .. ".md"
+    local file, err = io.open(path, "w")
+    if not file then
+        UIManager:show(InfoMessage:new{ text = _("Export failed:") .. " " .. tostring(err) })
+        return
+    end
+    file:write(notesToMarkdown(notes, filterToString(self.active_filter)))
+    file:close()
+    UIManager:show(InfoMessage:new{ text = string.format(_("Exported %d annotations to:\n%s"), #notes, path) })
+end
+
 function NotesListWidget:showSortMenu()
     local sort_mode = getSetting("sort_mode", "date_newest")
     local function check(mode) return sort_mode == mode and "\u{2713} " or "  " end
@@ -1689,10 +1789,10 @@ function NotesListWidget:showSortMenu()
     end
 
     local categories = {
-        { key = "date",     label = "Date" },
-        { key = "author",   label = "Author" },
-        { key = "book",     label = "Book" },
-        { key = "filename", label = "Filename" },
+        { key = "date",     label = _("Date") },
+        { key = "author",   label = _("Author") },
+        { key = "book",     label = _("Book") },
+        { key = "filename", label = _("Filename") },
     }
 
     local buttons = {}
@@ -1838,17 +1938,17 @@ function NotesListWidget:showSettingsMenu()
         {},
         {{ text = _("Info Row Fields"), enabled = false }},
         {
-            { text = check(info_active["date"])    .. " Date",    callback = function() toggleInfoField("date")    end },
-            { text = check(info_active["author"])  .. " Author",  callback = function() toggleInfoField("author")  end },
-            { text = check(info_active["chapter"]) .. " Chapter", callback = function() toggleInfoField("chapter") end },
+            { text = check(info_active["date"])    .. " " .. _("Date"),    callback = function() toggleInfoField("date")    end },
+            { text = check(info_active["author"])  .. " " .. _("Author"),  callback = function() toggleInfoField("author")  end },
+            { text = check(info_active["chapter"]) .. " " .. _("Chapter"), callback = function() toggleInfoField("chapter") end },
         },
         -- Dedup match fields row (which fields count as "duplicate info")
         {},
         {{ text = _("Duplicate Info Check Fields"), enabled = false }},
         {
-            { text = check(dedup_active["date"])    .. " Date",    callback = function() toggleDedupField("date")    end },
-            { text = check(dedup_active["author"])  .. " Author",  callback = function() toggleDedupField("author")  end },
-            { text = check(dedup_active["chapter"]) .. " Chapter", callback = function() toggleDedupField("chapter") end },
+            { text = check(dedup_active["date"])    .. " " .. _("Date"),    callback = function() toggleDedupField("date")    end },
+            { text = check(dedup_active["author"])  .. " " .. _("Author"),  callback = function() toggleDedupField("author")  end },
+            { text = check(dedup_active["chapter"]) .. " " .. _("Chapter"), callback = function() toggleDedupField("chapter") end },
         },
         -- Section: Navigation
         {},
@@ -2326,7 +2426,7 @@ function NotesListWidget:showFilterMenu(show_back)
         end
         if colors["gray"] then
             table.insert(radio_buttons, {
-                { text = "Gray", checked = curr_type == "color" and curr_val == "gray",
+                { text = _("Gray"), checked = curr_type == "color" and curr_val == "gray",
                   bgcolor = BlitBuffer.COLOR_GRAY,
                   provider = { type = "color", value = "gray" } },
             })
@@ -2536,11 +2636,11 @@ function NotesListWidget:showFilterMenu(show_back)
         local np = af.notes_presence
         local np_label
         if np == "only" then
-            np_label = "\u{2713} With Notes Only"
+            np_label = "\u{2713} " .. _("With Notes Only")
         elseif np == "exclude" then
-            np_label = "\u{2713} Highlights Only (no notes)"
+            np_label = "\u{2713} " .. _("Highlights Only (no notes)")
         else
-            np_label = "Notes: All"
+            np_label = _("Notes: All")
         end
         table.insert(main_buttons, {
             { text = np_label, callback = function()
@@ -3028,11 +3128,15 @@ function AllNotesViewer:addToMainMenu(menu_items)
         }
     end
 end
+-- Tells an open ReaderUI that the annotation for `note` changed, sending KOReader's own item
+-- (not the plugin's copy) so KOReader updates its modification time and redraws it.
 function AllNotesViewer:notifyLiveReader(book_path, note)
-    local ReaderUI = require("apps/reader/readerui")
-    local live_ui = ReaderUI and ReaderUI.instance
-    if live_ui and live_ui.document and live_ui.document.file == book_path then
-        live_ui:handleEvent(Event:new("AnnotationsModified", { note }))
+    local ui = getLiveReader(book_path)
+    if not ui then return end
+    local index = findLiveIndex(ui, note)
+    local item = index and ui.annotation.annotations[index]
+    if item then
+        ui:handleEvent(Event:new("AnnotationsModified", { item }))
     end
 end
 function AllNotesViewer:clearBookCache(book_path)
@@ -3669,4 +3773,15 @@ function AllNotesViewer:openBookAtNote(note)
         if ui then gotoNote(ui) end
     end)
 end
+-- Internals exposed for tests/run.lua; KOReader doesn't use this.
+AllNotesViewer._test = {
+    wrapText = wrapText,
+    normalizeBookTitle = normalizeBookTitle,
+    SORT_COMPARATORS = SORT_COMPARATORS,
+    filterToString = filterToString,
+    itemMatchesNote = itemMatchesNote,
+    notesToMarkdown = notesToMarkdown,
+    NotesListWidget = NotesListWidget,
+}
+
 return AllNotesViewer
