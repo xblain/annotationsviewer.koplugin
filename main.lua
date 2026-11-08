@@ -126,7 +126,12 @@ local function getHeaderSkips(note, is_first_on_page, prev_title, prev_info_key,
         and (getNoteInfoKey(note, dedup_fields) == prev_info_key)
     return skip_title, skip_info
 end
-local function getPaginationStyle() return getSetting("pagination_style", "right") end
+-- "default" = Prev / Next bar at the bottom. The older "left" / "right" bars were merged into it.
+local function getPaginationStyle()
+    local style = getSetting("pagination_style", "default")
+    if style == "left" or style == "right" then return "default" end
+    return style
+end
 local function getScrollbarBookMarks() return getSetting("sb_book_marks", true) ~= false end
 local function isScrollbarStyle(style)
     style = style or getPaginationStyle()
@@ -138,7 +143,7 @@ local SB_TRACK_WIDTH  = Screen:scaleBySize(1)
 local SB_STRIP_WIDTH  = Screen:scaleBySize(32 + 16 + 3)
 local SB_MARGIN_RIGHT = 0
 local SB_MARGIN_V_TOP    = Screen:scaleBySize(16)
-local SB_MARGIN_V_BOTTOM = Screen:scaleBySize(26)
+local SB_MARGIN_V_BOTTOM = SB_MARGIN_V_TOP -- same space below as above
 local SB_TRACK_COLOR = BlitBuffer.COLOR_BLACK
 -- where a book starts: a short notch across the track, like chapter ticks on Kindle/Kobo
 local SB_MARK_OVERHANG = Screen:scaleBySize(3)          -- how far it sticks out on each side
@@ -147,6 +152,7 @@ local SB_MARK_HEIGHT   = math.max(1, math.floor(Screen:scaleBySize(1)))
 local TOPBAR_HEIGHT    = Screen:scaleBySize(50)
 local TABS_HEIGHT      = Screen:scaleBySize(38)
 local FILTERROW_HEIGHT = Screen:scaleBySize(30)
+local FOOTER_BAR_HEIGHT = Screen:scaleBySize(48) -- page buttons bar (non-scrollbar styles)
 local HEADER_ICON_SIZE = Screen:scaleBySize(26)
 local HEADER_ICON_PAD  = Screen:scaleBySize(9)
 -- Serif used for book titles, highlights and the screen title unless the user picked a font
@@ -572,12 +578,12 @@ end
 local StrikeoutLineWidget = InputContainer:extend{ width = nil, height = nil, y_offset = nil }
 function StrikeoutLineWidget:init() self.dimen = Geom:new{ w = self.width, h = self.height } end
 function StrikeoutLineWidget:paintTo(bb, x, y)
-    bb:paintRect(x, y + (self.y_offset or math.floor(self.height / 2)), self.width, 2, BlitBuffer.COLOR_BLACK)
+    bb:paintRect(x, y + (self.y_offset or math.floor(self.height / 2)), self.width, Size.line.medium, BlitBuffer.COLOR_BLACK)
 end
 local UnderlineWidget = InputContainer:extend{ width = nil, height = nil }
 function UnderlineWidget:init() self.dimen = Geom:new{ w = self.width, h = self.height } end
 function UnderlineWidget:paintTo(bb, x, y)
-    bb:paintRect(x, y + self.height - 2, self.width, 2, BlitBuffer.COLOR_BLACK)
+    bb:paintRect(x, y + self.height - Size.line.medium, self.width, Size.line.medium, BlitBuffer.COLOR_BLACK)
 end
 local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_parent = nil, is_last = false, is_preview = false, disable_tap = false, skip_title = false, skip_info = false }
 
@@ -1071,9 +1077,16 @@ function TapBox:init()
     self.ges_events = {
         TapBox = { GestureRange:new{ ges = "tap", range = function() return self.dimen end } },
     }
+    if self.hold_callback then
+        self.ges_events.HoldBox = { GestureRange:new{ ges = "hold", range = function() return self.dimen end } }
+    end
 end
 function TapBox:onTapBox(_, ges)
     if self.callback then self.callback(ges) end
+    return true
+end
+function TapBox:onHoldBox(_, ges)
+    if self.hold_callback then self.hold_callback(ges) end
     return true
 end
 
@@ -1120,9 +1133,7 @@ function NotesListWidget:computeLayout()
         -- both scrollbar styles draw their controls in the side strip, not in a bottom bar
         self.footer_height = 0
     else
-        local temp_button = Button:new{ icon = "chevron.first", bordersize = 0 }
-        self.footer_height = temp_button:getSize().h
-        temp_button:free()
+        self.footer_height = FOOTER_BAR_HEIGHT + Size.line.medium
     end
     self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
     -- width given to each annotation, and how far it is pushed right (landscape column)
@@ -1403,7 +1414,8 @@ function NotesListWidget:createFooter()
             local thumb_y = ty + pageY(self_ref.current_page)
             local radius = math.floor(SB_THUMB_WIDTH / 2)
             bb:paintRoundedRect(thumb_x, thumb_y, SB_THUMB_WIDTH, thumb_h, BlitBuffer.COLOR_WHITE, radius)
-            bb:paintBorder(thumb_x, thumb_y, SB_THUMB_WIDTH, thumb_h, 2, BlitBuffer.COLOR_BLACK, radius)
+            -- Size.border.default = 1px at 160dpi, scaled up on denser screens like the thumb itself
+            bb:paintBorder(thumb_x, thumb_y, SB_THUMB_WIDTH, thumb_h, Size.border.default, BlitBuffer.COLOR_BLACK, radius)
             local lw = page_label:getSize().w
             page_label:paintTo(bb, track_x - math.floor(lw / 2), ty + track_h + Screen:scaleBySize(6))
             if dn_icon then dn_icon:paintTo(bb, icon_x, y + strip_h - icon_size) end
@@ -1412,117 +1424,67 @@ function NotesListWidget:createFooter()
             VerticalSpan:new{ width = strip_y },
             HorizontalGroup:new{ HorizontalSpan:new{ width = strip_x }, ScrollStrip:new{} },
         }
-    elseif style == "default" then
-        -- KOReader file manager style: centered chevrons with spacers
-        local chevron_left = "chevron.left"
-        local chevron_right = "chevron.right"
-        local chevron_first = "chevron.first"
-        local chevron_last = "chevron.last"
-        if BD.mirroredUILayout() then
-            chevron_left, chevron_right = chevron_right, chevron_left
-            chevron_first, chevron_last = chevron_last, chevron_first
-        end
-        local spacer = HorizontalSpan:new{ width = Screen:scaleBySize(32) }
-        local first_chev = Button:new{ icon = chevron_first, callback = function() self.current_page = 1; self:updatePage() end, bordersize = 0, show_parent = self }
-        local left_chev  = Button:new{ icon = chevron_left,  callback = function() self:onGotoPrevPage() end, bordersize = 0, show_parent = self }
-        local page_text  = Button:new{ text = string.format(_("Page %1 of %2"):gsub("%%1", self.current_page):gsub("%%2", self.total_pages), ""), text_font_bold = false, bordersize = 0, show_parent = self }
-        local right_chev = Button:new{ icon = chevron_right, callback = function() self:onGotoNextPage() end, bordersize = 0, show_parent = self }
-        local last_chev  = Button:new{ icon = chevron_last,  callback = function() self.current_page = self.total_pages; self:updatePage() end, bordersize = 0, show_parent = self }
-        first_chev:enableDisable(self.current_page > 1)
-        left_chev:enableDisable(self.current_page > 1)
-        right_chev:enableDisable(self.current_page < self.total_pages)
-        last_chev:enableDisable(self.current_page < self.total_pages)
-        local page_info = HorizontalGroup:new{
-            first_chev, spacer, left_chev, spacer, page_text, spacer, right_chev, spacer, last_chev,
-        }
-        local FrameContainer = require("ui/widget/container/framecontainer")
-        return BottomContainer:new{
-            dimen = Geom:new{ w = self.width, h = self.height },
-            FrameContainer:new{
-                width = self.width,
-                height = page_info:getSize().h,
-                padding = 0, margin = 0, bordersize = 0,
-                background = BlitBuffer.COLOR_WHITE,
-                CenterContainer:new{
-                    dimen = Geom:new{ w = self.width, h = page_info:getSize().h },
-                    page_info,
-                },
-            },
-        }
-    elseif style == "left" then
-        -- Left-aligned chevrons style
-        local chevron_left = "chevron.left"
-        local chevron_right = "chevron.right"
-        local chevron_first = "chevron.first"
-        local chevron_last = "chevron.last"
-        if BD.mirroredUILayout() then
-            chevron_left, chevron_right = chevron_right, chevron_left
-            chevron_first, chevron_last = chevron_last, chevron_first
-        end
-        local first_chev = Button:new{ icon = chevron_first, callback = function() self.current_page = 1; self:updatePage() end, bordersize = 0, show_parent = self }
-        local left_chev  = Button:new{ icon = chevron_left,  callback = function() self:onGotoPrevPage() end, bordersize = 0, show_parent = self }
-        local page_text  = Button:new{ text = string.format("%d of %d", self.current_page, self.total_pages), text_font_bold = false, text_font_face = "pgfont", bordersize = 0, show_parent = self }
-        local right_chev = Button:new{ icon = chevron_right, callback = function() self:onGotoNextPage() end, bordersize = 0, show_parent = self }
-        local last_chev  = Button:new{ icon = chevron_last,  callback = function() self.current_page = self.total_pages; self:updatePage() end, bordersize = 0, show_parent = self }
-        first_chev:enableDisable(self.current_page > 1)
-        left_chev:enableDisable(self.current_page > 1)
-        right_chev:enableDisable(self.current_page < self.total_pages)
-        last_chev:enableDisable(self.current_page < self.total_pages)
-        local page_info = HorizontalGroup:new{
-            first_chev, left_chev, page_text, right_chev, last_chev,
-        }
-        local LeftContainer = require("ui/widget/container/leftcontainer")
-        local page_info_container = LeftContainer:new{
-            dimen = Geom:new{ w = math.floor(self.width * 0.98), h = page_info:getSize().h },
-            page_info,
-        }
-        local FrameContainer = require("ui/widget/container/framecontainer")
-        return BottomContainer:new{
-            dimen = Geom:new{ w = self.width, h = self.height },
-            FrameContainer:new{
-                width = self.width,
-                height = page_info_container:getSize().h,
-                padding = 0, margin = 0, bordersize = 0,
-                background = BlitBuffer.COLOR_WHITE,
-                page_info_container,
-            },
-        }
     else
-        -- right-aligned chevrons style
-        local RightContainer = require("ui/widget/container/rightcontainer")
-        local chevron_left = "chevron.left"
-        local chevron_right = "chevron.right"
-        local chevron_first = "chevron.first"
-        local chevron_last = "chevron.last"
+        -- Bottom bar as in the mockup: thin line on top, "‹ Prev" left, "1 / 4" centred,
+        -- "Next ›" right, with first / last page buttons on the outside (holding Prev / Next
+        -- also jumps to the first / last page).
+        local chevron_left, chevron_right = "chevron.left", "chevron.right"
+        local chevron_first, chevron_last = "chevron.first", "chevron.last"
         if BD.mirroredUILayout() then
             chevron_left, chevron_right = chevron_right, chevron_left
             chevron_first, chevron_last = chevron_last, chevron_first
         end
-        local first_chev = Button:new{ icon = chevron_first, callback = function() self.current_page = 1; self:updatePage() end, bordersize = 0, show_parent = self }
-        local left_chev  = Button:new{ icon = chevron_left,  callback = function() self:onGotoPrevPage() end, bordersize = 0, show_parent = self }
-        local page_text  = Button:new{ text = string.format("%d of %d", self.current_page, self.total_pages), text_font_bold = false, text_font_face = "pgfont", bordersize = 0, show_parent = self }
-        local right_chev = Button:new{ icon = chevron_right, callback = function() self:onGotoNextPage() end, bordersize = 0, show_parent = self }
-        local last_chev  = Button:new{ icon = chevron_last,  callback = function() self.current_page = self.total_pages; self:updatePage() end, bordersize = 0, show_parent = self }
-        first_chev:enableDisable(self.current_page > 1)
-        left_chev:enableDisable(self.current_page > 1)
-        right_chev:enableDisable(self.current_page < self.total_pages)
-        last_chev:enableDisable(self.current_page < self.total_pages)
-        local page_info = HorizontalGroup:new{
-            first_chev, left_chev, page_text, right_chev, last_chev,
+        local has_prev = self.current_page > 1
+        local has_next = self.current_page < self.total_pages
+        local face = Font:getFace("cfont", 13)
+        local icon = Screen:scaleBySize(20)
+        local function pageButton(text, icon_name, icon_first, enabled, callback, hold_callback)
+            local tw = TextWidget:new{ text = text, face = face, bold = enabled,
+                fgcolor = enabled and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_GRAY }
+            local iw = IconWidget:new{ icon = icon_name, width = icon, height = icon, dim = not enabled }
+            local row = icon_first and HorizontalGroup:new{ align = "center", iw, HorizontalSpan:new{ width = Screen:scaleBySize(4) }, tw }
+                or HorizontalGroup:new{ align = "center", tw, HorizontalSpan:new{ width = Screen:scaleBySize(4) }, iw }
+            return TapBox:new{
+                CenterContainer:new{ dimen = Geom:new{ w = row:getSize().w + Screen:scaleBySize(20), h = FOOTER_BAR_HEIGHT }, row },
+                callback = function() if enabled then callback() end end,
+                hold_callback = function() if enabled then hold_callback() end end,
+            }
+        end
+        -- first / last page: icon only, next to Prev / Next
+        local function jumpButton(icon_name, enabled, callback)
+            local iw = IconWidget:new{ icon = icon_name, width = icon, height = icon, dim = not enabled }
+            return TapBox:new{
+                CenterContainer:new{ dimen = Geom:new{ w = icon + Screen:scaleBySize(20), h = FOOTER_BAR_HEIGHT }, iw },
+                callback = function() if enabled then callback() end end,
+            }
+        end
+        local function goFirst() self.current_page = 1; self:updatePage() end
+        local function goLast() self.current_page = self.total_pages; self:updatePage() end
+        local bar_dimen = Geom:new{ w = self.width, h = FOOTER_BAR_HEIGHT }
+        local side = Screen:scaleBySize(12) - Screen:scaleBySize(10) -- mockup padding minus the button's own
+        local bar = OverlapGroup:new{
+            dimen = bar_dimen, allow_mirroring = false,
+            LeftContainer:new{ dimen = bar_dimen, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
+                jumpButton(chevron_first, has_prev, goFirst),
+                pageButton(_("Prev"), chevron_left, true, has_prev,
+                    function() self:onGotoPrevPage() end, goFirst) } },
+            CenterContainer:new{ dimen = bar_dimen, TextWidget:new{
+                text = string.format("%d / %d", self.current_page, self.total_pages), face = face, bold = true } },
+            RightContainer:new{ dimen = bar_dimen, HorizontalGroup:new{
+                pageButton(_("Next"), chevron_right, false, has_next,
+                    function() self:onGotoNextPage() end, goLast),
+                jumpButton(chevron_last, has_next, goLast),
+                HorizontalSpan:new{ width = side } } },
         }
-        local page_info_container = RightContainer:new{
-            dimen = Geom:new{ w = math.floor(self.width * 0.98), h = page_info:getSize().h },
-            page_info,
-        }
-        local FrameContainer = require("ui/widget/container/framecontainer")
         return BottomContainer:new{
             dimen = Geom:new{ w = self.width, h = self.height },
             FrameContainer:new{
-                width = self.width,
-                height = page_info_container:getSize().h,
-                padding = 0, margin = 0, bordersize = 0,
+                width = self.width, padding = 0, margin = 0, bordersize = 0,
                 background = BlitBuffer.COLOR_WHITE,
-                page_info_container,
+                VerticalGroup:new{
+                    LineWidget:new{ dimen = Geom:new{ w = self.width, h = Size.line.medium }, background = BlitBuffer.gray(0.26) },
+                    bar,
+                },
             },
         }
     end
@@ -2116,9 +2078,7 @@ function NotesListWidget:showPaginationStyleMenu()
         self:showSettingsMenu()
     end
     local buttons = {
-        {{ text = check("right")   .. _("Project Title - Right"), callback = function() apply("right")   end }},
-        {{ text = check("left")      .. _("Project Title - Left"),  callback = function() apply("left")      end }},
-        {{ text = check("default")   .. _("Default"),         callback = function() apply("default")   end }},
+        {{ text = check("default")   .. _("Prev / Next Buttons"), callback = function() apply("default")   end }},
         {{ text = check("scrollbar") .. _("Scrollbar"),                           callback = function() apply("scrollbar") end }},
         {{ text = check("scrollbar_chevrons") .. _("Scrollbar + Buttons"),        callback = function() apply("scrollbar_chevrons") end }},
         {{ text = _("Back"), callback = function()
@@ -2751,6 +2711,27 @@ function NotesListWidget:showFilterMenu(show_back)
 
         -- Group 3: Text search
         table.insert(main_buttons, {})
+        -- the search box from the top bar (highlights and notes together)
+        if af.search_any and af.search_any ~= "" then
+            table.insert(main_buttons, {
+                { text = "✓ " .. _("Search: ") .. "\"" .. af.search_any .. "\"", callback = function()
+                    UIManager:close(self.filter_dialog)
+                    self:showSearchDialog()
+                end },
+                { text = _("Clear Search"), callback = function()
+                    self.active_filter.search_any = nil
+                    self:refresh()
+                    showFilterMenu(show_back)
+                end },
+            })
+        else
+            table.insert(main_buttons, {
+                { text = _("Search Highlights and Notes…"), callback = function()
+                    UIManager:close(self.filter_dialog)
+                    self:showSearchDialog()
+                end },
+            })
+        end
         table.insert(main_buttons, {
             { text = mark({"search_highlight"}, _("Filter by Highlight Text")), callback = function()
                 UIManager:close(self.filter_dialog)
@@ -3587,69 +3568,486 @@ function AllNotesViewer:showAllNotes()
     if loading then UIManager:close(loading) end
     UIManager:show(widget)
 end
-function AllNotesViewer:showNoteDetails(note, parent_widget)
-    
-    local ICON_HIGHLIGHT = "\u{2592}\u{2002}"
-    local ICON_NOTE = "\u{F040}\u{2002}"
-
-    local text_parts = {}
-    
-    local note_wrapper = NoteWrapper:new(note)
-    local display_authors = note_wrapper:getDisplayAuthors()
-    if display_authors then
-        local authors_display = note.book_authors:gsub("\n", ", ")
-        table.insert(text_parts, "Author: " .. authors_display .. "\n")
+-- Annotation sheet: opens from the bottom when an annotation is tapped. Shows the whole
+-- highlight in its colour, the note, style and colour choices, and Go to / Copy / Delete.
+local HIGHLIGHT_STYLES = {
+    { "lighten", _("Lighten") }, { "underscore", _("Underline") },
+    { "strikeout", _("Strikeout") }, { "invert", _("Invert") },
+}
+-- Highlight text as the list draws it: one row per wrapped line, each in the highlight's
+-- colour (or underlined / struck through / inverted). Returns the widget and whether the
+-- text was cut to max_lines.
+local function cleanHighlightText(text)
+    local paras = {}
+    for p in ((text or ""):gsub("\r", "") .. "\n"):gmatch("([^\n]*)\n") do
+        p = trimParagraph(p)
+        if p ~= "" then table.insert(paras, p) end
     end
-    
-    if note_wrapper:hasHighlightedText() then
-        if #text_parts > 0 then
-            table.insert(text_parts, "\n")
+    return table.concat(paras, "\n")
+end
+-- in_box: the caller paints the colour behind all lines (rounded box), so lines get no
+-- background of their own, only the text colour and underline/strikeout.
+local function buildHighlightLines(text, face, width, drawer, color, max_lines, in_box)
+    drawer = drawer or "lighten"
+    local h_pad, v_pad = Size.padding.small, 1
+    local line_width = width - h_pad * 2
+    local fg, bg = BlitBuffer.COLOR_BLACK, BlitBuffer.COLOR_WHITE
+    if drawer == "invert" then
+        fg, bg = BlitBuffer.COLOR_WHITE, BlitBuffer.COLOR_BLACK
+    elseif not isNoBackgroundStyle(drawer) then
+        bg = getHighlightColor(color)
+    end
+    local lines, para_end = wrapText(text, face, line_width)
+    local cut = max_lines and #lines > max_lines
+    if cut then
+        local kept = {}
+        for i = 1, max_lines do kept[i] = lines[i] end
+        local last = kept[max_lines]
+        while #last > 0 and measureTextWidth(last .. "…", face) > line_width do last = last:sub(1, -2) end
+        kept[max_lines] = last .. "…"
+        lines = kept
+    end
+    local justify = getJustify() == true
+    local group = VerticalGroup:new{ align = "left" }
+    for i, line in ipairs(lines) do
+        local w
+        if justify and i < #lines and not para_end[i] and not (cut and i == #lines) then
+            w = createJustifiedLine(line, face, line_width, fg)
+        else
+            w = TextWidget:new{ text = line, face = face, fgcolor = fg }
         end
-        table.insert(text_parts, ICON_HIGHLIGHT .. note.highlighted_text)
-    end
-    if note_wrapper:hasUserNote() then
-        if #text_parts > 0 then
-            table.insert(text_parts, "\n\n")
+        local sz = w:getSize()
+        local total_w, total_h = sz.w + h_pad * 2, sz.h + v_pad * 2
+        if drawer == "strikeout" or drawer == "underscore" then
+            local items = { CenterContainer:new{ dimen = Geom:new{ w = total_w, h = total_h }, w } }
+            if drawer == "strikeout" then
+                table.insert(items, StrikeoutLineWidget:new{ width = total_w, height = total_h, y_offset = math.floor(total_h / 2) })
+            else
+                table.insert(items, UnderlineWidget:new{ width = total_w, height = total_h })
+            end
+            table.insert(group, OverlapGroup:new{ dimen = Geom:new{ w = total_w, h = total_h }, unpack(items) })
+        else
+            table.insert(group, FrameContainer:new{
+                padding = v_pad, padding_left = h_pad, padding_right = h_pad,
+                margin = 0, bordersize = 0, background = (not in_box) and bg or nil, w,
+            })
         end
-        table.insert(text_parts, ICON_NOTE .. note.user_note)
     end
+    return group, cut
+end
 
-    local title = note.book_title or _( "Annotation" )
-    local book_exists = note.book_path and lfs.attributes(note.book_path, "mode") ~= nil
-    local has_note = note.user_note and note.user_note ~= ""
-    local goto_text = has_note and _( "Go to Note" ) or _( "Go to Highlight" )
-    local edit_text = has_note and _( "Edit Note" ) or _( "Add Note" )
-    local popup
-    local buttons = {}
-    if book_exists then
-        table.insert(buttons, { text = goto_text, callback = function()
-            UIManager:close(popup)
-            UIManager:close(parent_widget)
-            self:openBookAtNote(note)
-        end })
+-- Fully rounded chip filled with a colour. Draws its own fill row by row, because
+-- FrameContainer's rounded fill leaves square colour corners outside the border on colour screens.
+local Pill = InputContainer:extend{ width = 0, height = 0, fill = nil, border = 1, border_color = nil }
+function Pill:getSize() return Geom:new{ w = self.width, h = self.height } end
+function Pill:paintTo(bb, x, y)
+    self.dimen = Geom:new{ x = x, y = y, w = self.width, h = self.height }
+    local w, h = self.width, self.height
+    local r = math.floor(h / 2)
+    if self.fill then
+        local rgb = not BlitBuffer.isColor8(self.fill)
+        for row = 0, h - 1 do
+            local dy = math.abs(row + 0.5 - h / 2)
+            local inset = math.ceil(r - math.sqrt(math.max(0, r * r - dy * dy)))
+            if rgb then
+                bb:paintRectRGB32(x + inset, y + row, w - inset * 2, 1, self.fill)
+            else
+                bb:paintRect(x + inset, y + row, w - inset * 2, 1, self.fill)
+            end
+        end
     end
-    table.insert(buttons, { text = edit_text, callback = function()
-        UIManager:close(popup)
-        self:editNote(note, parent_widget)
-    end })
-    table.insert(buttons, { text = _( "Style" ), callback = function()
-        UIManager:close(popup)
-        self:showStyleMenu(note, parent_widget)
-    end })
-    table.insert(buttons, { text = _( "Delete" ), callback = function()
-        UIManager:close(popup)
-        self:confirmDelete(note, parent_widget)
-    end })
-    table.insert(buttons, { text = _( "Close" ), callback = function() UIManager:close(popup) end })
+    if self.border > 0 then
+        bb:paintBorder(x, y, w, h, self.border, self.border_color or BlitBuffer.COLOR_BLACK, r,
+            G_reader_settings:nilOrTrue("anti_alias_ui"))
+    end
+    if self[1] then
+        local cs = self[1]:getSize()
+        self[1]:paintTo(bb, x + math.floor((w - cs.w) / 2), y + math.floor((h - cs.h) / 2))
+    end
+end
 
-    popup = TextViewer:new{
-        title = title,
-        text = table.concat(text_parts, ""),
-        width = Screen:getWidth() - Size.margin.fullscreen_popout * 8,
-        height = Screen:getHeight() * 0.7,
-        buttons_table = { buttons },
+local AnnotationSheet = InputContainer:extend{
+    note = nil, viewer = nil, parent_widget = nil,
+}
+function AnnotationSheet:init()
+    self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
+    self.ges_events = {
+        TapOutside = { GestureRange:new{ ges = "tap", range = self.dimen } },
     }
-    UIManager:show(popup)
+    if Device:hasKeys() then
+        self.key_events.Close = { { Input.group.Back } }
+    end
+    self:build()
+end
+-- Row-by-row helpers for rounded shapes we draw ourselves (exact control over corners).
+local function circleInset(r, row) -- distance in from the edge of a radius-r corner on this row
+    local dy = r - row - 0.5
+    if dy <= 0 then return 0 end
+    if dy >= r then return r end
+    return math.ceil(r - math.sqrt(r * r - dy * dy))
+end
+local function paintRow(bb, x, y, w, color)
+    if w <= 0 then return end
+    if BlitBuffer.isColor8(color) then bb:paintRect(x, y, w, 1, color) else bb:paintRectRGB32(x, y, w, 1, color) end
+end
+
+-- Bottom sheet: white panel across the full width, rounded top corners, border on top only.
+local SheetFrame = InputContainer:extend{ width = 0, radius = 0, border = 2, pad_x = 0, pad_top = 0, pad_bottom = 0 }
+function SheetFrame:getSize()
+    return Geom:new{ w = self.width, h = self[1]:getSize().h + self.pad_top + self.pad_bottom + self.border }
+end
+function SheetFrame:paintTo(bb, x, y)
+    local size = self:getSize()
+    self.dimen = Geom:new{ x = x, y = y, w = size.w, h = size.h }
+    local w, h, r, bw = size.w, size.h, self.radius, self.border
+    -- The rounded top is drawn with KOReader's own (anti-aliased) rounded fill and border on
+    -- a scratch copy of the strip under it. That rounded box is wider than the sheet (by
+    -- `ext` on each side), so the corners curve on past the sheet's edges instead of ending
+    -- in a short upright line; only the visible middle and top rows are copied back.
+    local ext = math.floor(r * 0.3)
+    local band_h = math.min(h, r * 2 + bw * 2)
+    local tmp = BlitBuffer.new(w + ext * 2, band_h, bb:getType())
+    tmp:fill(BlitBuffer.COLOR_WHITE)
+    tmp:blitFrom(bb, ext, 0, x, y, w, band_h)
+    tmp:paintRoundedRect(0, 0, w + ext * 2, band_h, BlitBuffer.COLOR_WHITE, r)
+    tmp:paintBorder(0, 0, w + ext * 2, band_h, bw, BlitBuffer.COLOR_BLACK, r, G_reader_settings:nilOrTrue("anti_alias_ui"))
+    bb:blitFrom(tmp, x, y, ext, 0, w, r)
+    tmp:free()
+    bb:paintRect(x, y + r, w, h - r, BlitBuffer.COLOR_WHITE)
+    self[1]:paintTo(bb, x + self.pad_x, y + bw + self.pad_top)
+end
+
+-- Box with rounded corners, filled row by row (so a colour fill looks the same on colour
+-- and black-and-white screens, with no square colour corners), optional outline, padded child.
+local RoundedBox = InputContainer:extend{ width = 0, fill = nil, radius = 0, border = 0, border_color = nil, pad_x = 0, pad_y = 0 }
+function RoundedBox:getSize()
+    return Geom:new{ w = self.width, h = self[1]:getSize().h + self.pad_y * 2 }
+end
+function RoundedBox:paintTo(bb, x, y)
+    local size = self:getSize()
+    self.dimen = Geom:new{ x = x, y = y, w = size.w, h = size.h }
+    local w, h, r = size.w, size.h, self.radius
+    if self.fill then
+        for row = 0, h - 1 do
+            local o = 0
+            if row < r then o = circleInset(r, row) elseif row >= h - r then o = circleInset(r, h - 1 - row) end
+            paintRow(bb, x + o, y + row, w - o * 2, self.fill)
+        end
+    end
+    if self.border > 0 then
+        bb:paintBorder(x, y, w, h, self.border, self.border_color or BlitBuffer.COLOR_BLACK, r,
+            G_reader_settings:nilOrTrue("anti_alias_ui"))
+    end
+    self[1]:paintTo(bb, x + self.pad_x, y + self.pad_y)
+end
+
+-- Draws its child, then a rounded border over it, cutting the child's corners to the curve
+-- (so a filled first/last segment follows the rounded corner, like CSS overflow:hidden).
+local RoundedOutline = InputContainer:extend{ radius = 0, border = 2, color = nil }
+function RoundedOutline:getSize()
+    local cs = self[1]:getSize()
+    return Geom:new{ w = cs.w + self.border * 2, h = cs.h + self.border * 2 }
+end
+function RoundedOutline:paintTo(bb, x, y)
+    local size = self:getSize()
+    self.dimen = Geom:new{ x = x, y = y, w = size.w, h = size.h }
+    local w, h, r = size.w, size.h, self.radius
+    self[1]:paintTo(bb, x + self.border, y + self.border)
+    for row = 0, r - 1 do
+        local o = circleInset(r, row)
+        paintRow(bb, x, y + row, o, BlitBuffer.COLOR_WHITE)
+        paintRow(bb, x + w - o, y + row, o, BlitBuffer.COLOR_WHITE)
+        paintRow(bb, x, y + h - 1 - row, o, BlitBuffer.COLOR_WHITE)
+        paintRow(bb, x + w - o, y + h - 1 - row, o, BlitBuffer.COLOR_WHITE)
+    end
+    bb:paintBorder(x, y, w, h, self.border, self.color or BlitBuffer.COLOR_BLACK, r,
+        G_reader_settings:nilOrTrue("anti_alias_ui"))
+end
+
+-- Text with an underline or a line through it, as a single widget.
+local function decoratedText(tw, deco, color)
+    if not deco then return tw end
+    local sz = tw:getSize()
+    local line_h = Size.line.medium
+    local line = LineWidget:new{ dimen = Geom:new{ w = sz.w, h = line_h }, background = color }
+    if deco == "underline" then
+        return VerticalGroup:new{ tw, line }
+    end
+    -- strikeout: line a little above the middle (x-height middle)
+    return OverlapGroup:new{ dimen = Geom:new{ w = sz.w, h = sz.h }, tw,
+        VerticalGroup:new{ VerticalSpan:new{ width = math.floor(sz.h * 0.55) }, line } }
+end
+
+function AnnotationSheet:build()
+    local note, viewer, parent = self.note, self.viewer, self.parent_widget
+    local nw = NoteWrapper:new(note)
+    local W, H = Screen:getWidth(), Screen:getHeight()
+    -- bottom sheet as in the mockup: full width (in landscape no wider than the list column)
+    local sheet_w = W
+    if W > H then sheet_w = math.min(W, math.floor(H * 1.1)) end
+    local P = Screen:scaleBySize(28)
+    local inner = sheet_w - P * 2
+    local gap = Screen:scaleBySize(18)
+    local label_gap = Screen:scaleBySize(8)
+    -- KOReader's own border sizes (Size.*): scaled for the screen's DPI like all its dialogs
+    local thick = Size.border.thick   -- 2px at 160dpi
+    local thin = Size.border.button   -- 1.5px at 160dpi
+    local LIGHT = BlitBuffer.gray(0.26)        -- #bdbdbd
+    local MUTED = BlitBuffer.gray(0.73)        -- #454545
+    local label_face = Font:getFace("cfont", 11)
+    local group = VerticalGroup:new{ align = "left" }
+    local function sectionLabel(text, right)
+        local lbl = TextWidget:new{ text = text, face = label_face, bold = true, fgcolor = MUTED }
+        if not right then return lbl end
+        local d = Geom:new{ w = inner, h = math.max(lbl:getSize().h, right:getSize().h) }
+        return OverlapGroup:new{ dimen = d, allow_mirroring = false,
+            LeftContainer:new{ dimen = d, lbl }, RightContainer:new{ dimen = d, right } }
+    end
+    local function actionButton(text, callback, primary, width)
+        local tw = TextWidget:new{ text = text, face = Font:getFace("cfont", 15), bold = primary,
+            max_width = width - Screen:scaleBySize(12),
+            fgcolor = primary and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK }
+        local height = Screen:scaleBySize(48)
+        local bw = primary and 0 or thin
+        return TapBox:new{
+            FrameContainer:new{
+                bordersize = bw, radius = Screen:scaleBySize(8), padding = 0, margin = 0,
+                background = primary and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
+                CenterContainer:new{ dimen = Geom:new{ w = width - bw * 2, h = height - bw * 2 }, tw },
+            },
+            callback = callback,
+        }
+    end
+
+    -- 1. book title, info line, close
+    local close_btn = IconButton:new{
+        icon = "close", width = Screen:scaleBySize(22), height = Screen:scaleBySize(22),
+        padding = Screen:scaleBySize(11), allow_flash = false,
+        callback = function() self:onClose() end, show_parent = self,
+    }
+    local close_w = close_btn:getSize().w
+    local text_w = inner - close_w + Screen:scaleBySize(10)
+    local meta = {}
+    local authors = nw:getDisplayAuthors()
+    if authors and authors ~= "Unknown" then table.insert(meta, ((note.book_authors or authors):gsub("\n", ", "))) end
+    if note.chapter and note.chapter ~= "" then table.insert(meta, note.chapter) end
+    local date_text = NoteItemWidget:formatDate(note.datetime)
+    if date_text then table.insert(meta, date_text) end
+    local head = VerticalGroup:new{ align = "left",
+        TextBoxWidget:new{ text = note.book_title or _("Annotation"), face = getFaceOr(SERIF_FONT, 20, "cfont"),
+            bold = true, width = text_w },
+    }
+    if #meta > 0 then
+        table.insert(head, VerticalSpan:new{ width = Screen:scaleBySize(3) })
+        table.insert(head, TextBoxWidget:new{ text = table.concat(meta, " · "), face = Font:getFace("cfont", 12),
+            fgcolor = MUTED, width = text_w })
+    end
+    -- close button pulled up and right like the mockup (-8px / -10px)
+    table.insert(group, HorizontalGroup:new{ align = "top", head,
+        HorizontalSpan:new{ width = inner - text_w - close_w + Screen:scaleBySize(10) },
+        VerticalGroup:new{ VerticalSpan:new{ width = 0 }, close_btn } })
+    table.insert(group, VerticalSpan:new{ width = gap - Screen:scaleBySize(8) })
+
+    -- 2. the highlight in a rounded box: filled with its colour (Lighten) or black (Invert),
+    -- or white with a light outline (Underline/Strikeout, whose lines are drawn on the text).
+    -- Long ones are cut and open in full on tap.
+    if nw:hasHighlightedText() then
+        local drawer = note.drawer or "lighten"
+        local no_fill = isNoBackgroundStyle(drawer)
+        local fill
+        if drawer == "invert" then
+            fill = BlitBuffer.COLOR_BLACK
+        elseif not no_fill then
+            -- same colour value and the same drawing call (paintRectRGB32) as the list's lines,
+            -- so the screen turns it into exactly the same shade there and here
+            fill = getHighlightColor(note.color)
+        end
+        local quote_text = cleanHighlightText(note.highlighted_text)
+        local content_face = select(3, getNoteFaces())
+        local max_lines = math.max(3, math.floor(H * 0.28 / (getLineHeight(content_face) + 2)))
+        local pad_v, pad_h = Screen:scaleBySize(10), Screen:scaleBySize(12)
+        local ob = Size.border.thin
+        -- same outer size for every style: the outline (when shown) takes the place of padding
+        local bw = no_fill and ob or 0
+        local lines, cut = buildHighlightLines(quote_text, content_face, inner - (pad_h + ob) * 2,
+            drawer, note.color, max_lines, true)
+        local box = RoundedBox:new{
+            width = inner, fill = fill or BlitBuffer.COLOR_WHITE, radius = Screen:scaleBySize(6),
+            border = bw, border_color = LIGHT, pad_x = pad_h + ob, pad_y = pad_v + ob,
+            lines,
+        }
+        table.insert(group, cut and TapBox:new{ box, callback = function()
+            UIManager:show(TextViewer:new{ title = note.book_title or _("Annotation"), text = quote_text })
+        end } or box)
+        if cut then
+            table.insert(group, VerticalSpan:new{ width = Screen:scaleBySize(4) })
+            table.insert(group, TextWidget:new{ text = _("Tap the highlight to read all of it"),
+                face = Font:getFace("cfont", 12), fgcolor = MUTED })
+        end
+        table.insert(group, VerticalSpan:new{ width = gap })
+    end
+
+    -- 3. note, with an underlined Edit / Add note link
+    local has_note = nw:hasUserNote()
+    local link = TextWidget:new{ text = has_note and _("Edit") or _("Add note"), face = Font:getFace("cfont", 13) }
+    local edit_link = TapBox:new{
+        decoratedText(link, "underline", BlitBuffer.COLOR_BLACK),
+        callback = function()
+            viewer:editNote(note, parent, function() self:rebuild() end)
+        end,
+    }
+    table.insert(group, sectionLabel(_("YOUR NOTE"), edit_link))
+    table.insert(group, VerticalSpan:new{ width = Screen:scaleBySize(6) })
+    if has_note then
+        table.insert(group, TextBoxWidget:new{
+            text = note.user_note, face = Font:getFace("cfont", 15), width = inner, line_height = 0.45,
+            height = math.min(Screen:scaleBySize(120), math.floor(H * 0.18)),
+            height_adjust = true, height_overflow_show_ellipsis = true,
+        })
+    else
+        table.insert(group, TextWidget:new{ text = _("No note yet."), face = Font:getFace("cfont", 15), fgcolor = MUTED })
+    end
+    table.insert(group, VerticalSpan:new{ width = gap })
+
+    -- 4. style: one bordered row of four; Underline/Strikeout labels show their line;
+    -- the chosen one is filled black with white bold text and a ✓
+    table.insert(group, sectionLabel(_("STYLE")))
+    table.insert(group, VerticalSpan:new{ width = label_gap })
+    local current = note.drawer or "lighten"
+    local cell_w = math.floor((inner - thin * 2 - thin * 3) / 4)
+    local cell_h = Screen:scaleBySize(44)
+    local seg = HorizontalGroup:new{}
+    local ui_face = Font:getFace("cfont", 14)
+    for i, st in ipairs(HIGHLIGHT_STYLES) do
+        local key = st[1]
+        local on = (current == key)
+        if i > 1 then
+            table.insert(seg, LineWidget:new{ dimen = Geom:new{ w = thin, h = cell_h }, background = BlitBuffer.COLOR_BLACK })
+        end
+        local color = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK
+        local tw = TextWidget:new{ text = st[2], face = ui_face, bold = on, fgcolor = color,
+            max_width = cell_w - Screen:scaleBySize(24) }
+        local deco = (key == "underscore" and "underline") or (key == "strikeout" and "strike") or nil
+        local label = HorizontalGroup:new{ align = "center", decoratedText(tw, deco, color) }
+        if on then table.insert(label, TextWidget:new{ text = " ✓", face = ui_face, bold = true, fgcolor = color }) end
+        table.insert(seg, TapBox:new{
+            FrameContainer:new{
+                bordersize = 0, padding = 0, margin = 0,
+                background = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
+                CenterContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h }, label },
+            },
+            callback = function()
+                if not on then
+                    viewer:setHighlightField(note, "drawer", key, parent)
+                    self:rebuild()
+                end
+            end,
+        })
+    end
+    table.insert(group, RoundedOutline:new{ radius = Screen:scaleBySize(8), border = thin, seg })
+    table.insert(group, VerticalSpan:new{ width = gap })
+
+    -- 5. colour: white rounded chips with a colour dot and the name; the chosen one has a
+    -- thick black border, bold name and ✓. Widths are worked out for the bold+✓ version so
+    -- choosing a colour never reflows the rows.
+    table.insert(group, sectionLabel(_("COLOUR")))
+    table.insert(group, VerticalSpan:new{ width = label_gap })
+    local cur_color = nw:getNormalizedColor()
+    local chip_h = Screen:scaleBySize(36)
+    local chip_gap = Screen:scaleBySize(8)
+    local dot = Screen:scaleBySize(16)
+    local chip_face = Font:getFace("cfont", 13)
+    local rows = VerticalGroup:new{ align = "left" }
+    local row, row_w = HorizontalGroup:new{}, 0
+    for _i, c in ipairs(ReaderHighlight.highlight_colors) do
+        local key, name = c[2], c[1]
+        local on = (cur_color == key)
+        local widest = TextWidget:new{ text = name .. " ✓", face = chip_face, bold = true }:getSize().w
+        local label = HorizontalGroup:new{ align = "center",
+            Pill:new{ width = dot, height = dot, border = 0,
+                fill = key == "gray" and BlitBuffer.COLOR_GRAY or getHighlightColor(key) },
+            HorizontalSpan:new{ width = Screen:scaleBySize(6) },
+            TextWidget:new{ text = on and (name .. " ✓") or name, face = chip_face, bold = on },
+        }
+        -- padding 0 12px 0 8px, as in the mockup
+        local pad_l, pad_r = Screen:scaleBySize(8), Screen:scaleBySize(12)
+        local chip_w = pad_l + dot + Screen:scaleBySize(6) + widest + pad_r
+        local chip = TapBox:new{
+            Pill:new{
+                width = chip_w, height = chip_h,
+                -- Pill centres its child, so this box is pad_l in from both sides
+                LeftContainer:new{ dimen = Geom:new{ w = chip_w - pad_l * 2, h = chip_h }, label },
+                fill = BlitBuffer.COLOR_WHITE,
+                border = on and thick or thin,
+                border_color = on and BlitBuffer.COLOR_BLACK or LIGHT,
+            },
+            callback = function()
+                if not on then
+                    viewer:setHighlightField(note, "color", key, parent)
+                    self:rebuild()
+                end
+            end,
+        }
+        if row_w > 0 and row_w + chip_gap + chip_w > inner then
+            table.insert(rows, row)
+            table.insert(rows, VerticalSpan:new{ width = chip_gap })
+            row, row_w = HorizontalGroup:new{}, 0
+        end
+        if row_w > 0 then table.insert(row, HorizontalSpan:new{ width = chip_gap }); row_w = row_w + chip_gap end
+        table.insert(row, chip)
+        row_w = row_w + chip_w
+    end
+    if row_w > 0 then table.insert(rows, row) end
+    table.insert(group, rows)
+    table.insert(group, VerticalSpan:new{ width = gap + Screen:scaleBySize(4) })
+
+    -- 6. actions: Go to (twice as wide) and Delete
+    local btn_gap = Screen:scaleBySize(10)
+    local btn_row = HorizontalGroup:new{}
+    local can_open = note.book_path and lfs.attributes(note.book_path, "mode") ~= nil
+    local unit = math.floor((inner - btn_gap) / 3)
+    if can_open then
+        table.insert(btn_row, actionButton(has_note and _("Go to note") or _("Go to highlight"), function()
+            self:onClose()
+            UIManager:close(parent)
+            viewer:openBookAtNote(note)
+        end, true, inner - btn_gap - unit))
+        table.insert(btn_row, HorizontalSpan:new{ width = btn_gap })
+    end
+    table.insert(btn_row, actionButton(_("Delete"), function()
+        self:onClose()
+        viewer:confirmDelete(note, parent)
+    end, false, can_open and unit or inner))
+    table.insert(group, btn_row)
+
+    self.sheet = SheetFrame:new{
+        width = sheet_w, radius = Screen:scaleBySize(14), border = thick,
+        pad_x = P, pad_top = Screen:scaleBySize(18), pad_bottom = Screen:scaleBySize(24),
+        group,
+    }
+    local sheet_h = self.sheet:getSize().h
+    self[1] = BottomContainer:new{
+        dimen = Geom:new{ w = W, h = H },
+        CenterContainer:new{ dimen = Geom:new{ w = W, h = sheet_h }, self.sheet },
+    }
+end
+function AnnotationSheet:rebuild()
+    self:build()
+    UIManager:setDirty(self, "ui")
+end
+function AnnotationSheet:onTapOutside(_, ges)
+    local d = self.sheet and self.sheet.dimen
+    if d and ges and ges.pos and ges.pos:intersectWith(d) then return true end
+    self:onClose()
+    return true
+end
+function AnnotationSheet:onClose()
+    UIManager:close(self, "ui", self.sheet and self.sheet.dimen)
+    return true
+end
+
+function AllNotesViewer:showNoteDetails(note, parent_widget)
+    UIManager:show(AnnotationSheet:new{ note = note, viewer = self, parent_widget = parent_widget }, "ui")
 end
 function AllNotesViewer:showColorPicker(note, parent_widget)
     local RadioButtonWidget = require("ui/widget/radiobuttonwidget")
@@ -3759,7 +4157,7 @@ function AllNotesViewer:setHighlightField(note, field, value, parent_widget, don
     if updated then
         self:clearBookCache(note.book_path)
         updateListedNote(parent_widget, note, function(n) n[field] = value end)
-        UIManager:show(InfoMessage:new{ text = done_text, timeout = 1 })
+        if done_text then UIManager:show(InfoMessage:new{ text = done_text, timeout = 1 }) end
     end
 end
 function AllNotesViewer:updateHighlightStyle(note, new_style, parent_widget)
@@ -3814,7 +4212,7 @@ function AllNotesViewer:deleteAnnotation(note, parent_widget)
         updateListedNote(parent_widget, note, function(_, i) table.remove(parent_widget.notes_list, i) end)
     end
 end
-function AllNotesViewer:editNote(note, parent_widget)
+function AllNotesViewer:editNote(note, parent_widget, on_done)
     local InputDialog = require("ui/widget/inputdialog")
     local input_dialog
     input_dialog = InputDialog:new{
@@ -3838,6 +4236,7 @@ function AllNotesViewer:editNote(note, parent_widget)
                         local new_note_text = input_dialog:getInputText()
                         UIManager:close(input_dialog)
                         self:saveNoteEdit(note, new_note_text, parent_widget)
+                        if on_done then on_done() end
                     end,
                 },
             },
