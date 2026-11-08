@@ -6156,9 +6156,9 @@ function SS:build()
         add(fieldChips(_("Duplicate check"), _("Repeated info is hidden when these match"), getDedupInfoFields, "dedup_info_fields"))
     else
         add(sectionBar(_("LIST")))
-        add(navRow(_("Text"), string.format("%d · %d · %d", getTitleFontSize(), getInfoFontSize(), getContentFontSize()),
+        add(navRow(_("Text"), _("Fonts, sizes, capitals"),
             function() UIManager:show(SS:new{ list = list, page = "text", parent_screen = self }, "flashui") end))
-        add(navRow(_("Spacing"), string.format("%d · %d", getSetting("h_margin", DEFAULT_H_MARGIN), getSetting("note_spacing", DEFAULT_NOTE_SPACING)),
+        add(navRow(_("Spacing"), _("Margins, lines, notes"),
             function() UIManager:show(SS:new{ list = list, page = "spacing", parent_screen = self }, "flashui") end))
         do
             local names = {}
