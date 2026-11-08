@@ -607,21 +607,57 @@ end
 
 -- Text of the line above each highlight (chapter · date), or "" when the row is turned off.
 -- The author is shown in the book header instead (see getHeaderAuthor).
-local function buildInfoText(note, note_wrapper, skip_title) -- luacheck: ignore 212
+local function buildInfoText(note, note_wrapper, skip_title, hide_chapter) -- luacheck: ignore 212
     if not getShowInfo() then return "" end
     local info_fields = {}
     for f in getInfoFields():gmatch("[^,]+") do info_fields[f] = true end
     local info_parts = {}
-    if info_fields["chapter"] and note.chapter and note.chapter ~= "" then
-        -- "1." or "12" on its own reads oddly; show it as "Chapter 1"
-        local num = note.chapter:match("^%s*(%d+)[%.%s]*$")
-        table.insert(info_parts, num and (_("Chapter") .. " " .. num) or note.chapter)
+    if info_fields["chapter"] and not hide_chapter and note.chapter and note.chapter ~= "" then
+        table.insert(info_parts, NoteItemWidget.chapterLabel(note.chapter))
     end
     local date_text = NoteItemWidget:formatDate(note.datetime) or ""
     if info_fields["date"] and date_text ~= "" then table.insert(info_parts, date_text) end
     return table.concat(info_parts, " · ")
 end
 
+-- "1." or "12" on its own reads oddly; show it as "Chapter 1"
+function NoteItemWidget.chapterLabel(chapter)
+    local num = chapter:match("^%s*(%d+)[%.%s]*$")
+    return num and (_("Chapter") .. " " .. num) or chapter
+end
+-- Chapter heading shown in the one-book list when the chapter changes (and at the top of a page).
+function NoteItemWidget.headingHeight()
+    return Screen:scaleBySize(30)
+end
+function NoteItemWidget.chapterHeading(chapter, width)
+    local h_margin = getHMargin()
+    local pad = Size.padding.default
+    local tw = TextWidget:new{ text = NoteItemWidget.chapterLabel(chapter),
+        face = getFaceOr(SERIF_FONT, 15, "cfont"), bold = true, fgcolor = COLORS.ink,
+        max_width = width - h_margin * 2 - pad * 2 }
+    return HorizontalGroup:new{ HorizontalSpan:new{ width = h_margin + pad },
+        BottomContainer:new{ dimen = Geom:new{ w = tw:getSize().w, h = NoteItemWidget.headingHeight() },
+            VerticalGroup:new{ tw, VerticalSpan:new{ width = Screen:scaleBySize(6) } } } }
+end
+-- Search words found in one line of text: list of { x, w } (pixels) to underline.
+function NoteItemWidget.searchMarks(line, query, case_sensitive, face)
+    local marks = {}
+    local text = case_sensitive and line or line:lower()
+    local q = case_sensitive and query or query:lower()
+    for word in q:gmatch("%S+") do
+        local from = 1
+        while true do
+            local a, b = text:find(word, from, true)
+            if not a then break end
+            local pre = TextWidget:new{ text = line:sub(1, a - 1), face = face }
+            local mid = TextWidget:new{ text = line:sub(a, b), face = face }
+            table.insert(marks, { x = pre:getSize().w, w = mid:getSize().w })
+            pre:free(); mid:free()
+            from = b + 1
+        end
+    end
+    return marks
+end
 -- Author shown on the right of the book header, in capitals; nil when off.
 local function getHeaderAuthor(note_wrapper)
     if not getShowInfo() then return nil end
@@ -663,7 +699,7 @@ local function measureNoteHeight(note, width, skip_title, skip_info)
             getHeaderAuthor(note_wrapper), title_face, info_face, content_width)
         h = h + header_h + getTitleMargin()
     end
-    local info_text = buildInfoText(note, note_wrapper, skip_title)
+    local info_text = buildInfoText(note, note_wrapper, skip_title, NoteItemWidget.measure_hide_chapter)
     local info_visible = not skip_info and info_text ~= ""
     if info_visible then
         h = h + getBoxHeight(info_text, info_face, content_width, false)
@@ -701,7 +737,7 @@ local function getLayoutSignature(width)
         width, getHMargin(), getTextMargin(), getTitleMargin(), getInfoMargin(),
         getTitleFontSize(), getInfoFontSize(), getContentFontSize(),
         tostring(getTitleFont()), tostring(getInfoFont()), tostring(getContentFont()),
-        tostring(getTruncateLines()), tostring(getShowInfo()), getInfoFields(),
+        tostring(getTruncateLines()), tostring(getShowInfo()), getInfoFields(), tostring(NoteItemWidget.measure_hide_chapter),
         os.date("%Y%m%d"), -- "Today"/"Yesterday" labels change the info row text
     }, "|")
 end
@@ -775,7 +811,7 @@ function NoteItemWidget:init()
 
     local drawer = self.note.drawer or "lighten"
     local show_info_header = getShowInfo()
-    local info_text = buildInfoText(self.note, note_wrapper, self.skip_title)
+    local info_text = buildInfoText(self.note, note_wrapper, self.skip_title, self.show_parent and self.show_parent.single_book)
 
     -- Same colour and same kind of text widget as the tabs (a single-line TextWidget) when it
     -- fits on one line, so it renders exactly like them; the box keeps the measured height.
@@ -881,6 +917,25 @@ function NoteItemWidget:init()
                     line_widget = createJustifiedLine(line, content_face, line_width, text_fgcolor)
                 else
                     line_widget = TextWidget:new{ text = line, face = content_face, fgcolor = text_fgcolor }
+                end
+            end
+            -- search words get a thick line underneath (not on stretched justified lines)
+            local af = self.show_parent and self.show_parent.active_filter
+            local stretched = justify == true and i < #lines and #lines > 1 and not para_end[i]
+            if af and af.search_any and af.search_any ~= "" and not self.is_preview and not stretched then
+                local marks = NoteItemWidget.searchMarks(line, af.search_any, af.search_any_case == true, content_face)
+                if #marks > 0 then
+                    local lw = line_widget:getSize()
+                    local thick = math.max(2, Screen:scaleBySize(2))
+                    local og = OverlapGroup:new{ dimen = Geom:new{ w = lw.w, h = lw.h }, line_widget }
+                    for _m, mk in ipairs(marks) do
+                        if mk.x < lw.w then
+                            local mark = LineWidget:new{ dimen = Geom:new{ w = math.min(mk.w, lw.w - mk.x), h = thick }, background = BlitBuffer.COLOR_BLACK }
+                            mark.overlap_offset = { mk.x, lw.h - thick }
+                            table.insert(og, mark)
+                        end
+                    end
+                    line_widget = og
                 end
             end
             local line_size = line_widget:getSize()
@@ -1373,12 +1428,17 @@ function NotesListWidget:calculatePages()
     local note_width = self.note_width
     -- pages on which a new book starts, for the marks next to the scrollbar
     self.book_start_pages = {}
+    NoteItemWidget.measure_hide_chapter = self.single_book and true or false
     local layout_sig = getLayoutSignature(note_width)
+    local head_h = NoteItemWidget.headingHeight()
+    local prev_chapter = nil
     for i, note in ipairs(self.filtered_notes) do
         local is_first_on_page = (#current_page_notes == 0)
         local skip_title, skip_info = getHeaderSkips(note, is_first_on_page, dedup_prev_title, dedup_prev_info_key, dedup_fields)
         if self.single_book then skip_title = true end
         local item_height = getNoteHeight(note, note_width, skip_title, skip_info, layout_sig)
+        local has_ch = self.single_book and note.chapter and note.chapter ~= ""
+        if has_ch and (is_first_on_page or note.chapter ~= prev_chapter) then item_height = item_height + head_h end
         local spacing = 0
         if not is_first_on_page then
             spacing = note_spacing + (skip_title and 0 or BOOK_GAP)
@@ -1393,8 +1453,9 @@ function NotesListWidget:calculatePages()
             current_page_notes = {i}
             local st, si = getHeaderSkips(note, true, dedup_prev_title, dedup_prev_info_key, dedup_fields)
             if self.single_book then st = true end
-            current_height = getNoteHeight(note, note_width, st, si, layout_sig)
+            current_height = getNoteHeight(note, note_width, st, si, layout_sig) + (has_ch and head_h or 0)
         end
+        prev_chapter = note.chapter
         if note.book_title ~= dedup_prev_title then
             self.book_start_pages[#self.pages + 1] = true
         end
@@ -1919,6 +1980,7 @@ function NotesListWidget:updatePage()
     end
 
     local page_indices = self.pages[self.current_page] or {}
+    local prev_chapter = nil
     local last_note_widget = nil
     -- vertical extent of each drawn annotation (relative to the top of the notes area),
     -- used by onTap() to find what was tapped
@@ -1951,6 +2013,11 @@ function NotesListWidget:updatePage()
                 table.insert(notes_group, VerticalSpan:new{ width = gap })
                 row_y = row_y + gap
             end
+            if self.single_book and note.chapter and note.chapter ~= "" and (is_first_on_page or note.chapter ~= prev_chapter) then
+                table.insert(notes_group, place(NoteItemWidget.chapterHeading(note.chapter, note_width)))
+                row_y = row_y + NoteItemWidget.headingHeight()
+            end
+            prev_chapter = note.chapter
             local note_widget = NoteItemWidget:new{ width = note_width, note = note, show_parent = self, skip_title = skip_title, skip_info = skip_info }
             table.insert(notes_group, place(note_widget))
             table.insert(tap_rows, { top = row_y, bottom = row_y + note_widget.dimen.h, note = note })
@@ -1958,6 +2025,33 @@ function NotesListWidget:updatePage()
             if i == #page_indices then last_note_widget = note_widget end
             dedup_prev_title = note.book_title
             dedup_prev_info_key = getNoteInfoKey(note, dedup_fields)
+        end
+    end
+
+    -- Last page of a filtered list: say how many annotations the filters hide, with a way back
+    if #page_indices > 0 and self.current_page == self.total_pages then
+        local active = false
+        for k, v in pairs(self.active_filter or {}) do
+            if k ~= "notes_presence" and v and (type(v) ~= "table" or next(v)) then active = true end
+        end
+        local hidden = #self.notes_list - #self.filtered_notes
+        if active and hidden > 0 then
+            local used = 0
+            for _i, w in ipairs(notes_group) do if w.getSize then used = used + w:getSize().h end end
+            local face = Font:getFace("cfont", 13)
+            local msg = TextWidget:new{ text = string.format(hidden == 1 and _("1 more annotation is hidden by filters") or _("%d more annotations are hidden by filters"), hidden),
+                face = face, fgcolor = COLORS.muted, max_width = self.note_width - 2 * getHMargin() }
+            local link = TextWidget:new{ text = _("Show all"), face = face }
+            local line = LineWidget:new{ dimen = Geom:new{ w = link:getSize().w, h = Size.line.medium }, background = BlitBuffer.COLOR_BLACK }
+            local gap = Screen:scaleBySize(16)
+            local box_h = gap + msg:getSize().h + Screen:scaleBySize(8) + link:getSize().h + line:getSize().h + gap
+            if used + box_h <= self.height - self.title_height - self.footer_height then
+                table.insert(notes_group, place(CenterContainer:new{ dimen = Geom:new{ w = self.note_width, h = box_h },
+                    VerticalGroup:new{ align = "center", msg, VerticalSpan:new{ width = Screen:scaleBySize(8) },
+                        VerticalGroup:new{ link, line } } }))
+                table.insert(tap_rows, { top = used + gap + msg:getSize().h, bottom = used + box_h,
+                    action = function() self:clearFilters() end })
+            end
         end
     end
 
@@ -3000,6 +3094,7 @@ function NotesListWidget:onTap(_, ges)
     local rel_y = tap_y - (self.tap_rows_origin_y or self.title_height)
     for _, row in ipairs(self.tap_rows or {}) do
         if rel_y >= row.top and rel_y < row.bottom then
+            if row.action then row.action() return true end
             self:onNoteSelected(row.note)
             return true
         end
@@ -3855,6 +3950,7 @@ function AnnotationSheet:build()
     if note.chapter and note.chapter ~= "" then table.insert(meta, note.chapter) end
     local date_text = NoteItemWidget:formatDate(note.datetime)
     if date_text then table.insert(meta, date_text) end
+    if tonumber(note.page) and tonumber(note.page) > 0 then table.insert(meta, _("page") .. " " .. tostring(tonumber(note.page))) end
     local head = VerticalGroup:new{ align = "left",
         TextBoxWidget:new{ text = note.book_title or _("Annotation"), face = getFaceOr(SERIF_FONT, 20, "cfont"),
             bold = true, width = text_w },
