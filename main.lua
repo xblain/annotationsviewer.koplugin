@@ -4250,6 +4250,58 @@ end
 -- Shared title bar for full-screen pages (Filter & sort, pickers): same height, icon size,
 -- spacing and serif title as the list's top bar; ‹ on the left, ✕ on the right (both cancel).
 local Page = {} -- shared pieces of the full-screen pages (kept in one table: Lua allows 200 locals)
+-- A tick (or ✕) drawn with plain white strokes, so it shows on every device (no icon file, no font glyph)
+Page.Glyph = WidgetContainer:extend{ kind = "check", size = 18 }
+function Page.Glyph:getSize() return Geom:new{ w = self.size, h = self.size } end
+function Page.Glyph:paintTo(bb, x, y)
+    local s = self.size
+    local t = math.max(2, Screen:scaleBySize(2))
+    local function stroke(x1, y1, x2, y2)
+        local steps = math.max(math.abs(x2 - x1), math.abs(y2 - y1))
+        for i = 0, steps do
+            local f = steps > 0 and i / steps or 0
+            bb:paintRect(x + math.floor(x1 + (x2 - x1) * f), y + math.floor(y1 + (y2 - y1) * f), t, t, BlitBuffer.COLOR_WHITE)
+        end
+    end
+    if self.kind == "check" then
+        stroke(s * 0.12, s * 0.52, s * 0.38, s * 0.78)
+        stroke(s * 0.38, s * 0.78, s * 0.88, s * 0.2)
+    else
+        stroke(s * 0.2, s * 0.2, s * 0.8, s * 0.8)
+        stroke(s * 0.8, s * 0.2, s * 0.2, s * 0.8)
+    end
+end
+-- KOReader's own "check" / "close" icon in white. KOReader icons are black on white, so the icon is
+-- painted onto a white scratch buffer, inverted by hand and copied over: this does not depend on
+-- IconWidget's `invert` flag or its alpha handling, which is what showed up as white boxes before.
+-- If the icon file is missing (or comes out blank) the drawn Glyph above is used instead.
+Page.IconMark = WidgetContainer:extend{ icon = "check", size = 18 }
+function Page.IconMark:init()
+    self.iw = IconWidget:new{ icon = self.icon, width = self.size, height = self.size }
+    self.glyph = Page.Glyph:new{ kind = self.icon == "close" and "close" or "check", size = self.size }
+    self.missing = tostring(self.iw.file or ""):find("icon-not-found", 1, true) ~= nil
+    if self.missing then logger.warn("AnnotationsViewer: KOReader icon '" .. self.icon .. "' not found, drawing it instead") end
+end
+function Page.IconMark:getSize() return Geom:new{ w = self.size, h = self.size } end
+function Page.IconMark:paintTo(bb, x, y)
+    if self.missing then return self.glyph:paintTo(bb, x, y) end
+    local n = self.size
+    local tmp = BlitBuffer.new(n, n, bb:getType())
+    tmp:fill(BlitBuffer.COLOR_WHITE)
+    self.iw:paintTo(tmp, 0, 0)
+    -- blank (all white) result: nothing visible from the icon, draw the tick ourselves
+    local dark = false
+    for yy = 0, n - 1, 2 do
+        for xx = 0, n - 1, 2 do
+            if tmp:getPixel(xx, yy):getColor8().a < 200 then dark = true; break end
+        end
+        if dark then break end
+    end
+    if not dark then tmp:free(); return self.glyph:paintTo(bb, x, y) end
+    tmp:invertRect(0, 0, n, n)
+    bb:blitFrom(tmp, x, y, 0, 0, n, n)
+    tmp:free()
+end
 function Page.header(owner, title, on_back, right_items, no_back, on_close)
     local W = Screen:getWidth()
     local side = Screen:scaleBySize(8)
@@ -5855,11 +5907,11 @@ function ListPicker:build()
         if st == "exc" then
             mark = RoundedBox:new{ width = box, radius = Screen:scaleBySize(5), fill = COLORS.ink, pad_x = 0, pad_y = 0,
                 CenterContainer:new{ dimen = Geom:new{ w = box, h = box },
-                    IconWidget:new{ icon = "close", width = Screen:scaleBySize(16), height = Screen:scaleBySize(16), invert = true } } }
+                    Page.IconMark:new{ icon = "close", size = Screen:scaleBySize(16) } } }
         elseif st then
             mark = RoundedBox:new{ width = box, radius = Screen:scaleBySize(5), fill = COLORS.ink, pad_x = 0, pad_y = 0,
                 CenterContainer:new{ dimen = Geom:new{ w = box, h = box },
-                    IconWidget:new{ icon = "check", width = Screen:scaleBySize(18), height = Screen:scaleBySize(18), invert = true } } }
+                    Page.IconMark:new{ icon = "check", size = Screen:scaleBySize(18) } } }
         else
             mark = RoundedBox:new{ width = box, radius = Screen:scaleBySize(5), border = Size.border.button, border_color = COLORS.ink,
                 fill = BlitBuffer.COLOR_WHITE, pad_x = 0, pad_y = 0, VerticalSpan:new{ width = box } }
@@ -5880,8 +5932,9 @@ function ListPicker:build()
             LeftContainer:new{ dimen = rd, HorizontalGroup:new{ align = "center", mark, HorizontalSpan:new{ width = Screen:scaleBySize(14) }, texts } },
             RightContainer:new{ dimen = rd, count } },
             callback = function()
-                -- tap: this side, or clear it; hold: the other side
-                self:set(key, (self:state(key) == self.mode) and nil or self.mode)
+                -- tap: clear a marked item, or mark it with the switch's side
+                -- (not `x and nil or y`: nil is false in Lua, that always gives y)
+                if self:state(key) then self:set(key, nil) else self:set(key, self.mode) end
                 self:changed()
             end })
         table.insert(rows, LineWidget:new{ dimen = Geom:new{ w = rinner, h = Size.line.thin }, background = COLORS.line_light })
