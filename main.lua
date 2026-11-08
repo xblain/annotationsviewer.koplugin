@@ -4075,13 +4075,13 @@ end
 -- Shared title bar for full-screen pages (Filter & sort, pickers): same height, icon size,
 -- spacing and serif title as the list's top bar; ‹ on the left, ✕ on the right (both cancel).
 local Page = {} -- shared pieces of the full-screen pages (kept in one table: Lua allows 200 locals)
-function Page.header(owner, title, on_back, right_items, no_back)
+function Page.header(owner, title, on_back, right_items, no_back, on_close)
     local W = Screen:getWidth()
     local side = Screen:scaleBySize(8)
     local d = Geom:new{ w = W, h = TOPBAR_HEIGHT }
     local right = HorizontalGroup:new{ align = "center" }
     for _i, it in ipairs(right_items or {}) do table.insert(right, it) end
-    table.insert(right, newHeaderButton("close", on_back, owner, nil, false))
+    table.insert(right, newHeaderButton("close", on_close or on_back, owner, nil, false))
     table.insert(right, HorizontalSpan:new{ width = side })
     local right_w = right:getSize().w
     local left_w = side + HEADER_ICON_SIZE + HEADER_ICON_PAD * 2 + side
@@ -4205,6 +4205,31 @@ function Page.preview(list, h)
     return VerticalGroup:new{ align = "left",
         Page.PreviewClip:new{ w = W, h = h, g },
         LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line } }
+end
+-- Full-screen pages: rebuild for the new size when the screen was rotated.
+function Page.watchResize(cls)
+    function cls:paintTo(bb, x, y)
+        local W, H = Screen:getWidth(), Screen:getHeight()
+        if self.dimen and (self.dimen.w ~= W or self.dimen.h ~= H) and not self._resize_pending then
+            self._resize_pending = true
+            UIManager:nextTick(function()
+                self._resize_pending = nil
+                self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
+                if self.rebuild then self:rebuild() else self:build() end
+                UIManager:setDirty(self, "full")
+            end)
+        end
+        InputContainer.paintTo(self, bb, x, y)
+    end
+end
+-- ✕ on a sub page: close it and every page under it, back to the list.
+function Page.exitAll(w)
+    local first = true
+    while w do
+        UIManager:close(w, first and "flashui" or nil)
+        first = false
+        w = w.parent_screen or w.parent
+    end
 end
 function Page.countText(n)
     return n == 1 and _("Show 1 annotation") or string.format(_("Show %d annotations"), n)
@@ -4492,6 +4517,7 @@ local SORT_CHOICES = {
     { "book_location_asc", _("Position in book") },
 }
 local FilterScreen = InputContainer:extend{ list = nil, helpers = nil, covers_fullscreen = true }
+Page.watchResize(FilterScreen)
 function FilterScreen:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
     self.saved_filter = deepCopy(self.list.active_filter or {})
@@ -4776,7 +4802,7 @@ function FilterScreen:build()
                 list.active_filter = {}
                 self:changed()
             end },
-    })
+    }, true)
     local footer = Page.footer(function() self:onClose() end, Page.countText(#(list.filtered_notes or {})),
         function() self:onDone() end)
 
@@ -4847,7 +4873,8 @@ end
 -- dialogs. Every setting is still here; changes apply straight away. The list-of-numbers
 -- settings (font sizes, margins, spacing) and the typeface picker keep their own dialogs.
 do -- own scope: keeps the main chunk under Lua's 200-locals limit
-local SS = InputContainer:extend{ list = nil, page = nil, covers_fullscreen = true }
+local SS = InputContainer:extend{ list = nil, page = nil, parent_screen = nil, covers_fullscreen = true }
+Page.watchResize(SS)
 NotesListWidget.SettingsScreen = SS
 function SS:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
@@ -5052,9 +5079,9 @@ function SS:build()
     else
         add(sectionBar(_("LIST")))
         add(navRow(_("Text"), string.format("%d · %d · %d", getTitleFontSize(), getInfoFontSize(), getContentFontSize()),
-            function() UIManager:show(SS:new{ list = list, page = "text" }, "flashui") end))
+            function() UIManager:show(SS:new{ list = list, page = "text", parent_screen = self }, "flashui") end))
         add(navRow(_("Spacing"), string.format("%d · %d", getSetting("h_margin", DEFAULT_H_MARGIN), getSetting("note_spacing", DEFAULT_NOTE_SPACING)),
-            function() UIManager:show(SS:new{ list = list, page = "spacing" }, "flashui") end))
+            function() UIManager:show(SS:new{ list = list, page = "spacing", parent_screen = self }, "flashui") end))
         do
             local names = {}
             local active = {}
@@ -5063,7 +5090,7 @@ function SS:build()
                 if active[f[1]] then table.insert(names, f[2]) end
             end
             add(navRow(_("Info row and repeats"), getShowInfo() and table.concat(names, " · ") or _("Off"),
-                function() UIManager:show(SS:new{ list = list, page = "info" }, "flashui") end))
+                function() UIManager:show(SS:new{ list = list, page = "info", parent_screen = self }, "flashui") end))
         end
         add(toggle(_("Counts on tabs"), nil, "show_total", getShowTotalNotes))
         add(toggle(_("Filter button in title bar"), nil, "filter_titlebar_btn", getFilterTitlebarBtn))
@@ -5103,7 +5130,8 @@ function SS:build()
                 self:changed()
             end } }
     end
-    local header = Page.header(self, titles[self.page] or _("Settings"), function() self:onClose() end, right_items)
+    local header = Page.header(self, titles[self.page] or _("Settings"), function() self:onClose() end, right_items,
+        not self.page, function() Page.exitAll(self) end)
     local top_group = VerticalGroup:new{ align = "left", header }
     if self.page == "text" or self.page == "spacing" then
         table.insert(top_group, Page.preview(self.list, math.floor(H * 0.26)))
@@ -5120,6 +5148,7 @@ end
 -- (fixed height, so the page does not jump between fonts), then every font to tap.
 do -- own scope: keeps the main chunk under Lua's 200-locals limit
 NotesListWidget.SubPage = InputContainer:extend{ list = nil, parent = nil, font_key = nil, title = "", covers_fullscreen = true }
+Page.watchResize(NotesListWidget.SubPage)
 function NotesListWidget.SubPage:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
     if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
@@ -5184,7 +5213,9 @@ function NotesListWidget.SubPage:build()
             list:refresh(); self:rebuild()
         end }, rowLine() })
     end
-    local header = Page.header(self, self.title, function() self:onClose() end)
+    local header = Page.header(self, self.title, function() self:onClose() end, nil, false, function()
+        Page.exitAll(self); self.list:refresh()
+    end)
     local avail = H - header:getSize().h
     self.scroller = Page.scrollable(W, avail, self, body)
     self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0,
@@ -5202,6 +5233,7 @@ local ListPicker = InputContainer:extend{
     mode_labels = nil, tri_state = false, search_hint = nil, on_done = nil,
     covers_fullscreen = true,
 }
+Page.watchResize(ListPicker)
 function ListPicker:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
     local af = self.list.active_filter or {}
@@ -5262,7 +5294,10 @@ function ListPicker:build()
     end
     local visible = self:visibleItems()
 
-    local header = Page.header(self, self.title, function() self:onClose() end)
+    local header = Page.header(self, self.title, function() self:onClose() end, nil, false, function()
+        self:onClose()
+        if self.list.filter_screen then self.list.filter_screen:onClose() end
+    end)
 
     -- controls: mode switch, search, "N of M selected", Select all / Clear
     local controls = VerticalGroup:new{ align = "left" }
