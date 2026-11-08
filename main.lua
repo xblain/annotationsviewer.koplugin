@@ -1961,6 +1961,12 @@ function NotesListWidget:updatePage()
         end
     end
 
+    -- Filters (or the tab) leave nothing: say so in the middle of the list
+    if #page_indices == 0 and NotesListWidget.States then
+        notes_group = NotesListWidget.States.noMatch(self, self.width,
+            self.height - self.title_height - self.footer_height)
+    end
+
     -- First annotation of the next page, faded and cut off, as a hint that there is more
     if last_note_widget and self.current_page < self.total_pages then
         local next_page_indices = self.pages[self.current_page + 1]
@@ -2114,7 +2120,7 @@ function NotesListWidget:exportToMarkdown()
     end
     file:write(notesToMarkdown(notes, filterToString(self.active_filter)))
     file:close()
-    UIManager:show(InfoMessage:new{ text = string.format(_("Exported %d annotations to:\n%s"), #notes, path) })
+    NotesListWidget.States.exported(#notes, path)
 end
 
 -- back_to_menu == false: opened from the sort button in the tab row, so don't reopen the ☰ menu.
@@ -3493,8 +3499,7 @@ function AllNotesViewer:showCurrentBookNotes()
         annotations = self:loadBookAnnotations(book_path)
     end
     if not annotations or #annotations == 0 then
-        UIManager:show(InfoMessage:new{ text = _("No annotations found for this book.") })
-        return
+        annotations = {} -- the list shows "No annotations yet"
     end
     local book_info = self:getBookInfo(book_path)
     local book_title = book_info and book_info.title or (book_path:match("([^/\\]+)$") or book_path)
@@ -3767,7 +3772,6 @@ function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations)
             tags = all_tags,
         })
     end
-    if #notes_list == 0 then return end
     local sort_mode = getSetting("sort_mode", "date_newest")
     NotesListWidget:sortNotesList(notes_list, sort_mode)
     UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self, single_book = true, book_title = book_title })
@@ -3776,9 +3780,7 @@ function AllNotesViewer:showAllNotes()
     -- The first open after starting KOReader may have to read many books: say so
     local loading
     if not _persist then
-        loading = InfoMessage:new{ text = _("Loading annotations…") }
-        UIManager:show(loading)
-        UIManager:forceRePaint()
+        loading = NotesListWidget.States.loading()
     end
     local all_notes_by_book = self:findAllNotes()
     local notes_list = {}
@@ -3817,11 +3819,6 @@ function AllNotesViewer:showAllNotes()
                 tags = all_tags
             })
         end
-    end
-    if #notes_list == 0 then
-        if loading then UIManager:close(loading) end
-        UIManager:show(InfoMessage:new{ text = _("No annotations found.") })
-        return
     end
     local sort_mode = getSetting("sort_mode", "date_newest")
     NotesListWidget:sortNotesList(notes_list, sort_mode)
@@ -4286,7 +4283,7 @@ end
 -- Shared title bar for full-screen pages (Filter & sort, pickers): same height, icon size,
 -- spacing and serif title as the list's top bar; ‹ on the left, ✕ on the right (both cancel).
 local Page = {} -- shared pieces of the full-screen pages (kept in one table: Lua allows 200 locals)
-function Page.header(owner, title, on_back, right_items)
+function Page.header(owner, title, on_back, right_items, no_back)
     local W = Screen:getWidth()
     local side = Screen:scaleBySize(8)
     local d = Geom:new{ w = W, h = TOPBAR_HEIGHT }
@@ -4296,14 +4293,17 @@ function Page.header(owner, title, on_back, right_items)
     table.insert(right, HorizontalSpan:new{ width = side })
     local right_w = right:getSize().w
     local left_w = side + HEADER_ICON_SIZE + HEADER_ICON_PAD * 2 + side
+    -- no_back: pages that only have ✕ (the empty-list page) start the title at the edge
+    local left = HorizontalGroup:new{ align = "center", HorizontalSpan:new{ width = side + (no_back and side or 0) } }
+    if not no_back then
+        table.insert(left, newHeaderButton(BD.mirroredUILayout() and "chevron.right" or "chevron.left", on_back, owner, nil, false))
+        table.insert(left, HorizontalSpan:new{ width = side })
+    end
+    table.insert(left, TextWidget:new{ text = title, face = getFaceOr(SERIF_FONT, 21, "cfont"), bold = true,
+        max_width = W - left_w - right_w - side })
     return VerticalGroup:new{
         OverlapGroup:new{ dimen = d, allow_mirroring = false,
-            LeftContainer:new{ dimen = d, HorizontalGroup:new{ align = "center",
-                HorizontalSpan:new{ width = side },
-                newHeaderButton(BD.mirroredUILayout() and "chevron.right" or "chevron.left", on_back, owner, nil, false),
-                HorizontalSpan:new{ width = side },
-                TextWidget:new{ text = title, face = getFaceOr(SERIF_FONT, 21, "cfont"), bold = true,
-                    max_width = W - left_w - right_w - side } } },
+            LeftContainer:new{ dimen = d, left },
             RightContainer:new{ dimen = d, right },
         },
         LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line },
@@ -4339,6 +4339,199 @@ function Page.footer(cancel_cb, primary_text, primary_cb)
 end
 function Page.countText(n)
     return n == 1 and _("Show 1 annotation") or string.format(_("Show %d annotations"), n)
+end
+
+-- States board: loading, no annotations, nothing matches, delete confirmation, export done.
+-- Kept in one table (NotesListWidget.States) so the code outside this block can call it.
+do -- own scope: keeps the main chunk under Lua's 200-locals limit
+local States = {}
+NotesListWidget.States = States
+
+-- Text as separate single-line TextWidgets (same rendering as the tabs, so small grey text is
+-- not drawn lighter than elsewhere on some devices); centred or left aligned within width.
+function States.lines(text, face, width, color, bold, centered)
+    local g = VerticalGroup:new{ align = centered and "center" or "left" }
+    for _i, l in ipairs((wrapText(text, face, width))) do
+        table.insert(g, TextWidget:new{ text = l, face = face, fgcolor = color, bold = bold })
+    end
+    if not centered then return g end
+    return CenterContainer:new{ dimen = Geom:new{ w = width, h = g:getSize().h }, g }
+end
+function States.title(text, size, width, centered)
+    return States.lines(text, getFaceOr(SERIF_FONT, size, "cfont"), width, COLORS.ink, true, centered)
+end
+
+-- Popup card: white box with KOReader's window border and rounded corners, at the centre or
+-- the bottom. modal: tap outside / Back closes it. toast: never blocks the screen under it
+-- (taps go through) and closes itself after `timeout` seconds.
+States.Card = InputContainer:extend{
+    anchor = "center", build = nil, modal = false, toast = false, timeout = nil, cancel_cb = nil,
+}
+function States.Card:init()
+    local W, H = Screen:getWidth(), Screen:getHeight()
+    local col_w = W > H and math.min(W, math.floor(H * 1.1)) or W
+    local margin = Screen:scaleBySize(14)
+    local bw = Size.border.window
+    local pad = Screen:scaleBySize(16) + bw
+    local box_w = col_w - margin * 2
+    self.box = RoundedBox:new{ width = box_w, fill = BlitBuffer.COLOR_WHITE, radius = Screen:scaleBySize(10),
+        border = bw, border_color = COLORS.ink, pad_x = pad, pad_y = pad, self.build(box_w - pad * 2, self) }
+    local box_h = self.box:getSize().h
+    self.box_x = math.floor((W - box_w) / 2)
+    if self.anchor == "bottom" then
+        self.box_y = H - box_h - Screen:scaleBySize(16)
+    else
+        self.box_y = math.floor((H - box_h) / 2)
+    end
+    -- only the card's own area is repainted when it appears or goes away
+    self.dimen = Geom:new{ x = self.box_x, y = self.box_y, w = box_w, h = box_h }
+    self[1] = self.box
+    self.ges_events = {}
+    if self.modal then
+        self.ges_events.TapOutside = { GestureRange:new{ ges = "tap", range = Geom:new{ x = 0, y = 0, w = W, h = H } } }
+        if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
+    end
+end
+function States.Card:paintTo(bb)
+    self.box:paintTo(bb, self.box_x, self.box_y)
+end
+function States.Card:onShow()
+    if self.timeout then
+        self.timeout_cb = function() UIManager:close(self, "ui") end
+        UIManager:scheduleIn(self.timeout, self.timeout_cb)
+    end
+end
+function States.Card:onCloseWidget()
+    if self.timeout_cb then UIManager:unschedule(self.timeout_cb) end
+end
+function States.Card:onTapOutside(_arg, ges)
+    if ges and ges.pos and ges.pos:intersectWith(self.dimen) then return true end
+    self:onClose()
+    if self.cancel_cb then self.cancel_cb() end
+    return true
+end
+function States.Card:onClose()
+    UIManager:close(self, "ui")
+    return true
+end
+function States.Card:show()
+    UIManager:show(self, "ui", self.dimen)
+    return self
+end
+
+-- Shown over the library while the first open reads the books.
+function States.loading()
+    local card = States.Card:new{ build = function(w)
+        return VerticalGroup:new{ align = "center",
+            States.title(_("Loading annotations…"), 17, w, true),
+            VerticalSpan:new{ width = Screen:scaleBySize(6) },
+            States.lines(_("Reading your books. Only the first time after starting KOReader."),
+                Font:getFace("cfont", 13), w, COLORS.muted, false, true),
+        }
+    end }
+    card:show()
+    UIManager:forceRePaint()
+    return card
+end
+
+-- Delete confirmation: shows the highlight that will go, and says when its note goes too.
+function States.confirmDelete(note, on_delete)
+    local nw = NoteWrapper:new(note)
+    local has_text = nw:hasHighlightedText()
+    States.Card:new{ modal = true, build = function(w, card)
+        local g = VerticalGroup:new{ align = "left" }
+        table.insert(g, States.title(has_text and _("Delete this highlight?") or _("Delete this annotation?"), 17, w))
+        if has_text then
+            table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(10) })
+            local drawer = note.drawer or "lighten"
+            local no_fill = isNoBackgroundStyle(drawer)
+            local fill
+            if drawer == "invert" then fill = BlitBuffer.COLOR_BLACK
+            elseif not no_fill then fill = getHighlightColor(note.color) end
+            local face = select(3, getNoteFaces())
+            local pad_h, pad_v, ob = Screen:scaleBySize(10), Screen:scaleBySize(8), Size.border.thin
+            local lines = buildHighlightLines(cleanHighlightText(note.highlighted_text), face,
+                w - (pad_h + ob) * 2, drawer, note.color, 2, true)
+            table.insert(g, RoundedBox:new{ width = w, fill = fill or BlitBuffer.COLOR_WHITE,
+                radius = Screen:scaleBySize(6), border = no_fill and ob or 0, border_color = COLORS.line,
+                pad_x = pad_h + ob, pad_y = pad_v + ob, lines })
+        end
+        table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(10) })
+        table.insert(g, States.lines(nw:hasUserNote()
+            and _("Your note on it is deleted too. This can’t be undone.") or _("This can’t be undone."),
+            Font:getFace("cfont", 13), w, COLORS.muted, false, false))
+        table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(14) })
+        local gap = Screen:scaleBySize(10)
+        local bw = math.floor((w - gap) / 2)
+        table.insert(g, HorizontalGroup:new{
+            Page.button(_("Cancel"), false, bw, function() card:onClose() end),
+            HorizontalSpan:new{ width = gap },
+            Page.button(_("Delete"), true, w - gap - bw, function() card:onClose(); on_delete() end),
+        })
+        return g
+    end }:show()
+end
+
+-- Export done: a note at the bottom that closes itself; the list under it stays usable.
+function States.exported(count, path)
+    local rel = path
+    local ok, DataStorage = pcall(require, "datastorage")
+    if ok then
+        local dir = DataStorage:getDataDir()
+        local name = dir:match("([^/\\]+)[/\\]*$")
+        if not name or name == "." then name = "koreader" end
+        if path:sub(1, #dir) == dir then rel = name .. path:sub(#dir + 1) end
+    end
+    States.Card:new{ anchor = "bottom", toast = true, timeout = 5, build = function(w)
+        local icon_s = Screen:scaleBySize(18)
+        local gap = Screen:scaleBySize(8)
+        local title = count == 1 and _("Exported 1 annotation") or string.format(_("Exported %d annotations"), count)
+        return VerticalGroup:new{ align = "left",
+            HorizontalGroup:new{ align = "center",
+                IconWidget:new{ icon = "check", width = icon_s, height = icon_s },
+                HorizontalSpan:new{ width = gap },
+                TextWidget:new{ text = title, face = Font:getFace("cfont", 15), bold = true, max_width = w - icon_s - gap } },
+            VerticalSpan:new{ width = Screen:scaleBySize(6) },
+            TextWidget:new{ text = rel, face = Font:getFace("cfont", 12), fgcolor = COLORS.muted, max_width = w },
+        }
+    end }:show()
+end
+
+-- Centre of the list when filters (or the tab) leave nothing: what happened, and one tap to undo.
+function States.noMatch(list, width, height)
+    local filtered = #list:getFilterChips() > 0
+    local col_w = math.min(width, math.floor(Screen:getHeight() * 1.1)) - Screen:scaleBySize(22) * 2
+    if #(list.notes_list or {}) == 0 then
+        -- no annotations at all: the list's own title bar stays, the body explains
+        local icon_s = Screen:scaleBySize(44)
+        return CenterContainer:new{ dimen = Geom:new{ w = width, h = height }, VerticalGroup:new{ align = "center",
+            IconWidget:new{ icon = "edit", width = icon_s, height = icon_s },
+            VerticalSpan:new{ width = Screen:scaleBySize(12) },
+            States.title(_("No annotations yet"), 18, col_w, true),
+            VerticalSpan:new{ width = Screen:scaleBySize(10) },
+            States.lines(list.single_book and _("Highlight a passage in this book and it shows up here.")
+                or _("Highlight a passage in any book and it shows up here."),
+                Font:getFace("cfont", 13), col_w, COLORS.muted, false, true),
+        } }
+    end
+    local g = VerticalGroup:new{ align = "center",
+        States.title(filtered and _("Nothing matches") or _("Nothing here"), 18, col_w, true),
+        VerticalSpan:new{ width = Screen:scaleBySize(12) },
+    }
+    local hidden = #(list.notes_list or {})
+    local body = _("No annotations in this view.")
+    if filtered then
+        body = _("No annotations fit these filters.") .. " "
+            .. (hidden == 1 and _("1 is hidden.") or string.format(_("%d are hidden."), hidden))
+    end
+    table.insert(g, States.lines(body, Font:getFace("cfont", 13), col_w, COLORS.muted, false, true))
+    if filtered then
+        table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(14) })
+        table.insert(g, Page.button(_("Clear filters"), true, Screen:scaleBySize(170), function() list:clearFilters() end))
+    end
+    return CenterContainer:new{ dimen = Geom:new{ w = width, h = height }, g }
+end
+
 end
 
 local function deepCopy(t)
@@ -5131,14 +5324,9 @@ function AllNotesViewer:updateHighlightColor(note, new_color, parent_widget)
     self:setHighlightField(note, "color", new_color, parent_widget, _("Color updated."))
 end
 function AllNotesViewer:confirmDelete(note, parent_widget)
-    local ConfirmBox = require("ui/widget/confirmbox")
-    UIManager:show(ConfirmBox:new{
-        text = _("Delete this annotation?"),
-        ok_text = _("Delete"),
-        ok_callback = function()
-            self:deleteAnnotation(note, parent_widget)
-        end,
-    })
+    NotesListWidget.States.confirmDelete(note, function()
+        self:deleteAnnotation(note, parent_widget)
+    end)
 end
 function AllNotesViewer:deleteAnnotation(note, parent_widget)
     if not note.book_path then return end
