@@ -228,8 +228,8 @@ local SPIN_MENUS = {
         dialog_name = "section_margin_dialog",
         title = _("Space between notes"),
         settings = {
-            { label = _("After title: "), key = "title_margin", default = DEFAULT_TITLE_MARGIN, min = 0, max = 30, step = 1, getter = function() return getSetting("title_margin", DEFAULT_TITLE_MARGIN) end },
-            { label = _("After info: "), key = "info_margin", default = DEFAULT_INFO_MARGIN, min = 0, max = 30, step = 1, getter = function() return getSetting("info_margin", DEFAULT_INFO_MARGIN) end },
+            { label = _("Below the book title: "), key = "title_margin", default = DEFAULT_TITLE_MARGIN, min = 0, max = 30, step = 1, getter = function() return getSetting("title_margin", DEFAULT_TITLE_MARGIN) end },
+            { label = _("Below the chapter · date line: "), key = "info_margin", default = DEFAULT_INFO_MARGIN, min = 0, max = 30, step = 1, getter = function() return getSetting("info_margin", DEFAULT_INFO_MARGIN) end },
         }
     },
     margins = {
@@ -239,8 +239,11 @@ local SPIN_MENUS = {
             { label = _("Top padding: "), key = "top_padding", default = DEFAULT_TOP_PADDING, min = 0, max = 100, step = 5, getter = function() return getSetting("top_padding", DEFAULT_TOP_PADDING) end },
             { label = _("Horizontal margin: "), key = "h_margin", default = DEFAULT_H_MARGIN, min = 5, max = 60, step = 5, getter = function() return getSetting("h_margin", DEFAULT_H_MARGIN) end },
             { label = _("Landscape width (%): "), key = "landscape_width_pct", default = 80, min = 40, max = 100, step = 5, getter = function() return getSetting("landscape_width_pct", 80) end },
-            { label = _("Note spacing: "), key = "note_spacing", default = DEFAULT_NOTE_SPACING, min = 5, max = 100, step = 2, getter = function() return getSetting("note_spacing", DEFAULT_NOTE_SPACING) end },
-            { label = _("Text margin: "), key = "text_margin", default = DEFAULT_TEXT_MARGIN, min = 0, max = 30, step = 2, getter = function() return getSetting("text_margin", DEFAULT_TEXT_MARGIN) end },
+            { label = _("Between annotations: "), key = "note_spacing", default = DEFAULT_NOTE_SPACING, min = 5, max = 100, step = 2, getter = function() return getSetting("note_spacing", DEFAULT_NOTE_SPACING) end },
+            { label = _("Space above the note: "), key = "note_offset", default = 8, min = 0, max = 40, step = 2, getter = function() return getSetting("note_offset", 8) end },
+            { label = _("Extra indent for the note: "), key = "note_indent", default = 0, min = 0, max = 60, step = 2, getter = function() return getSetting("note_indent", 0) end },
+            { label = _("Line spacing: "), key = "line_spacing", default = 0, min = -15, max = 20, step = 1, getter = function() return getSetting("line_spacing", 0) end },
+            { label = _("Text indent: "), key = "text_margin", default = DEFAULT_TEXT_MARGIN, min = 0, max = 30, step = 2, getter = function() return getSetting("text_margin", DEFAULT_TEXT_MARGIN) end },
         }
     }
 }
@@ -623,6 +626,31 @@ local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_pare
 
 -- Longest a note (the text you wrote) is shown in the list; longer ones end with "...".
 NoteItemWidget.DEFAULT_NOTE_LINES = 5
+-- font of the user notes: its own font / size, otherwise the same as the highlight text
+function NoteItemWidget.noteFace()
+    local font = getSetting("note_font", nil)
+    if not font or font == "" then font = getContentFont() end
+    local size = getSetting("note_font_size", nil) or getContentFontSize()
+    return getFaceOr(font ~= "" and font or SERIF_FONT, size, "cfont")
+end
+-- space between the highlight and its note
+function NoteItemWidget.noteOffset() return Screen:scaleBySize(getSetting("note_offset", 8)) end
+-- how far the note is moved in from the left
+function NoteItemWidget.noteIndent() return Screen:scaleBySize(getSetting("note_indent", 0)) end
+-- A box that shows only the middle part of its child (used for negative line spacing, where the lines
+-- sit closer than their natural height): w x h, the child is moved by dy and cut off at the box.
+NoteItemWidget.LineBox = WidgetContainer:extend{ w = 0, h = 0, dy = 0 }
+function NoteItemWidget.LineBox:getSize() return Geom:new{ w = self.w, h = self.h } end
+function NoteItemWidget.LineBox:paintTo(bb, x, y)
+    self.dimen = Geom:new{ x = x, y = y, w = self.w, h = self.h }
+    local buf = BlitBuffer.new(self.w, self.h, bb:getType())
+    buf:blitFrom(bb, 0, 0, x, y, self.w, self.h) -- start from what is already there (the page, a highlight)
+    self[1]:paintTo(buf, 0, self.dy)
+    bb:blitFrom(buf, x, y, 0, 0, self.w, self.h)
+    buf:free()
+end
+-- extra space between the lines of a highlight and of a note (Spacing page)
+function NoteItemWidget.lineSpacing() return Screen:scaleBySize(getSetting("line_spacing", 0)) end
 function NoteItemWidget.noteLinesMax()
     local v = tonumber(getSetting("truncate_note_lines", NoteItemWidget.DEFAULT_NOTE_LINES))
     if not v or v < 1 then return NoteItemWidget.DEFAULT_NOTE_LINES end
@@ -772,6 +800,20 @@ function NoteItemWidget.columnWidth(avail, W, H)
     local pct = tonumber(getSetting("landscape_width_pct", 80)) or 80
     return math.min(avail, math.floor(W * math.max(pct, 30) / 100))
 end
+-- Width the annotations may use: with a scrollbar they reach to the middle of its track (the side margin
+-- does the rest). A small side margin would put the text behind the scrollbar strip, so then the
+-- column is made narrower to keep a little air between the text and the strip.
+-- How far both sides are pushed in so that text stays clear of the scrollbar (thumb, marks, page number):
+-- 0 when the side margin is already wide enough. The same on the left and the right, so the text stays centred.
+function NoteItemWidget.scrollInset()
+    if not isScrollbarStyle() then return 0 end
+    return math.max(0, Screen:scaleBySize(22) - getHMargin())
+end
+function NoteItemWidget.listAvail(W)
+    if not isScrollbarStyle() then return W end
+    local center = W - SB_STRIP_WIDTH - SB_MARGIN_RIGHT + math.floor(SB_STRIP_WIDTH / 2)
+    return center - 2 * NoteItemWidget.scrollInset()
+end
 function NoteItemWidget.showHeadings() return getSetting("chapter_headings", true) ~= false end
 function NoteItemWidget.repeatChapter() return getSetting("repeat_chapter_on_page", true) ~= false end
 -- Chapter heading of the one-book list: drawn exactly like a book header (same font, line, margin).
@@ -825,19 +867,23 @@ local function measureNoteHeight(note, width, skip_title, skip_info)
         local n = #wrapText(note.highlighted_text or "", content_face, line_width)
         local max_lines = getTruncateLines() or math.huge
         if n > max_lines then n = max_lines end
-        h = h + n * (line_h + 2) -- each line has 1px padding above and below
+        h = h + n * (line_h + 2 + NoteItemWidget.lineSpacing()) -- each line has 1px padding above and below, plus the line spacing
     end
     if note_wrapper:hasUserNote() then
-        h = h + Screen:scaleBySize(8)
-        local widths = getWordWidths(content_face)
+        h = h + NoteItemWidget.noteOffset()
+        local note_face = NoteItemWidget.noteFace()
+        local note_line_h = getLineHeight(note_face)
+        local widths = getWordWidths(note_face)
         local icon_w = widths[NOTE_ICON_CHAR]
         if not icon_w then
-            icon_w = measureTextWidth(NOTE_ICON_CHAR, content_face)
+            icon_w = measureTextWidth(NOTE_ICON_CHAR, note_face)
             widths[NOTE_ICON_CHAR] = icon_w
         end
-        local n = math.min(#wrapText(note.user_note, content_face, line_width - icon_w - Screen:scaleBySize(6)),
+        local n = math.min(#wrapText(note.user_note, note_face, line_width - icon_w - Screen:scaleBySize(6) - NoteItemWidget.noteIndent()),
             NoteItemWidget.noteLinesMax())
-        h = h + math.max(line_h, n * line_h)
+        local ls = NoteItemWidget.lineSpacing()
+        if ls < 0 then h = h + math.max(note_line_h + ls, n * (note_line_h + ls))
+        else h = h + math.max(note_line_h, n * note_line_h + (n - 1) * ls) end
     end
     return h
 end
@@ -848,9 +894,10 @@ local _note_height_cache = setmetatable({}, { __mode = "k" })
 
 local function getLayoutSignature(width)
     return table.concat({
-        width, getHMargin(), getTextMargin(), getTitleMargin(), getInfoMargin(),
+        width, getHMargin(), getTextMargin(), NoteItemWidget.lineSpacing(), getTitleMargin(), getInfoMargin(),
         getTitleFontSize(), getInfoFontSize(), getContentFontSize(),
         tostring(getTitleFont()), tostring(getInfoFont()), tostring(getContentFont()),
+        tostring(getSetting("note_font", nil)), tostring(getSetting("note_font_size", nil)), NoteItemWidget.noteOffset(), NoteItemWidget.noteIndent(),
         tostring(getTruncateLines()), tostring(NoteItemWidget.noteLinesMax()), tostring(getShowInfo()), getInfoFields(), tostring(NoteItemWidget.measure_hide_chapter),
         os.date("%Y%m%d"), -- "Today"/"Yesterday" labels change the info row text
     }, "|")
@@ -961,9 +1008,9 @@ function NoteItemWidget:init()
     local line_width = text_content_width - Size.padding.small * 2
     -- underline the search words (not in the faded preview of the next annotation)
     local search_af = self.show_parent and self.show_parent.active_filter
-    local function markw(widget, text)
+    local function markw(widget, text, face)
         if self.is_preview or not search_af or not search_af.search_any then return widget end
-        return NoteItemWidget.markLine(widget, text, search_af.search_any, search_af.search_any_case == true, content_face)
+        return NoteItemWidget.markLine(widget, text, search_af.search_any, search_af.search_any_case == true, face or content_face)
     end
 
     local note_content = VerticalGroup:new{ align = "left" }
@@ -1040,13 +1087,18 @@ function NoteItemWidget:init()
                 end
             end
             local line_size = line_widget:getSize()
-            local v_pad = 1
+            -- line spacing goes into the padding above and below the line, so a coloured highlight
+            -- stays one solid block
+            local ls = NoteItemWidget.lineSpacing()
+            local lsp = math.max(0, ls) -- a negative spacing is done by trimming the line below
+            local v_pad_top = 1 + math.floor(lsp / 2)
+            local v_pad_bot = 1 + math.ceil(lsp / 2)
             local h_pad = Size.padding.small
             local line_container
 
             if show_strikeout or show_underline then
                 local OverlapGroup = require("ui/widget/overlapgroup")
-                local total_h = line_size.h + v_pad * 2
+                local total_h = line_size.h + v_pad_top + v_pad_bot
                 local total_w = line_size.w + h_pad * 2
                 local overlap_items = {
                     CenterContainer:new{
@@ -1063,11 +1115,15 @@ function NoteItemWidget:init()
                 line_container = OverlapGroup:new{ dimen = Geom:new{ w = total_w, h = total_h }, unpack(overlap_items) }
             else
                 line_container = FrameContainer:new{
-                    padding = v_pad, padding_left = h_pad, padding_right = h_pad,
-                    padding_top = v_pad, padding_bottom = v_pad,
+                    padding = 1, padding_left = h_pad, padding_right = h_pad,
+                    padding_top = v_pad_top, padding_bottom = v_pad_bot,
                     margin = 0, bordersize = 0, background = bg_color,
                     line_widget,
                 }
+            end
+            if ls < 0 then
+                local lc = line_container:getSize()
+                line_container = NoteItemWidget.LineBox:new{ w = lc.w, h = math.max(2, lc.h + ls), dy = math.floor(ls / 2), line_container }
             end
             table.insert(lines_group, line_container)
         end
@@ -1083,25 +1139,32 @@ function NoteItemWidget:init()
     end
 
     if note_wrapper:hasUserNote() then
-        table.insert(note_content, VerticalSpan:new{ width = Screen:scaleBySize(8) })
+        table.insert(note_content, VerticalSpan:new{ width = NoteItemWidget.noteOffset() })
 
+        local note_face = NoteItemWidget.noteFace()
         local note_icon_char = NOTE_ICON_CHAR
         local icon_margin = Screen:scaleBySize(6)
         local note_icon = TextWidget:new{
             text = note_icon_char,
-            face = content_face,
+            face = note_face,
             fgcolor = BlitBuffer.COLOR_BLACK,
         }
         local icon_size = note_icon:getSize().w
 
-        local note_text_width = line_width - icon_size - icon_margin
-        local note_lines = NoteItemWidget.cutLines(wrapText(self.note.user_note, content_face, note_text_width),
-            NoteItemWidget.noteLinesMax(), content_face, note_text_width)
+        local note_text_width = line_width - icon_size - icon_margin - NoteItemWidget.noteIndent()
+        local note_lines = NoteItemWidget.cutLines(wrapText(self.note.user_note, note_face, note_text_width),
+            NoteItemWidget.noteLinesMax(), note_face, note_text_width)
         local note_text_group = VerticalGroup:new{ align = "left" }
-        for _, line in ipairs(note_lines) do
+        for li, line in ipairs(note_lines) do
+            local ls = NoteItemWidget.lineSpacing()
+            if li > 1 and ls > 0 then table.insert(note_text_group, VerticalSpan:new{ width = ls }) end
             local line_widget = markw(TextWidget:new{
-                text = line, face = content_face, fgcolor = BlitBuffer.COLOR_BLACK,
-            }, line)
+                text = line, face = note_face, fgcolor = BlitBuffer.COLOR_BLACK,
+            }, line, note_face)
+            if ls < 0 then
+                local lsz = line_widget:getSize()
+                line_widget = NoteItemWidget.LineBox:new{ w = lsz.w, h = math.max(2, lsz.h + ls), dy = math.floor(ls / 2), line_widget }
+            end
             table.insert(note_text_group, line_widget)
         end
 
@@ -1113,7 +1176,7 @@ function NoteItemWidget:init()
         }
         table.insert(note_content, LeftContainer:new{
             dimen = Geom:new{ w = inner_width, h = note_row:getSize().h },
-            HorizontalGroup:new{ HorizontalSpan:new{ width = h_padding + text_margin }, note_row },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = h_padding + text_margin + NoteItemWidget.noteIndent() }, note_row },
         })
     end
 
@@ -1375,9 +1438,9 @@ function NotesListWidget:computeLayout()
     end
     self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
     -- width given to each annotation, and how far it is pushed right (landscape column)
-    local avail = isScrollbarStyle(pag_style) and self.sb_track_center or self.width
+    local avail = NoteItemWidget.listAvail(self.width)
     self.note_width = NoteItemWidget.columnWidth(avail, self.width, self.height)
-    self.note_x_offset = math.floor((avail - self.note_width) / 2)
+    self.note_x_offset = math.floor((avail - self.note_width) / 2) + NoteItemWidget.scrollInset()
 end
 function NotesListWidget:init()
     self.width = Screen:getWidth()
@@ -1514,6 +1577,19 @@ function NotesListWidget:applyFilter()
     end
     self.tab_counts = counts
 end
+-- Scrollbar marks follow the sort order: a mark where the group changes. Books (or authors) when
+-- sorted by book / author / file, months when sorted by date, chapters in one book sorted by location.
+function NotesListWidget.markKey(note, single)
+    local mode = getSetting("sort_mode", "date_newest")
+    local by = mode:match("^(%a+)_") or "date"
+    if single then
+        if mode:find("location", 1, true) then return note.chapter or "" end
+        return (note.datetime or ""):sub(1, 7)
+    end
+    if by == "date" then return (note.datetime or ""):sub(1, 7) end
+    if by == "author" then return note.book_authors or "" end
+    return note.book_title or ""
+end
 function NotesListWidget:calculatePages()
     self.pages = {}
     local note_spacing = getNoteSpacing()
@@ -1529,8 +1605,9 @@ function NotesListWidget:calculatePages()
     local dedup_prev_info_key = nil
     local dedup_fields = getDedupInfoFields()
     local note_width = self.note_width
-    -- pages on which a new book starts, for the marks next to the scrollbar
+    -- pages on which a new group starts (book, author, month or chapter, by sort order), for the scrollbar marks
     self.book_start_pages = {}
+    local prev_mark_key
     NoteItemWidget.measure_hide_chapter = (self.single_book and NoteItemWidget.showHeadings()) and true or false
     local layout_sig = getLayoutSignature(note_width)
     local prev_chapter = nil
@@ -1558,9 +1635,11 @@ function NotesListWidget:calculatePages()
             current_height = getNoteHeight(note, note_width, st, si, layout_sig) + (has_ch and NoteItemWidget.headingHeight(note.chapter, note_width) or 0)
         end
         prev_chapter = note.chapter
-        if note.book_title ~= dedup_prev_title then
+        local mark_key = NotesListWidget.markKey(note, self.single_book)
+        if i > 1 and mark_key ~= prev_mark_key then
             self.book_start_pages[#self.pages + 1] = true
         end
+        prev_mark_key = mark_key
         dedup_prev_title = note.book_title
         dedup_prev_info_key = getNoteInfoKey(note, dedup_fields)
     end
@@ -1606,7 +1685,7 @@ function NotesListWidget:createFooter()
             dn_icon = IconWidget:new{ icon = "chevron.up", rotation_angle = 180, width = icon_size, height = icon_size, dim = not dn_enabled }
         end
         local marks = {}
-        if getScrollbarBookMarks() and not self.single_book then
+        if getScrollbarBookMarks() then
             for p in pairs(self.book_start_pages or {}) do table.insert(marks, p) end
         end
         local range = Geom:new{ x = strip_x, y = strip_y, w = strip_w + SB_MARGIN_RIGHT, h = strip_h }
@@ -4463,7 +4542,7 @@ function Page.PreviewClip:paintTo(bb, x, y)
         bb:paintBorder(x + cx - math.floor(tw / 2), y + top, tw, th, Size.border.default, BlitBuffer.COLOR_BLACK, math.floor(tw / 2))
     end
 end
-function Page.preview(list, h)
+function Page.preview(list, h, mark_gap)
     local W = Screen:getWidth()
     local samples = {
         { book_title = "Lorem Ipsum", book_authors = "Dolor Sit", chapter = "Chapter One",
@@ -4476,17 +4555,26 @@ function Page.preview(list, h)
     }
     local g = VerticalGroup:new{ align = "left" }
     local top = getTopPadding()
+    local first_h
     if top > 0 then table.insert(g, VerticalSpan:new{ width = top }) end
     -- same width and centring as the real list
-    local avail = isScrollbarStyle() and (W - SB_STRIP_WIDTH - SB_MARGIN_RIGHT + math.floor(SB_STRIP_WIDTH / 2)) or W
+    local avail = NoteItemWidget.listAvail(W)
     local nw = NoteItemWidget.columnWidth(avail, W, Screen:getHeight())
-    local x_off = math.floor((avail - nw) / 2)
+    local x_off = math.floor((avail - nw) / 2) + NoteItemWidget.scrollInset()
     for i, n in ipairs(samples) do
         if i > 1 then table.insert(g, VerticalSpan:new{ width = getNoteSpacing() }) end
         local ok, wdg = pcall(function()
             return NoteItemWidget:new{ width = nw, note = n, show_parent = list, skip_title = i > 1, disable_tap = true }
         end)
-        if ok then table.insert(g, x_off > 0 and HorizontalGroup:new{ HorizontalSpan:new{ width = x_off }, wdg } or wdg) end
+        if ok then
+            table.insert(g, x_off > 0 and HorizontalGroup:new{ HorizontalSpan:new{ width = x_off }, wdg } or wdg)
+            if i == 1 then first_h = wdg:getSize().h end
+        end
+    end
+    -- Spacing page: end the preview just after the top of the second note, so the gap between the
+    -- notes can be judged from the sliver of the next one
+    if mark_gap and first_h then
+        h = math.min(math.floor(Screen:getHeight() * 0.5), top + first_h + getNoteSpacing() + Screen:scaleBySize(28))
     end
     return VerticalGroup:new{ align = "left",
         Page.PreviewClip:new{ w = W, h = h, g },
@@ -5616,16 +5704,41 @@ function SS:build()
         add(fontRow(_("Title font"), "title_font", getTitleFont))
         add(fontRow(_("Info font"), "info_font", getInfoFont))
         add(fontRow(_("Content font"), "content_font", getContentFont))
+        add(navRow(_("Note font"), getSetting("note_font", nil) and NotesListWidget.SubPage.fontName(getSetting("note_font", nil))
+                or _("Same as content"), function()
+            UIManager:show(NotesListWidget.SubPage:new{ list = list, parent = self, font_key = "note_font", title = _("Note font") })
+        end))
         add(sectionBar(_("SIZES")))
         numberRows("font_size")
+        local content_size = getContentFontSize()
+        add(stepper(_("Note size"), _("Same as the content size until you change it"), "note_font_size",
+            getSetting("note_font_size", nil) or content_size, 8, 48, 1, content_size))
         add(stepper(_("Lines per highlight"), _("Longer ones end with “…”; tap to read all"), "truncate_lines", getTruncateLines(), 1, 20))
         add(stepper(_("Lines per note"), _("Longer notes end with “…”; tap to read all"), "truncate_note_lines", NoteItemWidget.noteLinesMax(), 1, 20))
         add(toggle(_("Justify text"), nil, "justify", getJustify))
     elseif self.page == "spacing" then
-        add(sectionBar(_("MARGINS")))
-        numberRows("margins")
-        add(sectionBar(_("AROUND HEADINGS")))
-        numberRows("section_margin")
+        -- grouped by where the space is, in the order an annotation is drawn: page, between annotations,
+        -- the heading, the highlight text, the note
+        local function rowsFor(keys)
+            local by_key = {}
+            for _, menu in ipairs({ "margins", "section_margin" }) do
+                for _, st in ipairs(SPIN_MENUS[menu].settings) do by_key[st.key] = st end
+            end
+            for _, key in ipairs(keys) do
+                local st = by_key[key]
+                add(stepper((st.label:gsub(":%s*$", "")), nil, st.key, st.getter(), st.min, st.max, st.step, st.default))
+            end
+        end
+        add(sectionBar(_("PAGE")))
+        rowsFor({ "top_padding", "h_margin", "landscape_width_pct" })
+        add(sectionBar(_("BETWEEN ANNOTATIONS")))
+        rowsFor({ "note_spacing" })
+        add(sectionBar(_("BOOK HEADING")))
+        rowsFor({ "title_margin", "info_margin" })
+        add(sectionBar(_("HIGHLIGHT TEXT")))
+        rowsFor({ "text_margin", "line_spacing" })
+        add(sectionBar(_("YOUR NOTE")))
+        rowsFor({ "note_offset", "note_indent" })
     elseif self.page == "info" then
         add(sectionBar(_("INFO ROW")))
         add(toggle(_("Show book / info row"), nil, "show_info", getShowInfo))
@@ -5660,7 +5773,7 @@ function SS:build()
         add(segment(_("Page controls"), { { "default", _("Prev / Next") }, { "scrollbar", _("Scrollbar") },
             { "scrollbar_chevrons", _("Scrollbar + buttons") } }, getPaginationStyle(),
             function(v) setSetting("pagination_style", v); self:changed() end))
-        add(toggle(_("Mark where books start on the scrollbar"), nil, "sb_book_marks", getScrollbarBookMarks))
+        add(toggle(_("Marks on the scrollbar"), _("Where a new book, author, month or chapter starts, by sort order"), "sb_book_marks", getScrollbarBookMarks))
         add(segment(_("Swipe to turn pages"), { { "both", _("Both") }, { "horizontal", _("Horizontal") },
             { "vertical", _("Vertical") }, { "disabled", _("Off") } }, getSwipeSetting(),
             function(v) setSetting("swipe_direction", v); self:changed() end))
@@ -5686,6 +5799,7 @@ function SS:build()
                 end
                 if self.page == "text" then
                     setSetting("title_font", nil); setSetting("info_font", nil); setSetting("content_font", nil)
+                    setSetting("note_font", nil); setSetting("note_font_size", nil)
                     setSetting("truncate_lines", DEFAULT_TRUNCATE_LINES); setSetting("truncate_note_lines", NoteItemWidget.DEFAULT_NOTE_LINES); setSetting("justify", false)
                 end
                 self:changed()
@@ -5695,7 +5809,7 @@ function SS:build()
         not self.page, function() Page.exitAll(self) end)
     local top_group = VerticalGroup:new{ align = "left", header }
     if self.page == "text" or self.page == "spacing" then
-        table.insert(top_group, Page.preview(self.list, math.floor(H * 0.26)))
+        table.insert(top_group, Page.preview(self.list, math.floor(H * 0.26), self.page == "spacing"))
     end
     local avail = H - top_group:getSize().h
     local body_widget = Page.paged(self, W, avail, body)
