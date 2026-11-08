@@ -4186,7 +4186,7 @@ function AnnotationSheet:build()
     table.insert(group, VerticalSpan:new{ width = gap })
 
     -- 4. style: one bordered row of four; Underline/Strikeout labels show their line;
-    -- the chosen one is filled black with white bold text and a ✓
+    -- the chosen one is filled black with white bold text
     table.insert(group, sectionLabel(_("STYLE")))
     table.insert(group, VerticalSpan:new{ width = label_gap })
     local current = note.drawer or "lighten"
@@ -4205,7 +4205,6 @@ function AnnotationSheet:build()
             max_width = cell_w - Screen:scaleBySize(24) }
         local deco = (key == "underscore" and "underline") or (key == "strikeout" and "strike") or nil
         local label = HorizontalGroup:new{ align = "center", decoratedText(tw, deco, color) }
-        if on then table.insert(label, TextWidget:new{ text = " ✓", face = ui_face, bold = true, fgcolor = color }) end
         table.insert(seg, TapBox:new{
             FrameContainer:new{
                 bordersize = 0, padding = 0, margin = 0,
@@ -4224,7 +4223,7 @@ function AnnotationSheet:build()
     table.insert(group, VerticalSpan:new{ width = gap })
 
     -- 5. colour: white rounded chips with a colour dot and the name; the chosen one has a
-    -- thick black border, bold name and ✓. Widths are worked out for the bold+✓ version so
+    -- thick black border and bold name. Widths are worked out for the bold version so
     -- choosing a colour never reflows the rows.
     table.insert(group, sectionLabel(_("COLOUR")))
     table.insert(group, VerticalSpan:new{ width = label_gap })
@@ -4238,21 +4237,20 @@ function AnnotationSheet:build()
     for _i, c in ipairs(ReaderHighlight.highlight_colors) do
         local key, name = c[2], c[1]
         local on = (cur_color == key)
-        local widest = TextWidget:new{ text = name .. " ✓", face = chip_face, bold = true }:getSize().w
+        local widest = TextWidget:new{ text = name, face = chip_face, bold = true }:getSize().w
         local label = HorizontalGroup:new{ align = "center",
             Pill:new{ width = dot, height = dot, border = 0, true_color = true,
                 fill = key == "gray" and BlitBuffer.COLOR_GRAY or getHighlightColor(key) },
             HorizontalSpan:new{ width = Screen:scaleBySize(6) },
-            TextWidget:new{ text = on and (name .. " ✓") or name, face = chip_face, bold = on },
+            TextWidget:new{ text = name, face = chip_face, bold = on },
         }
-        -- padding 0 12px 0 8px, as in the mockup
-        local pad_l, pad_r = Screen:scaleBySize(8), Screen:scaleBySize(12)
-        local chip_w = pad_l + dot + Screen:scaleBySize(6) + widest + pad_r
+        -- the same space on both sides: dot and name sit in the middle of the chip
+        local pad = Screen:scaleBySize(12)
+        local chip_w = pad * 2 + dot + Screen:scaleBySize(6) + widest
         local chip = TapBox:new{
             Pill:new{
                 width = chip_w, height = chip_h,
-                -- Pill centres its child, so this box is pad_l in from both sides
-                LeftContainer:new{ dimen = Geom:new{ w = chip_w - pad_l * 2, h = chip_h }, label },
+                label, -- Pill centres its child
                 fill = BlitBuffer.COLOR_WHITE,
                 border = on and thick or thin,
                 border_color = on and BlitBuffer.COLOR_BLACK or LIGHT,
@@ -5160,14 +5158,14 @@ function FilterScreen:build()
         return OverlapGroup:new{ dimen = d, allow_mirroring = false,
             LeftContainer:new{ dimen = d, left }, right and RightContainer:new{ dimen = d, right } or nil }
     end
-    -- chip: black with white bold text and ✓ when on; white with a border when off. Width is
-    -- always that of the "on" version so choosing never reflows the rows.
+    -- chip: black with white bold text when on; white with a border when off. Width is
+    -- always that of the "on" (bold) version so choosing never reflows the rows.
     local function chip(text, on, callback, opts)
         opts = opts or {}
         local h = opts.h or Screen:scaleBySize(34)
         local color = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK
-        local widest = TextWidget:new{ text = text .. " ✓", face = face13, bold = true }:getSize().w
-        local tw = TextWidget:new{ text = on and (text .. " ✓") or text, face = face13, bold = on, fgcolor = color }
+        local widest = TextWidget:new{ text = text, face = face13, bold = true }:getSize().w
+        local tw = TextWidget:new{ text = text, face = face13, bold = on, fgcolor = color }
         local label = decoratedText(tw, opts.deco, color)
         local content = HorizontalGroup:new{ align = "center" }
         local extra = 0
@@ -5182,7 +5180,7 @@ function FilterScreen:build()
         local w = widest + extra + Screen:scaleBySize(28)
         return { w = w, widget = TapBox:new{
             Pill:new{ width = w, height = h, fill = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
-                border = on and 0 or thin, border_color = BlitBuffer.COLOR_BLACK, content },
+                border = on and 0 or thin, border_color = COLORS.line, content },
             callback = callback, hold_callback = opts.hold,
         } }
     end
@@ -5266,7 +5264,7 @@ function FilterScreen:build()
                 FrameContainer:new{ bordersize = 0, padding = 0, margin = 0,
                     background = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
                     CenterContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
-                        TextWidget:new{ text = opt[2] .. (on and " ✓" or ""), face = face14, bold = on,
+                        TextWidget:new{ text = opt[2], face = face14, bold = on,
                             max_width = cell_w - Screen:scaleBySize(8),
                             fgcolor = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK } } },
                 callback = function()
@@ -5646,7 +5644,7 @@ function SS:build()
                 FrameContainer:new{ bordersize = 0, padding = 0, margin = 0,
                     background = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
                     CenterContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
-                        TextWidget:new{ text = opt[2] .. (on and " ✓" or ""), face = face13, bold = on,
+                        TextWidget:new{ text = opt[2], face = face13, bold = on,
                             max_width = cell_w - Screen:scaleBySize(8),
                             fgcolor = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK } } },
                 callback = function() if not on then pick(opt[1]) end end })
@@ -5657,21 +5655,21 @@ function SS:build()
                 Screen:scaleBySize(12), Screen:scaleBySize(14)),
             rowLine() }
     end
-    -- which of date / author / chapter are on: small chips on the right (black with a ✓ when on)
+    -- which of date / author / chapter are on: small chips on the right (black when on)
     local function fieldChips(label, sub, getter, key)
         local active = {}
         for f in getter():gmatch("[^,]+") do active[f] = true end
         local chips = HorizontalGroup:new{ align = "center" }
         for i, f in ipairs({ { "date", _("Date") }, { "author", _("Author") }, { "chapter", _("Chapter") } }) do
             local on = active[f[1]]
-            local text = f[2] .. (on and " ✓" or "")
-            local widest = TextWidget:new{ text = f[2] .. " ✓", face = face13, bold = true }:getSize().w
+            local text = f[2]
+            local widest = TextWidget:new{ text = f[2], face = face13, bold = true }:getSize().w
             local w = widest + Screen:scaleBySize(20)
             local color = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK
             if i > 1 then table.insert(chips, HorizontalSpan:new{ width = Screen:scaleBySize(6) }) end
             table.insert(chips, TapBox:new{
                 Pill:new{ width = w, height = Screen:scaleBySize(32), fill = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
-                    border = on and 0 or thin, border_color = BlitBuffer.COLOR_BLACK,
+                    border = on and 0 or thin, border_color = COLORS.line,
                     TextWidget:new{ text = text, face = face13, bold = on, fgcolor = color } },
                 callback = function()
                     if on then active[f[1]] = nil else active[f[1]] = true end
