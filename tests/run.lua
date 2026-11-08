@@ -82,6 +82,15 @@ local lines, para_end = T.wrapText("first para\n\nsecond one here\r\nthird", fac
 check("paragraph lines", join(lines) == "first para|second one|here|third", join(lines))
 check("paragraph ends", para_end[1] and para_end[3] and para_end[4] and not para_end[2])
 
+-- spaces (also no-break spaces) at the ends of a paragraph are dropped
+local trimmed = T.wrapText(" \194\160 1778 \n\194\160Frances", face, 100)
+check("trim paragraph ends", join(trimmed) == "1778|Frances", join(trimmed))
+
+-- short sort labels
+check("sort label date", T.sortModeLabel("date_newest") == "Newest first")
+check("sort label book location", T.sortModeLabel("book_location_desc") == "Book · end to start", T.sortModeLabel("book_location_desc"))
+check("sort label unknown", T.sortModeLabel("nope") == "Newest first")
+
 -- normalizeBookTitle
 check("title article", T.normalizeBookTitle("  The Hobbit ") == "hobbit")
 check("title nil", T.normalizeBookTitle(nil) == "")

@@ -21,7 +21,10 @@ local InfoMessage = require("ui/widget/infomessage")
 local ButtonDialogTitle = require("ui/widget/buttondialogtitle")
 local TextViewer = require("ui/widget/textviewer")
 local SpinWidget = require("ui/widget/spinwidget")
-local TitleBar = require("ui/widget/titlebar")
+local IconButton = require("ui/widget/iconbutton")
+local IconWidget = require("ui/widget/iconwidget")
+local LineWidget = require("ui/widget/linewidget")
+local RightContainer = require("ui/widget/container/rightcontainer")
 local BlitBuffer = require("ffi/blitbuffer")
 local Screen = require("device").screen
 local Device = require("device")
@@ -38,15 +41,15 @@ local Geom = require("ui/geometry")
 local _ = require("gettext")
 local BD = require("ui/bidi")
 local DEFAULT_CONTENT_FONT_SIZE = 20
-local DEFAULT_TITLE_FONT_SIZE = 26
-local DEFAULT_INFO_FONT_SIZE = 17
+local DEFAULT_TITLE_FONT_SIZE = 22
+local DEFAULT_INFO_FONT_SIZE = 15
 local DEFAULT_H_MARGIN = 50
 local DEFAULT_NOTE_SPACING = 30
-local DEFAULT_TEXT_MARGIN = 10
+local DEFAULT_TEXT_MARGIN = 0
 local DEFAULT_TRUNCATE_LINES = 5
-local DEFAULT_TITLE_MARGIN = 2
+local DEFAULT_TITLE_MARGIN = 8
 local DEFAULT_INFO_MARGIN = 6
-local DEFAULT_TOP_PADDING = 40
+local DEFAULT_TOP_PADDING = 16
 local DEFAULT_PREVIEW_FUDGE = 5
 local function getSetting(key, default)
     local val = G_reader_settings:readSetting("annotationsviewer_" .. key)
@@ -105,15 +108,58 @@ local function getSwipeSetting() return getSetting("swipe_direction", "both") en
 local function getDedupInfoFields() return getSetting("dedup_info_fields", "date,author,chapter") end
 local function getShowInfo() return getSetting("show_info", true) ~= false end
 local function getInfoFields() return getSetting("info_fields", "date,author,chapter") end
+local getNoteInfoKey -- defined below
 local function getAlwaysShowFirstOnPage() return getSetting("always_show_first_on_page", true) ~= false end
+-- Repeat the book title / the chapter·date line at the top of every page. Both start from the
+-- older single "show on every page" setting.
+local function getRepeatTitleOnPage() return getSetting("repeat_title_on_page", getAlwaysShowFirstOnPage()) ~= false end
+local function getRepeatInfoOnPage() return getSetting("repeat_info_on_page", getAlwaysShowFirstOnPage()) ~= false end
+-- extra space above a book title that is not at the top of the page
+local BOOK_GAP = Screen:scaleBySize(14)
+-- Which header rows an annotation leaves out, given what came right before it.
+local function getHeaderSkips(note, is_first_on_page, prev_title, prev_info_key, dedup_fields)
+    local skip_title = getHideDupTitle()
+        and not (getRepeatTitleOnPage() and is_first_on_page)
+        and (note.book_title == prev_title)
+    local skip_info = getHideDupInfo()
+        and not (getRepeatInfoOnPage() and is_first_on_page)
+        and (getNoteInfoKey(note, dedup_fields) == prev_info_key)
+    return skip_title, skip_info
+end
 local function getPaginationStyle() return getSetting("pagination_style", "right") end
+local function getScrollbarBookMarks() return getSetting("sb_book_marks", true) ~= false end
+local function isScrollbarStyle(style)
+    style = style or getPaginationStyle()
+    return style == "scrollbar" or style == "scrollbar_chevrons"
+end
+-- Same look as before the redesign: 1px black track, narrow outline thumb
 local SB_THUMB_WIDTH  = Screen:scaleBySize(8)
-local SB_MARGIN_RIGHT = Screen:scaleBySize(20.2)
 local SB_TRACK_WIDTH  = Screen:scaleBySize(1)
+local SB_STRIP_WIDTH  = Screen:scaleBySize(32 + 16 + 3)
+local SB_MARGIN_RIGHT = 0
 local SB_MARGIN_V_TOP    = Screen:scaleBySize(16)
 local SB_MARGIN_V_BOTTOM = Screen:scaleBySize(26)
+local SB_TRACK_COLOR = BlitBuffer.COLOR_BLACK
+-- where a book starts: a short notch across the track, like chapter ticks on Kindle/Kobo
+local SB_MARK_OVERHANG = Screen:scaleBySize(3)          -- how far it sticks out on each side
+local SB_MARK_HEIGHT   = math.max(1, math.floor(Screen:scaleBySize(1)))
+-- Header: top bar (menu, title, search, filter, close), tab row, optional active-filter row
+local TOPBAR_HEIGHT    = Screen:scaleBySize(50)
+local TABS_HEIGHT      = Screen:scaleBySize(38)
+local FILTERROW_HEIGHT = Screen:scaleBySize(30)
+local HEADER_ICON_SIZE = Screen:scaleBySize(26)
+local HEADER_ICON_PAD  = Screen:scaleBySize(9)
+-- Serif used for book titles, highlights and the screen title unless the user picked a font
+local SERIF_FONT = "NotoSerif-Regular.ttf"
+-- Icons shipped with the plugin (drawn in the style of KOReader's own mdlight set)
+local PLUGIN_DIR = (debug.getinfo(1, "S").source or ""):match("^@(.*/)[^/]*$") or "./"
+local function pluginIcon(name) return PLUGIN_DIR .. "icons/" .. name .. ".svg" end
+local function getFaceOr(font_name, size, fallback)
+    return (font_name and font_name ~= "" and Font:getFace(font_name, size))
+        or Font:getFace(fallback, size) or Font:getFace("cfont", size)
+end
 
-local function getNoteInfoKey(note, fields_setting)
+getNoteInfoKey = function(note, fields_setting)
     local parts = {}
     local fields = {}
     for f in fields_setting:gmatch("[^,]+") do fields[f] = true end
@@ -463,10 +509,25 @@ end
 
 -- Wraps text to max_width, keeping the text's paragraph breaks (blank lines are dropped).
 -- Returns the lines and a set of line numbers that end a paragraph (not to be justified).
+-- Strip spaces (including no-break spaces) from both ends of a paragraph; books often
+-- leave them in front of a line, which then shows as a stray indent.
+local NBSP = "\194\160"
+local function trimParagraph(p)
+    local changed = true
+    while changed do
+        changed = false
+        local t = p:gsub("^%s+", ""):gsub("%s+$", "")
+        if t:sub(1, 2) == NBSP then t = t:sub(3); changed = true end
+        if t:sub(-2) == NBSP then t = t:sub(1, -3); changed = true end
+        p = t
+    end
+    return p
+end
 local function wrapText(text, face, max_width)
     local lines, para_end = {}, {}
     for paragraph in (text:gsub("\r", "") .. "\n"):gmatch("([^\n]*)\n") do
-        if paragraph:find("%S") then
+        paragraph = trimParagraph(paragraph)
+        if paragraph ~= "" then
             wrapParagraph(paragraph, face, max_width, lines)
             para_end[#lines] = true
         end
@@ -524,28 +585,49 @@ local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_pare
 local function getNoteFaces()
     local title_font, info_font, content_font = getTitleFont(), getInfoFont(), getContentFont()
     local title_size, info_size, content_size = getTitleFontSize(), getInfoFontSize(), getContentFontSize()
-    local title_face = (title_font and title_font ~= "" and Font:getFace(title_font, title_size)) or Font:getFace("cfont", title_size)
-    local info_face = (info_font and info_font ~= "" and Font:getFace(info_font, info_size)) or Font:getFace("cfont", info_size)
-    local content_face = (content_font and content_font ~= "" and Font:getFace(content_font, content_size)) or Font:getFace("cfont", content_size)
+    local title_face = getFaceOr(title_font ~= "" and title_font or SERIF_FONT, title_size, "cfont")
+    local info_face = getFaceOr(info_font, info_size, "cfont")
+    local content_face = getFaceOr(content_font ~= "" and content_font or SERIF_FONT, content_size, "cfont")
     return title_face, info_face, content_face
 end
 
--- Text of the info row (date | author | chapter), or "" when the row is turned off.
-local function buildInfoText(note, note_wrapper, skip_title)
+-- Text of the line above each highlight (chapter · date), or "" when the row is turned off.
+-- The author is shown in the book header instead (see getHeaderAuthor).
+local function buildInfoText(note, note_wrapper, skip_title) -- luacheck: ignore 212
     if not getShowInfo() then return "" end
     local info_fields = {}
     for f in getInfoFields():gmatch("[^,]+") do info_fields[f] = true end
     local info_parts = {}
+    if info_fields["chapter"] and note.chapter and note.chapter ~= "" then
+        -- "1." or "12" on its own reads oddly; show it as "Chapter 1"
+        local num = note.chapter:match("^%s*(%d+)[%.%s]*$")
+        table.insert(info_parts, num and (_("Chapter") .. " " .. num) or note.chapter)
+    end
     local date_text = NoteItemWidget:formatDate(note.datetime) or ""
     if info_fields["date"] and date_text ~= "" then table.insert(info_parts, date_text) end
-    local display_authors = note_wrapper:getDisplayAuthors()
-    if info_fields["author"] and display_authors and not skip_title then
-        table.insert(info_parts, display_authors)
+    return table.concat(info_parts, " · ")
+end
+
+-- Author shown on the right of the book header, in capitals; nil when off.
+local function getHeaderAuthor(note_wrapper)
+    if not getShowInfo() then return nil end
+    if not getInfoFields():find("author", 1, true) then return nil end
+    local a = note_wrapper:getDisplayAuthors()
+    if not a or a == "" or a == "Unknown" then return nil end
+    return a:upper()
+end
+local HEADER_AUTHOR_GAP = Screen:scaleBySize(12)
+local HEADER_LINE_GAP = Screen:scaleBySize(3)
+-- Size of the book header: title on the left, author on the right, thin line below.
+-- Returns title width, author max width and total height. Shared by measuring and drawing.
+local function getHeaderLayout(title_text, author_text, title_face, info_face, content_width)
+    local author_w = 0
+    if author_text then
+        author_w = math.min(measureTextWidth(author_text, info_face), math.floor(content_width * 0.4))
     end
-    if info_fields["chapter"] and note.chapter and note.chapter ~= "" then
-        table.insert(info_parts, note.chapter)
-    end
-    return table.concat(info_parts, " | ")
+    local title_w = content_width - (author_text and (author_w + HEADER_AUTHOR_GAP) or 0)
+    local title_h = getBoxHeight(title_text, title_face, title_w, true)
+    return title_w, author_w, title_h + HEADER_LINE_GAP + Size.line.thin
 end
 
 local NOTE_ICON_CHAR = "\u{F040}"
@@ -563,7 +645,9 @@ local function measureNoteHeight(note, width, skip_title, skip_info)
 
     local h = 0
     if not skip_title then
-        h = h + getBoxHeight(note.book_title or "Unknown", title_face, content_width, true) + getTitleMargin()
+        local _tw, _aw, header_h = getHeaderLayout(note.book_title or "Unknown",
+            getHeaderAuthor(note_wrapper), title_face, info_face, content_width)
+        h = h + header_h + getTitleMargin()
     end
     local info_text = buildInfoText(note, note_wrapper, skip_title)
     local info_visible = not skip_info and info_text ~= ""
@@ -641,10 +725,39 @@ function NoteItemWidget:init()
     local title_text = self.note.book_title or "Unknown"
 
     local title_face, info_face, content_face = getNoteFaces()
-    local title_widget = TextBoxWidget:new{
-        text = title_text, face = title_face,
-        width = content_width, alignment = "left", bold = true,
-    }
+    local header_widget
+    if not self.skip_title then
+        -- Book header: title left, author right (in capitals), thin line underneath
+        local author_text = getHeaderAuthor(note_wrapper)
+        local title_w, author_w, header_h = getHeaderLayout(title_text, author_text, title_face, info_face, content_width)
+        local title_widget = TextBoxWidget:new{
+            text = title_text, face = title_face,
+            width = title_w, alignment = "left", bold = true,
+        }
+        local row = HorizontalGroup:new{ align = "top", title_widget }
+        if author_text then
+            local author_widget = TextWidget:new{
+                text = author_text, face = info_face, max_width = author_w,
+                fgcolor = BlitBuffer.COLOR_DARK_GRAY,
+            }
+            -- line the author up with the middle of the title's first line
+            local first_line_h = getLineHeight(title_face)
+            local pad = math.max(0, math.floor((first_line_h - author_widget:getSize().h) / 2))
+            table.insert(row, HorizontalSpan:new{ width = HEADER_AUTHOR_GAP + (author_w - author_widget:getSize().w) })
+            table.insert(row, VerticalGroup:new{ VerticalSpan:new{ width = pad }, author_widget })
+        end
+        header_widget = VerticalGroup:new{
+            align = "left",
+            row,
+            VerticalSpan:new{ width = HEADER_LINE_GAP },
+            LineWidget:new{
+                dimen = Geom:new{ w = content_width, h = Size.line.thin },
+                background = BlitBuffer.COLOR_LIGHT_GRAY,
+            },
+        }
+        -- keep the measured and drawn heights identical
+        header_widget = CenterContainer:new{ dimen = Geom:new{ w = content_width, h = header_h }, header_widget }
+    end
 
     local drawer = self.note.drawer or "lighten"
     local show_info_header = getShowInfo()
@@ -673,10 +786,10 @@ function NoteItemWidget:init()
     local line_width = text_content_width - Size.padding.small * 2
 
     local note_content = VerticalGroup:new{ align = "left" }
-    if not self.skip_title then
+    if header_widget then
         table.insert(note_content, LeftContainer:new{
-            dimen = Geom:new{ w = inner_width, h = title_widget:getSize().h },
-            HorizontalGroup:new{ HorizontalSpan:new{ width = h_padding }, title_widget },
+            dimen = Geom:new{ w = inner_width, h = header_widget:getSize().h },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = h_padding }, header_widget },
         })
         table.insert(note_content, VerticalSpan:new{ width = title_margin })
     end
@@ -840,10 +953,16 @@ function NoteItemWidget:formatDate(datetime)
     local today_start = NoteItemWidget._today_start
     if note_time >= today_start then return _("Today")
     elseif note_time >= today_start - 86400 then return _("Yesterday")
-    else return os.date("%d %b %Y", note_time) end
+    else
+        -- "3 Feb" this year, "3 Feb 2025" for older ones
+        local d = os.date("*t", note_time)
+        local day_month = tostring(d.day) .. " " .. os.date("%b", note_time)
+        if d.year == today.year then return day_month end
+        return day_month .. " " .. d.year
+    end
 end
 -- Text of the active-filter label shown under the title; "" means no filter is shown.
-local function filterToString(filter)
+local function filterToString(filter, skip_presence)
     if not filter then return "" end
     local parts = {}
     -- Color / Style include
@@ -929,60 +1048,97 @@ local function filterToString(filter)
         table.sort(chs)
         table.insert(parts, "Ch≠ " .. table.concat(chs, ", "))
     end
-    if filter.notes_presence == "only" then
-        table.insert(parts, _("Notes only"))
-    elseif filter.notes_presence == "exclude" then
-        table.insert(parts, _("Without notes"))
+    if filter.search_any and filter.search_any ~= "" then
+        local case_str = filter.search_any_case and " [Aa]" or ""
+        table.insert(parts, _("Search: ") .. "\"" .. filter.search_any .. "\"" .. case_str)
+    end
+    -- the tabs already show this, so the header row can leave it out
+    if not skip_presence then
+        if filter.notes_presence == "only" then
+            table.insert(parts, _("Notes only"))
+        elseif filter.notes_presence == "exclude" then
+            table.insert(parts, _("Without notes"))
+        end
     end
     return #parts > 0 and table.concat(parts, "; ") or ""
+end
+
+-- Wraps a widget so a tap on it calls callback(ges).
+local TapBox = InputContainer:extend{ callback = nil }
+function TapBox:init()
+    local size = self[1]:getSize()
+    self.dimen = Geom:new{ x = 0, y = 0, w = size.w, h = size.h }
+    self.ges_events = {
+        TapBox = { GestureRange:new{ ges = "tap", range = function() return self.dimen end } },
+    }
+end
+function TapBox:onTapBox(_, ges)
+    if self.callback then self.callback(ges) end
+    return true
+end
+
+-- Header icon button: a KOReader icon by name, or (file) one of the plugin's icons,
+-- falling back to the named icon if that file is missing.
+local function newHeaderButton(icon, callback, show_parent, file, allow_flash)
+    local btn = IconButton:new{
+        icon = icon,
+        width = HEADER_ICON_SIZE, height = HEADER_ICON_SIZE,
+        padding = HEADER_ICON_PAD,
+        callback = callback,
+        show_parent = show_parent,
+        allow_flash = allow_flash ~= false,
+    }
+    if file and lfs.attributes(file, "mode") == "file" then
+        local img = IconWidget:new{ file = file, width = HEADER_ICON_SIZE, height = HEADER_ICON_SIZE }
+        btn.image:free()
+        btn.image = img
+        btn.horizontal_group[2] = img
+        btn:update()
+    end
+    return btn
 end
 
 local NotesListWidget = InputContainer:extend{
     width = nil, height = nil, notes_list = nil, filtered_notes = nil,
     viewer = nil, current_page = 1, pages = nil, active_filter = nil,
     single_book = false,
+    covers_fullscreen = true,
 }
+-- Sizes that depend on the screen and on whether a filter row is shown.
+function NotesListWidget:computeLayout()
+    self.width = Screen:getWidth()
+    self.height = Screen:getHeight()
+    self.dimen = Geom:new{ w = self.width, h = self.height }
+    self.filter_row_text = filterToString(self.active_filter, true)
+    self.title_height = TOPBAR_HEIGHT + TABS_HEIGHT
+        + (self.filter_row_text ~= "" and FILTERROW_HEIGHT or 0)
+    local pag_style = getPaginationStyle()
+    -- scrollbar column: its left edge (sb_x) and the middle of the track
+    self.sb_x = self.width - SB_STRIP_WIDTH - SB_MARGIN_RIGHT
+    self.sb_track_center = self.sb_x + math.floor(SB_STRIP_WIDTH / 2)
+    if isScrollbarStyle(pag_style) then
+        -- both scrollbar styles draw their controls in the side strip, not in a bottom bar
+        self.footer_height = 0
+    else
+        local temp_button = Button:new{ icon = "chevron.first", bordersize = 0 }
+        self.footer_height = temp_button:getSize().h
+        temp_button:free()
+    end
+    self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
+    -- width given to each annotation, and how far it is pushed right (landscape column)
+    local avail = isScrollbarStyle(pag_style) and self.sb_track_center or self.width
+    self.note_width = avail
+    if self.width > self.height then
+        self.note_width = math.min(avail, math.floor(self.height * 1.1))
+    end
+    self.note_x_offset = math.floor((avail - self.note_width) / 2)
+end
 function NotesListWidget:init()
     self.width = Screen:getWidth()
     self.height = Screen:getHeight()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     
-    local temp_title = TitleBar:new{
-        title = "temp",
-        width = self.width,
-        fullscreen = true,
-        with_bottom_line = false,
-        title_top_padding = Screen:scaleBySize(10),
-        bottom_v_padding = 0,
-        left_icon_size_ratio = 1,
-        right_icon_size_ratio = 1,
-        button_padding = Screen:scaleBySize(5),
-        left_icon = "appbar.menu",
-        close_callback = function() end,
-    }
-    self.title_height = temp_title:getHeight()
-    -- Compute close button center x for scrollbar alignment
-    if temp_title.right_button then
-        local bp = Screen:scaleBySize(5)
-        local icon_w = math.floor((temp_title.right_button.dimen.w - bp) / 3)
-        local close_center_x = self.width - bp - math.floor(icon_w / 2)
-        self.close_center_x = close_center_x
-        self.close_btn_w = icon_w
-        -- same position updatePage() uses, so the first page split matches what is drawn
-        self.sb_x = close_center_x - math.floor(SB_THUMB_WIDTH / 2)
-    else
-        local fallback_w = SB_THUMB_WIDTH + SB_MARGIN_RIGHT
-        self.close_center_x = self.width - SB_MARGIN_RIGHT - math.floor(SB_THUMB_WIDTH / 2)
-        self.close_btn_w = fallback_w
-        self.sb_x = self.width - SB_THUMB_WIDTH - SB_MARGIN_RIGHT
-    end
-    local temp_button = Button:new{ icon = "chevron.first", bordersize = 0 }
-    local btn_h = temp_button:getSize().h
-    temp_button:free()
-    local pag_style = getPaginationStyle()
-    -- both scrollbar styles draw their controls in the side strip, not in a bottom bar
-    self.footer_height = (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and 0 or btn_h
-    self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
+    self:computeLayout()
     self:applyFilter()
     self:calculatePages()
     if Device:hasKeys() then
@@ -1028,6 +1184,7 @@ function NotesListWidget:applyFilter()
         end
     end
     self.filtered_notes = {}
+    local counts = { all = 0, highlights = 0, notes = 0 }
     for _, note in ipairs(self.notes_list) do
         local match = true
         if self.active_filter then
@@ -1095,71 +1252,65 @@ function NotesListWidget:applyFilter()
                     match = false
                 end
             end
-            -- Notes presence
-            if match and af.notes_presence then
-                local has_note = note.user_note and note.user_note ~= ""
-                if af.notes_presence == "only" then
-                    match = has_note ~= false and has_note ~= nil
-                elseif af.notes_presence == "exclude" then
-                    match = not (has_note ~= false and has_note ~= nil)
-                end
+            -- Search box: highlight or note text
+            if match and af.search_any and af.search_any ~= "" then
+                local case = af.search_any_case == true
+                match = textMatches(note.highlighted_text or "", af.search_any, "all", case)
+                    or textMatches(note.user_note or "", af.search_any, "all", case)
+            end
+        end
+        -- Notes presence last, so the tab counts can be taken before it
+        local has_note = note.user_note ~= nil and note.user_note ~= ""
+        if match then
+            counts.all = counts.all + 1
+            if has_note then counts.notes = counts.notes + 1 else counts.highlights = counts.highlights + 1 end
+            local presence = self.active_filter and self.active_filter.notes_presence
+            if presence == "only" then
+                match = has_note
+            elseif presence == "exclude" then
+                match = not has_note
             end
         end
         if match then table.insert(self.filtered_notes, note) end
     end
+    self.tab_counts = counts
 end
 function NotesListWidget:calculatePages()
     self.pages = {}
     local note_spacing = getNoteSpacing()
     local current_page_notes, current_height = {}, 0
     
-    local filter_text = filterToString(self.active_filter) ~= ""
-    
-    local subtitle_height = 0
-    if filter_text then
-        local TextWidget = require("ui/widget/textwidget")
-        local Font = require("ui/font")
-        local test_widget = TextWidget:new{
-            text = "test",
-            face = Font:getFace("cfont", 14),
-        }
-        subtitle_height = test_widget:getSize().h + Screen:scaleBySize(5)
-        test_widget:free()
-    end
-    
-    local available_content_height = self.content_height - subtitle_height
+    local available_content_height = self.content_height
     local effective_content_height = available_content_height + getPreviewFudge()
     
     local dedup_prev_title = nil
     local dedup_prev_info_key = nil
     local dedup_fields = getDedupInfoFields()
-    local do_hide_dup_title = getHideDupTitle()
-    local do_hide_dup_info = getHideDupInfo()
-    local always_show_first = getAlwaysShowFirstOnPage()
-    local sb_track_center = (self.sb_x or 0) + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2) + math.floor(SB_TRACK_WIDTH / 2)
-    local pag_style = getPaginationStyle()
-    local sb_reserve = (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and (self.width - sb_track_center) or 0
-    local note_width = self.width - sb_reserve
+    local note_width = self.note_width
+    -- pages on which a new book starts, for the marks next to the scrollbar
+    self.book_start_pages = {}
     local layout_sig = getLayoutSignature(note_width)
     for i, note in ipairs(self.filtered_notes) do
         local is_first_on_page = (#current_page_notes == 0)
-        local skip_title = do_hide_dup_title
-            and not (always_show_first and is_first_on_page)
-            and (note.book_title == dedup_prev_title)
-        local skip_info = do_hide_dup_info
-            and not (always_show_first and is_first_on_page)
-            and (getNoteInfoKey(note, dedup_fields) == dedup_prev_info_key)
+        local skip_title, skip_info = getHeaderSkips(note, is_first_on_page, dedup_prev_title, dedup_prev_info_key, dedup_fields)
         local item_height = getNoteHeight(note, note_width, skip_title, skip_info, layout_sig)
-        local spacing = (#current_page_notes > 0) and note_spacing or 0
+        local spacing = 0
+        if not is_first_on_page then
+            spacing = note_spacing + (skip_title and 0 or BOOK_GAP)
+        end
         local next_height = current_height + spacing + item_height
         if next_height <= effective_content_height then
             current_height = next_height
             table.insert(current_page_notes, i)
         else
             if #current_page_notes > 0 then table.insert(self.pages, current_page_notes) end
-            -- Re-measure as first-on-page: always_show_first may restore title/info headers
+            -- Re-measure as first on the new page: the repeat options may bring headers back
             current_page_notes = {i}
-            current_height = getNoteHeight(note, note_width, false, false, layout_sig)
+            local st, si = getHeaderSkips(note, true, dedup_prev_title, dedup_prev_info_key, dedup_fields)
+            current_height = getNoteHeight(note, note_width, st, si, layout_sig)
+        end
+        if note.book_title ~= dedup_prev_title then
+            self.book_start_pages[#self.pages + 1] = true
         end
         dedup_prev_title = note.book_title
         dedup_prev_info_key = getNoteInfoKey(note, dedup_fields)
@@ -1171,134 +1322,95 @@ end
 function NotesListWidget:createFooter()
     local style = getPaginationStyle()
 
-    if style == "scrollbar" or style == "scrollbar_chevrons" then
-        -- Vertical scrollbar on the right edge, no bottom footer
+    if isScrollbarStyle(style) then
+        -- Slim scrollbar in a strip on the right: outline thumb, page number underneath,
+        -- marks where books start; "Scrollbar + Buttons" adds up/down arrows at the ends.
         if self.total_pages <= 1 then return VerticalGroup:new{} end
-        local has_chevrons = (style == "scrollbar_chevrons")
-        local sb_track_width     = SB_TRACK_WIDTH
-        local sb_thumb_width     = SB_THUMB_WIDTH
-        local sb_margin_v_top    = SB_MARGIN_V_TOP
-        local sb_margin_v_bottom = SB_MARGIN_V_BOTTOM
-        -- sb_x = self.width - close_btn_w, so strip_w == close_btn_w exactly
-        local strip_w = Screen:scaleBySize(32+16+3)
-        local sb_x    = self.width - strip_w
-        local chev_h  = has_chevrons and strip_w or 0
-        local chev_gap = has_chevrons and Screen:scaleBySize(4) or 0
-        local full_sb_height = self.height - self.title_height - sb_margin_v_top - sb_margin_v_bottom
-        --local sb_height = has_chevrons and (full_sb_height - chev_h * 2 - chev_gap * 2) or full_sb_height
-        local sb_height = has_chevrons and (full_sb_height - chev_h * 2) or full_sb_height
-        local low  = (self.current_page - 1) / self.total_pages
-        local high = self.current_page / self.total_pages
-        local thumb_h     = math.max(Screen:scaleBySize(16), math.floor(sb_height * (high - low)))
-        -- Map so thumb is flush at top on page 1 and flush at bottom on last page
-        local travel      = sb_height - thumb_h
-        local thumb_y_off = math.floor(low / (1 - 1 / self.total_pages) * travel + 0.5)
-        thumb_y_off       = math.max(0, math.min(travel, thumb_y_off))
         local self_ref = self
-        local hit_x      = sb_x
-        local hit_width  = strip_w
-        --local hit_y_top  = self.title_height + sb_margin_v_top + chev_h + chev_gap
-        local hit_y_top  = self.title_height + sb_margin_v_top + chev_h
-        local hit_height = sb_height
-        local CustomScrollBar = InputContainer:extend{
-            width  = strip_w,
-            height = sb_height,
+        local has_chevrons = (style == "scrollbar_chevrons")
+        local strip_w = SB_STRIP_WIDTH
+        local strip_x = self.sb_x
+        local strip_y = self.title_height + SB_MARGIN_V_TOP
+        local strip_h = self.height - strip_y - SB_MARGIN_V_BOTTOM
+        local btn_h = has_chevrons and strip_w or 0 -- square arrow buttons, as before
+        local page_label = TextWidget:new{
+            text = string.format("%d/%d", self.current_page, self.total_pages),
+            face = Font:getFace("cfont", 12), bold = true,
+            fgcolor = BlitBuffer.COLOR_DARK_GRAY,
+            max_width = strip_w + SB_MARGIN_RIGHT,
         }
-        function CustomScrollBar:init()
-            self.dimen = Geom:new{ x = hit_x, y = hit_y_top, w = hit_width, h = hit_height }
-            self.ges_events = {
-                TapScrollBar = {
-                    GestureRange:new{ ges = "tap", range = self.dimen },
-                },
-            }
+        local label_h = page_label:getSize().h + Screen:scaleBySize(6)
+        local track_y = btn_h                         -- relative to strip_y
+        local track_h = strip_h - btn_h * 2 - label_h
+        local total = self.total_pages
+        local thumb_h = math.max(Screen:scaleBySize(16), math.floor(track_h / total))
+        local travel = track_h - thumb_h
+        local function pageY(p) -- top of the thumb when page p is shown
+            return math.floor((p - 1) / (total - 1) * travel + 0.5)
         end
-        function CustomScrollBar:onTapScrollBar(_, ges)
-            if not ges or not ges.pos then return end
-            local rel = (ges.pos.y - hit_y_top) / hit_height
-            rel = math.max(0, math.min(1, rel))
-            local page = math.max(1, math.min(self_ref.total_pages, math.ceil(rel * self_ref.total_pages)))
-            self_ref.current_page = page
-            self_ref:updatePage()
-            return true
-        end
-        function CustomScrollBar:paintTo(bb, x, y)
-            -- center thumb within strip_w
-            local thumb_x = x + math.floor((strip_w - sb_thumb_width) / 2)
-            local track_x = thumb_x + math.floor((sb_thumb_width - sb_track_width) / 2)
-            bb:paintRect(track_x, y, sb_track_width, self.height, BlitBuffer.COLOR_BLACK)
-            local radius = math.floor(sb_thumb_width / 2)
-            bb:paintRoundedRect(thumb_x, y + thumb_y_off, sb_thumb_width, thumb_h, BlitBuffer.COLOR_WHITE, radius)
-            bb:paintBorder(thumb_x, y + thumb_y_off, sb_thumb_width, thumb_h, 2, BlitBuffer.COLOR_BLACK, radius)
-        end
-        local sb = CustomScrollBar:new{}
-        if not has_chevrons then
-            return VerticalGroup:new{
-                VerticalSpan:new{ width = self.title_height + sb_margin_v_top },
-                HorizontalGroup:new{
-                    HorizontalSpan:new{ width = sb_x },
-                    sb,
-                },
-            }
-        end
-        -- scrollbar_chevrons: one widget for the full strip — paints chevrons+scrollbar, dispatches taps by Y
         local up_enabled = self.current_page > 1
-        local dn_enabled = self.current_page < self.total_pages
-        local IconWidget = require("ui/widget/iconwidget")
-        local btn_h = strip_w  -- square buttons
-        local up_abs_y = self.title_height + sb_margin_v_top
-        local dn_abs_y = up_abs_y + btn_h + sb_height
+        local dn_enabled = self.current_page < total
         local icon_size = Screen:scaleBySize(32)
-        local icon_ox = math.floor((strip_w - icon_size) / 2)
-
-        local up_icon = IconWidget:new{ icon = "chevron.up", width = icon_size, height = icon_size, dim = not up_enabled }
-        local dn_icon = IconWidget:new{ icon = "chevron.up", rotation_angle = 180, width = icon_size, height = icon_size, dim = not dn_enabled }
-
-        local full_strip_h = btn_h * 2 + sb_height
-        local strip_range = Geom:new{ x = sb_x, y = up_abs_y, w = strip_w, h = full_strip_h }
-        local ChevronStrip = InputContainer:extend{ width = strip_w, height = full_strip_h }
-        function ChevronStrip:init()
-            self.dimen = strip_range
-            self.ges_events = { Tap = { GestureRange:new{ ges = "tap", range = strip_range } } }
+        local up_icon, dn_icon
+        if has_chevrons then
+            up_icon = IconWidget:new{ icon = "chevron.up", width = icon_size, height = icon_size, dim = not up_enabled }
+            dn_icon = IconWidget:new{ icon = "chevron.up", rotation_angle = 180, width = icon_size, height = icon_size, dim = not dn_enabled }
         end
-        function ChevronStrip:onTap(_, ges)
+        local marks = {}
+        if getScrollbarBookMarks() and not self.single_book then
+            for p in pairs(self.book_start_pages or {}) do table.insert(marks, p) end
+        end
+        local range = Geom:new{ x = strip_x, y = strip_y, w = strip_w + SB_MARGIN_RIGHT, h = strip_h }
+        local ScrollStrip = InputContainer:extend{}
+        function ScrollStrip:init()
+            self.dimen = Geom:new{ x = strip_x, y = strip_y, w = strip_w, h = strip_h }
+            self.ges_events = { TapStrip = { GestureRange:new{ ges = "tap", range = range } } }
+        end
+        function ScrollStrip:getSize() return Geom:new{ w = strip_w, h = strip_h } end
+        function ScrollStrip:onTapStrip(_, ges)
             if not ges or not ges.pos then return end
-            if ges.pos.x < sb_x then return end
-            local y = ges.pos.y
-            if y < up_abs_y + btn_h then
+            local y = ges.pos.y - strip_y
+            if has_chevrons and y < btn_h then
                 if up_enabled then self_ref:onGotoPrevPage() end
-            elseif y >= dn_abs_y then
+            elseif has_chevrons and y >= strip_h - btn_h then
                 if dn_enabled then self_ref:onGotoNextPage() end
-            else
-                -- scrollbar tap
-                local rel = (y - (up_abs_y + btn_h)) / sb_height
-                rel = math.max(0, math.min(1, rel))
-                local page = math.max(1, math.min(self_ref.total_pages, math.ceil(rel * self_ref.total_pages)))
-                self_ref.current_page = page
-                self_ref:updatePage()
+            elseif y >= track_y and y < track_y + track_h then
+                local rel = (y - track_y) / track_h
+                local page = math.max(1, math.min(total, math.ceil(rel * total)))
+                if page ~= self_ref.current_page then
+                    self_ref.current_page = page
+                    self_ref:updatePage()
+                end
             end
             return true
         end
-        function ChevronStrip:paintTo(bb, x, y)
-            -- up chevron: centered horizontally, at top of strip
-            up_icon:paintTo(bb, x + icon_ox, y)
-            -- scrollbar track + thumb
-            local sb_y = y + btn_h
-            local thumb_x = x + math.floor((strip_w - sb_thumb_width) / 2)
-            local track_x = thumb_x + math.floor((sb_thumb_width - sb_track_width) / 2)
-            bb:paintRect(track_x, sb_y, sb_track_width, sb_height, BlitBuffer.COLOR_BLACK)
-            local radius = math.floor(sb_thumb_width / 2)
-            bb:paintRoundedRect(thumb_x, sb_y + thumb_y_off, sb_thumb_width, thumb_h, BlitBuffer.COLOR_WHITE, radius)
-            bb:paintBorder(thumb_x, sb_y + thumb_y_off, sb_thumb_width, thumb_h, 2, BlitBuffer.COLOR_BLACK, radius)
-            -- dn chevron: centered horizontally, at bottom of strip
-            dn_icon:paintTo(bb, x + icon_ox, y + btn_h + sb_height + math.floor(btn_h - icon_size))
+        function ScrollStrip:paintTo(bb, x, y)
+            -- thumb and track positions exactly as before the redesign
+            local thumb_x = x + math.floor((strip_w - SB_THUMB_WIDTH) / 2)
+            local track_x = thumb_x + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2)
+            local icon_x = x + math.floor((strip_w - icon_size) / 2)
+            if up_icon then up_icon:paintTo(bb, icon_x, y) end
+            local ty = y + track_y
+            bb:paintRect(track_x, ty, SB_TRACK_WIDTH, track_h, SB_TRACK_COLOR)
+            -- same overhang on both sides of the track, so the notch is centred on it
+            local mark_x = track_x - SB_MARK_OVERHANG
+            local mark_w = SB_TRACK_WIDTH + SB_MARK_OVERHANG * 2
+            for _i, p in ipairs(marks) do
+                if p > 1 then -- the top of the track already marks page 1
+                    bb:paintRect(mark_x, ty + pageY(p) + math.floor(thumb_h / 2), mark_w, SB_MARK_HEIGHT, SB_TRACK_COLOR)
+                end
+            end
+            local thumb_y = ty + pageY(self_ref.current_page)
+            local radius = math.floor(SB_THUMB_WIDTH / 2)
+            bb:paintRoundedRect(thumb_x, thumb_y, SB_THUMB_WIDTH, thumb_h, BlitBuffer.COLOR_WHITE, radius)
+            bb:paintBorder(thumb_x, thumb_y, SB_THUMB_WIDTH, thumb_h, 2, BlitBuffer.COLOR_BLACK, radius)
+            local lw = page_label:getSize().w
+            page_label:paintTo(bb, track_x - math.floor(lw / 2), ty + track_h + Screen:scaleBySize(6))
+            if dn_icon then dn_icon:paintTo(bb, icon_x, y + strip_h - icon_size) end
         end
-
         return VerticalGroup:new{
-            VerticalSpan:new{ width = self.title_height + sb_margin_v_top },
-            HorizontalGroup:new{
-                HorizontalSpan:new{ width = sb_x },
-                ChevronStrip:new{},
-            },
+            VerticalSpan:new{ width = strip_y },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = strip_x }, ScrollStrip:new{} },
         }
     elseif style == "default" then
         -- KOReader file manager style: centered chevrons with spacers
@@ -1415,116 +1527,192 @@ function NotesListWidget:createFooter()
         }
     end
 end
-function NotesListWidget:updatePage()
-    self.width = Screen:getWidth()
-    self.height = Screen:getHeight()
-    local temp_title = TitleBar:new{
-        title = "temp",
-        width = self.width,
-        fullscreen = true,
-        with_bottom_line = false,
-        title_top_padding = Screen:scaleBySize(10),
-        bottom_v_padding = 0,
-        left_icon_size_ratio = 1,
-        right_icon_size_ratio = 1,
-        button_padding = Screen:scaleBySize(5),
-        left_icon = "appbar.menu",
-        close_callback = function() end,
-    }
-    self.title_height = temp_title:getHeight()
-    -- Recompute close button center x (screen may have rotated)
-    if temp_title.right_button then
-        local bp = Screen:scaleBySize(5)
-        local icon_w = math.floor((temp_title.right_button.dimen.w - bp) / 3)
-        local close_center_x = self.width - bp - math.floor(icon_w / 2)
-        self.close_center_x = close_center_x
-        self.sb_x = close_center_x - math.floor(SB_THUMB_WIDTH / 2)
-    else
-        self.close_center_x = self.width - SB_MARGIN_RIGHT - math.floor(SB_THUMB_WIDTH / 2)
-        self.sb_x = self.width - SB_THUMB_WIDTH - SB_MARGIN_RIGHT
-    end
-    local temp_button = Button:new{ icon = "chevron.first", bordersize = 0 }
-    local btn_h = temp_button:getSize().h
-    temp_button:free()
-    local pag_style = getPaginationStyle()
-    -- both scrollbar styles draw their controls in the side strip, not in a bottom bar
-    self.footer_height = (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and 0 or btn_h
-    self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
-
-
-
-local filter_text = filterToString(self.active_filter)
-
-local title_text
-if getShowTotalNotes() == true then
-    title_text = string.format(_("Annotations (%d)"), #self.filtered_notes)
-else
-    title_text = _("Annotations")
+-- Label for the sort button in the tab row, e.g. "Newest first" or "Book · A to Z (by Date)".
+local SORT_CATEGORY_LABELS = { author = _("Author"), book = _("Book"), filename = _("Filename") }
+local SORT_SHORT_LABELS = {
+    date_newest = _("Newest first"), date_oldest = _("Oldest first"),
+    asc = _("A–Z"), desc = _("Z–A"),
+    location_asc = _("start to end"), location_desc = _("end to start"),
+}
+local function sortModeLabel(mode)
+    if not SORT_MODES[mode] then mode = "date_newest" end
+    if SORT_SHORT_LABELS[mode] then return SORT_SHORT_LABELS[mode] end
+    local cat, rest = mode:match("^(%a+)_(.+)$")
+    return (SORT_CATEGORY_LABELS[cat] or cat) .. " · " .. (SORT_SHORT_LABELS[rest] or SORT_MODES[mode].label)
 end
 
-    
-    local title_bar = TitleBar:new{
-        title = title_text,
-        fullscreen = true,
-        width = self.width,
-        with_bottom_line = false,
-        title_top_padding = Screen:scaleBySize(10),
-        bottom_v_padding = 0,
-        left_icon_size_ratio = 1,
-        right_icon_size_ratio = 1,
-        button_padding = Screen:scaleBySize(5),
-        close_callback = function() self:onClose() end,
-        left_icon = "appbar.menu",
-        left_icon_tap_callback = function() self:showMainMenu() end,
-        show_parent = self,
+-- Top bar, tab row and (when filters are on) the active-filter row. Height is self.title_height.
+function NotesListWidget:buildHeader()
+    local w = self.width
+    local side = Screen:scaleBySize(4)
+    local h_pad = getHMargin() + Size.padding.default
+    if h_pad > Screen:scaleBySize(24) then h_pad = Screen:scaleBySize(24) end
+    local header = VerticalGroup:new{ align = "left" }
+
+    -- 1. top bar
+    local title = TextWidget:new{
+        text = _("Annotations"), face = getFaceOr(SERIF_FONT, 21, "cfont"), bold = true,
+        max_width = math.floor(w / 2),
     }
-    -- Clamp close button tap area to the title bar height to prevent overlap with the scrollbar chevron
-    if title_bar.right_button and title_bar.right_button.dimen then
-        title_bar.right_button.dimen.h = math.min(title_bar.right_button.dimen.h, title_bar:getHeight())
-    end
-
-    -- Add "open filters menu" button next to the menu button
+    local right = HorizontalGroup:new{ align = "center" }
+    table.insert(right, newHeaderButton("appbar.search", function() self:showSearchDialog() end, self))
     if getFilterTitlebarBtn() then
-        local IconButton = require("ui/widget/iconbutton")
-        local bp = Screen:scaleBySize(5)
-        local lb_w = title_bar.left_button:getSize().w
-        local icon_size = math.floor((lb_w - bp) / 3)
-        local btn_x = bp + icon_size + Screen:scaleBySize(12)
-        title_bar.left_button.padding_right = btn_x - bp - icon_size - 1
-        title_bar.left_button:update()
-        local filter_btn = IconButton:new{
-            icon = "appbar.search",
-            width = icon_size,
-            height = icon_size,
-            padding = 0,
-            overlap_offset = { btn_x, bp },
-            callback = function()
-                self:showFilterMenu(false)
-            end,
-            show_parent = self,
-        }
-        table.insert(title_bar, filter_btn)
+        table.insert(right, newHeaderButton("appbar.settings", function() self:showFilterMenu(false) end, self,
+            pluginIcon("appbar.filter")))
     end
+    table.insert(right, newHeaderButton("close", function() self:onClose() end, self, nil, false))
+    table.insert(right, HorizontalSpan:new{ width = side })
+    local bar_dimen = Geom:new{ w = w, h = TOPBAR_HEIGHT }
+    table.insert(header, OverlapGroup:new{
+        dimen = bar_dimen, allow_mirroring = false,
+        LeftContainer:new{ dimen = bar_dimen, HorizontalGroup:new{
+            align = "center",
+            HorizontalSpan:new{ width = side },
+            newHeaderButton("appbar.menu", function() self:showMainMenu() end, self),
+            HorizontalSpan:new{ width = Screen:scaleBySize(2) },
+            title,
+        } },
+        RightContainer:new{ dimen = bar_dimen, right },
+    })
 
-    local subtitle_widget = nil
-    local subtitle_height = 0
-    if filter_text ~= "" then
-        local TextWidget = require("ui/widget/textwidget")
-        local Font = require("ui/font")
-        subtitle_widget = TextWidget:new{
-            text = "[" .. filter_text .. "]",
-            face = Font:getFace("cfont", 14),
-            fgcolor = BlitBuffer.COLOR_DARK_GRAY,
+    -- 2. tabs: All / Highlights (no note) / Notes, plus the sort button
+    local counts = self.tab_counts or { all = 0, highlights = 0, notes = 0 }
+    local presence = self.active_filter and self.active_filter.notes_presence
+    local show_counts = getShowTotalNotes()
+    local tab_face = Font:getFace("cfont", 15)
+    local line_h = Size.line.thin
+    local underline_h = Screen:scaleBySize(2)
+    local row_h = TABS_HEIGHT - line_h
+    local tabs = HorizontalGroup:new{ align = "top", HorizontalSpan:new{ width = h_pad } }
+    for i, tab in ipairs({
+        { key = nil,       label = _("All"),        n = counts.all },
+        { key = "exclude", label = _("Highlights"), n = counts.highlights },
+        { key = "only",    label = _("Notes"),      n = counts.notes },
+    }) do
+        local active = (presence == tab.key)
+        local text = tab.label .. (show_counts and ("  " .. tab.n) or "")
+        local tw = TextWidget:new{
+            text = text, face = tab_face, bold = active,
+            fgcolor = active and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_DARK_GRAY,
         }
-        subtitle_height = subtitle_widget:getSize().h
+        local tab_w = tw:getSize().w
+        local box = VerticalGroup:new{
+            CenterContainer:new{ dimen = Geom:new{ w = tab_w, h = row_h - underline_h }, tw },
+            active and LineWidget:new{ dimen = Geom:new{ w = tab_w, h = underline_h }, background = BlitBuffer.COLOR_BLACK }
+                or VerticalSpan:new{ width = underline_h },
+        }
+        if i > 1 then table.insert(tabs, HorizontalSpan:new{ width = Screen:scaleBySize(20) }) end
+        table.insert(tabs, TapBox:new{ box, callback = function() self:setNotesPresence(tab.key) end })
     end
+    local sort_text = TextWidget:new{
+        text = sortModeLabel(getSetting("sort_mode", "date_newest")),
+        face = Font:getFace("cfont", 13), fgcolor = BlitBuffer.COLOR_DARK_GRAY,
+        max_width = math.floor(w * 0.4),
+    }
+    local arrow_size = Screen:scaleBySize(14)
+    local sort_label = HorizontalGroup:new{
+        align = "center", sort_text, HorizontalSpan:new{ width = Screen:scaleBySize(3) },
+        IconWidget:new{ icon = "chevron.up", rotation_angle = 180, width = arrow_size, height = arrow_size },
+    }
+    local sort_btn = TapBox:new{
+        CenterContainer:new{ dimen = Geom:new{ w = sort_label:getSize().w + h_pad, h = row_h }, sort_label },
+        callback = function() self:showSortMenu(false) end,
+    }
+    local tabs_dimen = Geom:new{ w = w, h = row_h }
+    table.insert(header, OverlapGroup:new{
+        dimen = tabs_dimen, allow_mirroring = false,
+        LeftContainer:new{ dimen = tabs_dimen, tabs },
+        RightContainer:new{ dimen = tabs_dimen, HorizontalGroup:new{ sort_btn, HorizontalSpan:new{ width = math.floor(h_pad / 2) } } },
+    })
+    table.insert(header, LineWidget:new{ dimen = Geom:new{ w = w, h = line_h }, background = BlitBuffer.COLOR_GRAY })
+
+    -- 3. active filters (other than the tab), tap to change, "Clear" to remove
+    if self.filter_row_text ~= "" then
+        local small = Font:getFace("cfont", 13)
+        local clear = TextWidget:new{ text = _("Clear"), face = small, bold = true }
+        local clear_w = clear:getSize().w + h_pad * 2
+        local label = TextWidget:new{
+            text = _("Filtered: ") .. self.filter_row_text, face = small,
+            fgcolor = BlitBuffer.COLOR_DARK_GRAY,
+            max_width = w - h_pad - clear_w,
+        }
+        local row_dimen = Geom:new{ w = w, h = FILTERROW_HEIGHT }
+        table.insert(header, OverlapGroup:new{
+            dimen = row_dimen, allow_mirroring = false,
+            LeftContainer:new{ dimen = row_dimen, HorizontalGroup:new{
+                HorizontalSpan:new{ width = h_pad },
+                TapBox:new{
+                    CenterContainer:new{ dimen = Geom:new{ w = label:getSize().w, h = FILTERROW_HEIGHT }, label },
+                    callback = function() self:showFilterMenu(false) end,
+                },
+            } },
+            RightContainer:new{ dimen = row_dimen, TapBox:new{
+                CenterContainer:new{ dimen = Geom:new{ w = clear_w, h = FILTERROW_HEIGHT }, clear },
+                callback = function() self:clearFilters() end,
+            } },
+        })
+    end
+    return header
+end
+
+function NotesListWidget:setNotesPresence(key)
+    self.active_filter = self.active_filter or {}
+    if self.active_filter.notes_presence == key then return end
+    self.active_filter.notes_presence = key
+    self.current_page = 1
+    self:refresh()
+end
+
+-- Remove all filters except the tab that is selected.
+function NotesListWidget:clearFilters()
+    local presence = self.active_filter and self.active_filter.notes_presence
+    self.active_filter = { notes_presence = presence }
+    self.current_page = 1
+    self:refresh()
+end
+
+function NotesListWidget:showSearchDialog()
+    local InputDialog = require("ui/widget/inputdialog")
+    local af = self.active_filter or {}
+    local dialog
+    local function run(text)
+        UIManager:close(dialog)
+        self.active_filter = self.active_filter or {}
+        self.active_filter.search_any = (text and text ~= "") and text or nil
+        self.current_page = 1
+        self:refresh()
+    end
+    dialog = InputDialog:new{
+        title = _("Search annotations"),
+        input = af.search_any or "",
+        input_hint = _("Words in highlights or notes"),
+        buttons = {{
+            { text = _("Cancel"), id = "close", callback = function() UIManager:close(dialog) end },
+            { text = _("Clear"), callback = function() run(nil) end },
+            { text = _("Search"), is_enter_default = true, callback = function() run(dialog:getInputText()) end },
+        }},
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
+function NotesListWidget:updatePage()
+    self:computeLayout()
+    local pag_style = getPaginationStyle()
+    local header = self:buildHeader()
 
     local notes_group = VerticalGroup:new{ align = "left" }
     local top_padding = getTopPadding()
     if top_padding > 0 then
         table.insert(notes_group, VerticalSpan:new{ width = top_padding })
     end
-    
+    local x_offset = self.note_x_offset or 0
+    local function place(widget)
+        if x_offset > 0 then
+            return HorizontalGroup:new{ HorizontalSpan:new{ width = x_offset }, widget }
+        end
+        return widget
+    end
 
     local page_indices = self.pages[self.current_page] or {}
     local last_note_widget = nil
@@ -1534,44 +1722,32 @@ end
     local row_y = top_padding
     local note_spacing = getNoteSpacing()
     local dedup_fields = getDedupInfoFields()
-    local do_hide_dup_title = getHideDupTitle()
-    local do_hide_dup_info = getHideDupInfo()
-    local always_show_first = getAlwaysShowFirstOnPage()
-    local _sb_track_center = (self.sb_x or 0) + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2) + math.floor(SB_TRACK_WIDTH / 2)
-    local _sb_reserve = (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and (self.width - _sb_track_center) or 0
-    local note_width = self.width - _sb_reserve
+    local note_width = self.note_width
     -- determine dedup state from last note of previous page
     local dedup_prev_title = nil
     local dedup_prev_info_key = nil
-    if do_hide_dup_title or do_hide_dup_info then
-        for p = 1, self.current_page - 1 do
-            local prev_page = self.pages[p] or {}
-            if #prev_page > 0 then
-                local last_idx = prev_page[#prev_page]
-                local prev_note = self.filtered_notes[last_idx]
-                if prev_note then
-                    dedup_prev_title = prev_note.book_title
-                    dedup_prev_info_key = getNoteInfoKey(prev_note, dedup_fields)
-                end
+    do
+        local prev_page = self.pages[self.current_page - 1]
+        if prev_page and #prev_page > 0 then
+            local prev_note = self.filtered_notes[prev_page[#prev_page]]
+            if prev_note then
+                dedup_prev_title = prev_note.book_title
+                dedup_prev_info_key = getNoteInfoKey(prev_note, dedup_fields)
             end
         end
     end
     for i, idx in ipairs(page_indices) do
         local note = self.filtered_notes[idx]
         if note then
-            if i > 1 then
-                table.insert(notes_group, VerticalSpan:new{ width = note_spacing })
-                row_y = row_y + note_spacing
-            end
             local is_first_on_page = (i == 1)
-            local skip_title = do_hide_dup_title
-                and not (always_show_first and is_first_on_page)
-                and (note.book_title == dedup_prev_title)
-            local skip_info = do_hide_dup_info
-                and not (always_show_first and is_first_on_page)
-                and (getNoteInfoKey(note, dedup_fields) == dedup_prev_info_key)
+            local skip_title, skip_info = getHeaderSkips(note, is_first_on_page, dedup_prev_title, dedup_prev_info_key, dedup_fields)
+            if not is_first_on_page then
+                local gap = note_spacing + (skip_title and 0 or BOOK_GAP)
+                table.insert(notes_group, VerticalSpan:new{ width = gap })
+                row_y = row_y + gap
+            end
             local note_widget = NoteItemWidget:new{ width = note_width, note = note, show_parent = self, skip_title = skip_title, skip_info = skip_info }
-            table.insert(notes_group, note_widget)
+            table.insert(notes_group, place(note_widget))
             table.insert(tap_rows, { top = row_y, bottom = row_y + note_widget.dimen.h, note = note })
             row_y = row_y + note_widget.dimen.h
             if i == #page_indices then last_note_widget = note_widget end
@@ -1580,76 +1756,49 @@ end
         end
     end
 
-    
+    -- First annotation of the next page, faded and cut off, as a hint that there is more
     if last_note_widget and self.current_page < self.total_pages then
         local next_page_indices = self.pages[self.current_page + 1]
-        if next_page_indices and #next_page_indices > 0 then
-            local next_note_idx = next_page_indices[1]
-            local next_note = self.filtered_notes[next_note_idx]
-            if next_note then
-                local used_height = 0
-                for _, w in ipairs(notes_group) do
-                    if w.getSize then used_height = used_height + w:getSize().h end
-                end
-                local available_height = self.height - self.title_height - self.footer_height - used_height - 2
-                local preview_skip_title = do_hide_dup_title and (next_note.book_title == dedup_prev_title)
-                local preview_skip_info = do_hide_dup_info and (getNoteInfoKey(next_note, dedup_fields) == dedup_prev_info_key)
+        local next_note = next_page_indices and next_page_indices[1] and self.filtered_notes[next_page_indices[1]]
+        if next_note then
+            local used_height = 0
+            for _i, w in ipairs(notes_group) do
+                if w.getSize then used_height = used_height + w:getSize().h end
+            end
+            local available_height = self.height - self.title_height - self.footer_height - used_height - note_spacing - 2
+            if available_height > 0 then
+                local preview_skip_title, preview_skip_info = getHeaderSkips(next_note, false, dedup_prev_title, dedup_prev_info_key, dedup_fields)
                 local preview_widget = NoteItemWidget:new{
-                    width = note_width,
-                    note = next_note,
-                    show_parent = self,
-                    is_preview = true,
-                    disable_tap = true,
-                    skip_title = preview_skip_title,
-                    skip_info = preview_skip_info,
+                    width = note_width, note = next_note, show_parent = self,
+                    is_preview = true, disable_tap = true,
+                    skip_title = preview_skip_title, skip_info = preview_skip_info,
                 }
-                local FrameContainer = require("ui/widget/container/framecontainer")
                 local AlphaContainer = require("ui/widget/container/alphacontainer")
-                local bordered_preview = FrameContainer:new{
-                    width = note_width,
-                    height = available_height,
-                    padding = 0,
-                    margin = 0,
-                    bordersize = 0,
-                    preview_widget
-                }
-                local alpha_preview = AlphaContainer:new{
-                    alpha = 0.2,
-                    bordered_preview
-                }
                 table.insert(notes_group, VerticalSpan:new{ width = note_spacing })
-                table.insert(notes_group, alpha_preview)
+                table.insert(notes_group, place(AlphaContainer:new{
+                    alpha = 0.2,
+                    FrameContainer:new{
+                        width = note_width, height = available_height,
+                        padding = 0, margin = 0, bordersize = 0,
+                        preview_widget,
+                    },
+                }))
             end
         end
     end
 
-    
-
     local footer = self:createFooter()
-
-    local title_content = VerticalGroup:new{
-        align = "left",
-        title_bar,
-    }
-    if subtitle_widget then
-        table.insert(title_content, CenterContainer:new{
-            dimen = Geom:new{ w = self.width, h = subtitle_height },
-            subtitle_widget,
-        })
-    end
-    
-    local title_area_height = title_content:getSize().h
     self.tap_rows = tap_rows
-    self.tap_rows_origin_y = title_area_height
-    local adjusted_content_height = self.height - title_area_height - self.footer_height - getTopPadding()
+    self.tap_rows_origin_y = self.title_height
+    local list_height = self.height - self.title_height - self.footer_height
 
     local content = OverlapGroup:new{
         allow_mirroring = false,
         dimen = Geom:new{ w = self.width, h = self.height },
         VerticalGroup:new{
             align = "left",
-            title_content,
-            TopContainer:new{ dimen = Geom:new{ w = self.width, h = adjusted_content_height }, notes_group },
+            header,
+            TopContainer:new{ dimen = Geom:new{ w = self.width, h = list_height }, notes_group },
         },
         footer,
     }
@@ -1659,40 +1808,25 @@ end
         background = BlitBuffer.COLOR_WHITE,
         content,
     }
-    
+
     self.ges_events = self.ges_events or {}
     local tap_height = self.height - self.title_height - self.footer_height
-    -- In scrollbar mode, exclude the scrollbar column so taps/swipes there reach CustomScrollBar
+    -- In scrollbar mode, exclude the scrollbar column so taps/swipes there reach the strip
     local tap_width = self.width
-    if (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and self.sb_x then
+    if isScrollbarStyle(pag_style) and self.sb_x then
         tap_width = self.sb_x
     end
     self.ges_events.Tap = { GestureRange:new{ ges = "tap", range = Geom:new{ x = 0, y = self.title_height, w = tap_width, h = tap_height } } }
     -- Narrow swipe range so the scrollbar column isn't claimed by page-turn swipes
     local swipe_range = Geom:new{ x = 0, y = 0, w = tap_width, h = self.height }
     local swipe_setting = getSwipeSetting()
-    if swipe_setting ~= "disabled" then
-        if swipe_setting == "horizontal" or swipe_setting == "both" then
-            self.ges_events.SwipeWest = { GestureRange:new{ ges = "swipe", range = swipe_range, direction = "west" } }
-            self.ges_events.SwipeEast = { GestureRange:new{ ges = "swipe", range = swipe_range, direction = "east" } }
-        else
-            self.ges_events.SwipeWest = nil
-            self.ges_events.SwipeEast = nil
-        end
-        if swipe_setting == "vertical" or swipe_setting == "both" then
-            self.ges_events.SwipeNorth = { GestureRange:new{ ges = "swipe", range = swipe_range, direction = "north" } }
-            self.ges_events.SwipeSouth = { GestureRange:new{ ges = "swipe", range = swipe_range, direction = "south" } }
-        else
-            self.ges_events.SwipeNorth = nil
-            self.ges_events.SwipeSouth = nil
-        end
-    else
-        self.ges_events.SwipeWest  = nil
-        self.ges_events.SwipeEast  = nil
-        self.ges_events.SwipeNorth = nil
-        self.ges_events.SwipeSouth = nil
-    end
-    
+    local horiz = swipe_setting == "horizontal" or swipe_setting == "both"
+    local vert = swipe_setting == "vertical" or swipe_setting == "both"
+    self.ges_events.SwipeWest  = horiz and { GestureRange:new{ ges = "swipe", range = swipe_range, direction = "west" } } or nil
+    self.ges_events.SwipeEast  = horiz and { GestureRange:new{ ges = "swipe", range = swipe_range, direction = "east" } } or nil
+    self.ges_events.SwipeNorth = vert and { GestureRange:new{ ges = "swipe", range = swipe_range, direction = "north" } } or nil
+    self.ges_events.SwipeSouth = vert and { GestureRange:new{ ges = "swipe", range = swipe_range, direction = "south" } } or nil
+
     UIManager:setDirty(self, "ui")
 end
 function NotesListWidget:showMainMenu()
@@ -1777,7 +1911,8 @@ function NotesListWidget:exportToMarkdown()
     UIManager:show(InfoMessage:new{ text = string.format(_("Exported %d annotations to:\n%s"), #notes, path) })
 end
 
-function NotesListWidget:showSortMenu()
+-- back_to_menu == false: opened from the sort button in the tab row, so don't reopen the ☰ menu.
+function NotesListWidget:showSortMenu(back_to_menu)
     local sort_mode = getSetting("sort_mode", "date_newest")
     local function check(mode) return sort_mode == mode and "\u{2713} " or "  " end
     local function apply(mode)
@@ -1785,7 +1920,7 @@ function NotesListWidget:showSortMenu()
         self:applySort()
         self:refresh()
         UIManager:close(self.sort_dialog)
-        self:showMainMenu()
+        if back_to_menu ~= false then self:showMainMenu() end
     end
 
     local categories = {
@@ -1816,9 +1951,9 @@ function NotesListWidget:showSortMenu()
         end
     end
 
-    table.insert(buttons, {{ text = _("Back"), callback = function()
+    table.insert(buttons, {{ text = back_to_menu == false and _("Close") or _("Back"), callback = function()
         UIManager:close(self.sort_dialog)
-        self:showMainMenu()
+        if back_to_menu ~= false then self:showMainMenu() end
     end }})
 
     self.sort_dialog = ButtonDialogTitle:new{ title = _("Sort By"), buttons = buttons }
@@ -1923,12 +2058,15 @@ function NotesListWidget:showSettingsMenu()
         {},
         {{ text = _("Content"), enabled = false }},
         {
-            { text = _("Count in Title: ") .. onoff(getShowTotalNotes()),  callback = makeToggleSetting("show_total",           getShowTotalNotes) },
+            { text = _("Counts on Tabs: ") .. onoff(getShowTotalNotes()),  callback = makeToggleSetting("show_total",           getShowTotalNotes) },
             { text = _("Filter Button: ")        .. onoff(getFilterTitlebarBtn()),callback = makeToggleSetting("filter_titlebar_btn", getFilterTitlebarBtn) },
         },
         {
             { text = _("Show Book / Info Row: ") .. onoff(getShowInfo()),              callback = makeToggleSetting("show_info",                  getShowInfo) },
-            { text = _("Show Book Title on Every Page: ") .. onoff(getAlwaysShowFirstOnPage()), callback = makeToggleSetting("always_show_first_on_page", getAlwaysShowFirstOnPage) },
+        },
+        {
+            { text = _("Title on Each Page: ") .. onoff(getRepeatTitleOnPage()), callback = makeToggleSetting("repeat_title_on_page", getRepeatTitleOnPage) },
+            { text = _("Chapter/Date on Each Page: ") .. onoff(getRepeatInfoOnPage()), callback = makeToggleSetting("repeat_info_on_page", getRepeatInfoOnPage) },
         },
         {
             { text = _("Hide Duplicate Book Header: ") .. onoff(getHideDupTitle()), callback = makeToggleSetting("hide_dup_title", getHideDupTitle) },
@@ -1956,6 +2094,9 @@ function NotesListWidget:showSettingsMenu()
         {
             { text = _("Pagination Style..."), callback = sub(function() self:showPaginationStyleMenu() end) },
             { text = _("Swipe Gestures..."),  callback = sub(function() self:showSwipeSettingMenu() end) },
+        },
+        {
+            { text = _("Book Marks on Scrollbar: ") .. onoff(getScrollbarBookMarks()), callback = makeToggleSetting("sb_book_marks", getScrollbarBookMarks) },
         },
         {{ text = _("Back"), callback = function()
             UIManager:close(self.settings_dialog)
@@ -2686,7 +2827,7 @@ function NotesListWidget:showFilterMenu(show_back)
     showFilterMenu(show_back)
 end
 function NotesListWidget:refresh()
-    self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
+    self:computeLayout()
     local prev_page = self.current_page or 1
     self:applyFilter()
     self:calculatePages()
@@ -2844,7 +2985,11 @@ function NotesListWidget:onNoteSelected(note)
         self.viewer:showNoteDetails(note, self)
     end
 end
-function NotesListWidget:onClose() UIManager:close(self) return true end
+function NotesListWidget:onClose()
+    -- full-screen widget: refresh what was underneath, or e-ink keeps showing the list
+    UIManager:close(self, "flashui")
+    return true
+end
 -- Screen rotated or window resized: rebuild the layout for the new size and stay on the
 -- page that shows the annotation that was at the top before.
 function NotesListWidget:onScreenResize()
@@ -3779,6 +3924,7 @@ AllNotesViewer._test = {
     normalizeBookTitle = normalizeBookTitle,
     SORT_COMPARATORS = SORT_COMPARATORS,
     filterToString = filterToString,
+    sortModeLabel = sortModeLabel,
     itemMatchesNote = itemMatchesNote,
     notesToMarkdown = notesToMarkdown,
     NotesListWidget = NotesListWidget,
