@@ -4260,7 +4260,8 @@ function Page.Glyph:paintTo(bb, x, y)
         local steps = math.max(math.abs(x2 - x1), math.abs(y2 - y1))
         for i = 0, steps do
             local f = steps > 0 and i / steps or 0
-            bb:paintRect(x + math.floor(x1 + (x2 - x1) * f), y + math.floor(y1 + (y2 - y1) * f), t, t, BlitBuffer.COLOR_WHITE)
+            local px, py = x + math.floor(x1 + (x2 - x1) * f), y + math.floor(y1 + (y2 - y1) * f)
+            bb:paintRect(px, py, t, t, BlitBuffer.COLOR_WHITE)
         end
     end
     if self.kind == "check" then
@@ -4280,7 +4281,7 @@ function Page.IconMark:init()
     self.iw = IconWidget:new{ icon = self.icon, width = self.size, height = self.size }
     self.glyph = Page.Glyph:new{ kind = self.icon == "close" and "close" or "check", size = self.size }
     self.missing = tostring(self.iw.file or ""):find("icon-not-found", 1, true) ~= nil
-    if self.missing then logger.warn("AnnotationsViewer: KOReader icon '" .. self.icon .. "' not found, drawing it instead") end
+    if self.missing then logger.warn("AnnotationsViewer: icon '" .. self.icon .. "' not found, drawing it instead") end
 end
 function Page.IconMark:getSize() return Geom:new{ w = self.size, h = self.size } end
 function Page.IconMark:paintTo(bb, x, y)
@@ -4301,6 +4302,53 @@ function Page.IconMark:paintTo(bb, x, y)
     tmp:invertRect(0, 0, n, n)
     bb:blitFrom(tmp, x, y, 0, 0, n, n)
     tmp:free()
+end
+-- The ✓ / ✕ text characters (what KOReader's own CheckMark widget uses), centred on the ink: the
+-- character is drawn once on a scratch buffer, its real outline measured, and the dark pixels are then
+-- painted in white so that the outline sits exactly in the middle of the box (a font's own metrics
+-- leave glyphs off-centre). No glyph in the font (blank result) -> KOReader's icon is used instead.
+Page.TextMark = WidgetContainer:extend{ icon = "check", size = 18 }
+function Page.TextMark:init()
+    self.char = self.icon == "close" and "\226\156\149" or "\226\156\147" -- ✕ / ✓
+    self.fallback = Page.IconMark:new{ icon = self.icon, size = self.size }
+end
+function Page.TextMark:getSize() return Geom:new{ w = self.size, h = self.size } end
+function Page.TextMark:measure(bbtype)
+    local n = self.size
+    local m = n * 3
+    local tmp = BlitBuffer.new(m, m, bbtype)
+    tmp:fill(BlitBuffer.COLOR_WHITE)
+    local face = Font:getFace("cfont", self.icon == "close" and 15 or 18)
+    local tw = TextWidget:new{ text = self.char, face = face, bold = true }
+    tw:paintTo(tmp, 0, 0)
+    tw:free()
+    local dots, x0, x1, y0, y1 = {}, m, -1, m, -1
+    for yy = 0, m - 1 do
+        for xx = 0, m - 1 do
+            local g = tmp:getPixel(xx, yy):getColor8().a
+            if g < 200 then
+                table.insert(dots, { xx, yy, 255 - g })
+                if xx < x0 then x0 = xx end; if xx > x1 then x1 = xx end
+                if yy < y0 then y0 = yy end; if yy > y1 then y1 = yy end
+            end
+        end
+    end
+    tmp:free()
+    if #dots == 0 then self.dots = false; return end
+    local ox = math.floor((n - (x1 - x0 + 1)) / 2) - x0
+    local oy = math.floor((n - (y1 - y0 + 1)) / 2) - y0
+    self.dots = {}
+    for _, d in ipairs(dots) do
+        local px, py = d[1] + ox, d[2] + oy
+        if px >= 0 and py >= 0 and px < n and py < n then
+            table.insert(self.dots, { px, py, BlitBuffer.Color8(d[3]) })
+        end
+    end
+end
+function Page.TextMark:paintTo(bb, x, y)
+    if self.dots == nil then self:measure(bb:getType()) end
+    if not self.dots then return self.fallback:paintTo(bb, x, y) end
+    for _, d in ipairs(self.dots) do bb:paintRect(x + d[1], y + d[2], 1, 1, d[3]) end
 end
 function Page.header(owner, title, on_back, right_items, no_back, on_close)
     local W = Screen:getWidth()
@@ -5907,11 +5955,11 @@ function ListPicker:build()
         if st == "exc" then
             mark = RoundedBox:new{ width = box, radius = Screen:scaleBySize(5), fill = COLORS.ink, pad_x = 0, pad_y = 0,
                 CenterContainer:new{ dimen = Geom:new{ w = box, h = box },
-                    Page.IconMark:new{ icon = "close", size = Screen:scaleBySize(16) } } }
+                    Page.TextMark:new{ icon = "close", size = Screen:scaleBySize(16) } } }
         elseif st then
             mark = RoundedBox:new{ width = box, radius = Screen:scaleBySize(5), fill = COLORS.ink, pad_x = 0, pad_y = 0,
                 CenterContainer:new{ dimen = Geom:new{ w = box, h = box },
-                    Page.IconMark:new{ icon = "check", size = Screen:scaleBySize(18) } } }
+                    Page.TextMark:new{ icon = "check", size = Screen:scaleBySize(18) } } }
         else
             mark = RoundedBox:new{ width = box, radius = Screen:scaleBySize(5), border = Size.border.button, border_color = COLORS.ink,
                 fill = BlitBuffer.COLOR_WHITE, pad_x = 0, pad_y = 0, VerticalSpan:new{ width = box } }
