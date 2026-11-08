@@ -30,6 +30,7 @@ Key behaviors:
 - Chinese, Japanese and Korean text wraps correctly
 - Choose how many lines a note shows before it ends with "...", tap it to read all
 - Line spacing (also negative), and a separate font, size, space above and indent for notes
+- Own font and size for the author name, and capitals or as written for titles, the chapter / date line and the author
 - Scrollbar marks follow the sort order: books, authors, months or chapters
 - Menus and dropdowns pass gestures you don't use on to KOReader
 - Everything scales with your screen DPI
