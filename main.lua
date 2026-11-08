@@ -157,7 +157,7 @@ local SB_MARK_OVERHANG = Screen:scaleBySize(3)          -- how far it sticks out
 local SB_MARK_HEIGHT   = math.max(1, math.floor(Screen:scaleBySize(1)))
 -- Header: top bar (menu, title, search, filter, close), tab row, optional active-filter row
 local TOPBAR_HEIGHT    = Screen:scaleBySize(50)
-local TOPBAR_BOOK_HEIGHT = TOPBAR_HEIGHT -- one-book view: same bar, title + author line
+local TOPBAR_BOOK_HEIGHT = Screen:scaleBySize(54) -- one-book view: title + author line, a bit taller to fit the larger second line
 local TABS_HEIGHT      = Screen:scaleBySize(38)
 local FOOTER_BAR_HEIGHT = Screen:scaleBySize(48) -- page buttons bar (non-scrollbar styles)
 -- mockup: 22px icons in 44px buttons, 8px from the screen edges, 4px between menu and title
@@ -2147,10 +2147,10 @@ function NotesListWidget:buildHeader()
         if authors and authors ~= "" and authors ~= "Unknown" then sub = authors .. " · " .. sub end
         local max_w = math.floor(w * 0.55)
         local t = TextWidget:new{ text = book_title, face = getFaceOr(SERIF_FONT, 19, "cfont"), bold = true, max_width = max_w }
-        local st = TextWidget:new{ text = sub, face = Font:getFace("cfont", 12), fgcolor = COLORS.muted, max_width = max_w }
+        local st = TextWidget:new{ text = sub, face = Font:getFace("cfont", 14), fgcolor = COLORS.muted, max_width = max_w }
         -- Text boxes include room for descenders and line gap; placing the second line from
         -- the title's baseline keeps the two lines close together, like in the mockup.
-        local cap = math.floor(Screen:scaleBySize(12) * 0.72)
+        local cap = math.floor(Screen:scaleBySize(14) * 0.72)
         local sub_y = t:getBaseline() + Screen:scaleBySize(5) - (st:getBaseline() - cap)
         local tsz, ssz = t:getSize(), st:getSize()
         st.overlap_offset = { 0, sub_y }
