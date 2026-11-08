@@ -1999,7 +1999,7 @@ function NotesListWidget:showSearchDialog(on_done)
         input_hint = _("Words in highlights or notes"),
         buttons = buttons,
     }
-    UIManager:show(dialog)
+    NotesListWidget.showDialog(dialog)
     dialog:onShowKeyboard()
 end
 
@@ -2222,7 +2222,7 @@ end
 function NotesListWidget:exportToMarkdown()
     local notes = self.filtered_notes or {}
     if #notes == 0 then
-        UIManager:show(InfoMessage:new{ text = _("Nothing to export.") })
+        NotesListWidget.showDialog(InfoMessage:new{ text = _("Nothing to export.") })
         return
     end
     local DataStorage = require("datastorage")
@@ -2231,7 +2231,7 @@ function NotesListWidget:exportToMarkdown()
     local path = dir .. "/annotations-" .. os.date("%Y%m%d-%H%M%S") .. ".md"
     local file, err = io.open(path, "w")
     if not file then
-        UIManager:show(InfoMessage:new{ text = _("Export failed:") .. " " .. tostring(err) })
+        NotesListWidget.showDialog(InfoMessage:new{ text = _("Export failed:") .. " " .. tostring(err) })
         return
     end
     file:write(notesToMarkdown(notes, filterToString(self.active_filter)))
@@ -2286,7 +2286,7 @@ function NotesListWidget:showPaginationStyleMenu()
         end }},
     }
     self.pagination_style_dialog = ButtonDialogTitle:new{ title = _("Pagination Style"), buttons = buttons }
-    UIManager:show(self.pagination_style_dialog)
+    NotesListWidget.showDialog(self.pagination_style_dialog)
 end
 function NotesListWidget:showSwipeSettingMenu()
     local current = getSwipeSetting()
@@ -2308,7 +2308,7 @@ function NotesListWidget:showSwipeSettingMenu()
         end }},
     }
     self.swipe_dialog = ButtonDialogTitle:new{ title = _("Swipe Gestures"), buttons = buttons }
-    UIManager:show(self.swipe_dialog)
+    NotesListWidget.showDialog(self.swipe_dialog)
 end
 function NotesListWidget:showInfoFieldsMenu()
     local fields_setting = getInfoFields()
@@ -2342,7 +2342,7 @@ function NotesListWidget:showInfoFieldsMenu()
         end }},
     }
     self.info_fields_dialog = ButtonDialogTitle:new{ title = _("Show Info Header: Fields"), buttons = buttons }
-    UIManager:show(self.info_fields_dialog)
+    NotesListWidget.showDialog(self.info_fields_dialog)
 end
 function NotesListWidget:showDedupInfoFieldsMenu()
     local fields_setting = getDedupInfoFields()
@@ -2376,7 +2376,7 @@ function NotesListWidget:showDedupInfoFieldsMenu()
         end }},
     }
     self.dedup_fields_dialog = ButtonDialogTitle:new{ title = _("Hide Repeat Info: Match By"), buttons = buttons }
-    UIManager:show(self.dedup_fields_dialog)
+    NotesListWidget.showDialog(self.dedup_fields_dialog)
 end
 function NotesListWidget:showFontSizeMenu()
     self:showSpinMenu("font_size", function() self:showSettingsMenu() end)
@@ -2391,7 +2391,7 @@ function NotesListWidget:showMarginMenu()
     self:showSpinMenu("margins", function() self:showSettingsMenu() end)
 end
 function NotesListWidget:showSpinSetting(title, key, default, min, max, step, back_callback)
-    UIManager:show(SpinWidget:new{
+    NotesListWidget.showDialog(SpinWidget:new{
         title_text = title,
         value = getSetting(key, default), value_min = min, value_max = max, value_step = step,
         default_value = default, ok_text = _("Set"),
@@ -2511,7 +2511,7 @@ function NotesListWidget:showFilterMenu(show_back)
             buttons = buttons,
             width_factor = 0.7,
         }
-        UIManager:show(dialog)
+        NotesListWidget.showDialog(dialog)
         if restore_offset then
             dialog:setScrolledOffset(restore_offset)
         end
@@ -2658,7 +2658,7 @@ function NotesListWidget:showFilterMenu(show_back)
         table.insert(radio_buttons, {
             { text = _( "Clear Filter" ), checked = curr_type == nil, provider = nil },
         })
-        UIManager:show(RadioButtonWidget:new{
+        NotesListWidget.showDialog(RadioButtonWidget:new{
             title_text = is_exclude and _("Exclude Color/Style") or _("Filter by Color/Style"),
             width_factor = 0.6,
             radio_buttons = radio_buttons,
@@ -2752,7 +2752,7 @@ function NotesListWidget:showFilterMenu(show_back)
                     },
                 },
             }
-            UIManager:show(input_dialog)
+            NotesListWidget.showDialog(input_dialog)
             input_dialog:onShowKeyboard()
         end
         rebuildDialog(init_query)
@@ -2926,7 +2926,7 @@ function NotesListWidget:showFilterMenu(show_back)
             buttons = main_buttons,
             width_factor = 0.7,
         }
-        UIManager:show(self.filter_dialog)
+        NotesListWidget.showDialog(self.filter_dialog)
     end
     -- The full-screen "Filter & sort" screen replaces the old menu above. The pickers it opens
     -- (books, tags, chapters, text) are the ones defined here; when they finish they call
@@ -3069,6 +3069,18 @@ local function _forwardGestureToPlugin(ges_event)
     return true
 end
 
+-- Show one of KOReader's own dialogs (edit note, confirm, number, buttons ...) and let it pass
+-- the gestures it doesn't use on to the KOReader gestures plugin, as the list does.
+function NotesListWidget.showDialog(w, ...)
+    local IC = require("ui/widget/container/inputcontainer")
+    if type(w) == "table" and not w.toast and w.onGesture == IC.onGesture then
+        w.onGesture = function(self, ev)
+            if IC.onGesture(self, ev) then return true end
+            return _forwardGestureToPlugin(ev)
+        end
+    end
+    return UIManager:show(w, ...)
+end
 function NotesListWidget:onGesture(ev)
     -- Let InputContainer handle registered ges_events / touch zones first
     local InputContainer = require("ui/widget/container/inputcontainer")
@@ -3998,7 +4010,7 @@ function AnnotationSheet:build()
             lines,
         }
         table.insert(group, cut and TapBox:new{ box, callback = function()
-            UIManager:show(TextViewer:new{ title = note.book_title or _("Annotation"), text = quote_text })
+            NotesListWidget.showDialog(TextViewer:new{ title = note.book_title or _("Annotation"), text = quote_text })
         end } or box)
         if cut then
             table.insert(group, VerticalSpan:new{ width = Screen:scaleBySize(4) })
@@ -5122,7 +5134,7 @@ function FilterScreen:build()
                 self:changed()
             end, { hold = function()
                 local ConfirmBox = require("ui/widget/confirmbox")
-                UIManager:show(ConfirmBox:new{
+                NotesListWidget.showDialog(ConfirmBox:new{
                     text = string.format(_("Delete the saved filter “%s”?"), p.name),
                     ok_text = _("Delete"),
                     ok_callback = function()
@@ -5161,7 +5173,7 @@ function FilterScreen:build()
                     buttons = {{
                         { text = _("Cancel"), id = "close", callback = function() UIManager:close(dlg) end },
                         { text = _("Save"), is_enter_default = true, callback = save } } } }
-                UIManager:show(dlg)
+                NotesListWidget.showDialog(dlg)
                 dlg:onShowKeyboard()
             end }, Screen:scaleBySize(14), Screen:scaleBySize(14)))
     end
@@ -5210,7 +5222,7 @@ function FilterScreen:showTextFilters()
             { { text = _("Close"), callback = function() UIManager:close(dialog) end } },
         },
     }
-    UIManager:show(dialog)
+    NotesListWidget.showDialog(dialog)
 end
 function FilterScreen:onDone()
     self.list.filter_screen = nil
@@ -5824,7 +5836,7 @@ function ListPicker:askQuery()
             end },
         }},
     }
-    UIManager:show(dialog)
+    NotesListWidget.showDialog(dialog)
     dialog:onShowKeyboard()
 end
 function ListPicker:onDone()
@@ -5924,7 +5936,7 @@ function AllNotesViewer:showColorPicker(note, parent_widget)
                             bgcolor = c[1] == "gray" and BlitBuffer.COLOR_GRAY or BlitBuffer.colorFromString(c[3]), provider = c[1] },
                 })
     end
-    UIManager:show(RadioButtonWidget:new{
+    NotesListWidget.showDialog(RadioButtonWidget:new{
         title_text = _("Select Color"),
         width_factor = 0.6,
         radio_buttons = radio_buttons,
@@ -5959,7 +5971,7 @@ function AllNotesViewer:showStyleMenu(note, parent_widget)
             },
         },
     }
-    UIManager:show(dialog)
+    NotesListWidget.showDialog(dialog)
 end
 
 function AllNotesViewer:showStylePicker(note, parent_widget)
@@ -5983,7 +5995,7 @@ function AllNotesViewer:showStylePicker(note, parent_widget)
     end
     table.insert(buttons, { { text = _("Cancel"), callback = function() UIManager:close(dialog) end } })
     dialog = ButtonDialog:new{ title = _("Select Style"), buttons = buttons }
-    UIManager:show(dialog)
+    NotesListWidget.showDialog(dialog)
 end
 -- Updates the plugin's own list after a change and redraws it.
 local function updateListedNote(parent_widget, note, fn)
@@ -6016,7 +6028,7 @@ function AllNotesViewer:setHighlightField(note, field, value, parent_widget, don
     if updated then
         self:clearBookCache(note.book_path)
         updateListedNote(parent_widget, note, function(n) n[field] = value end)
-        if done_text then UIManager:show(InfoMessage:new{ text = done_text, timeout = 1 }) end
+        if done_text then NotesListWidget.showDialog(InfoMessage:new{ text = done_text, timeout = 1 }) end
     end
 end
 function AllNotesViewer:updateHighlightStyle(note, new_style, parent_widget)
@@ -6118,7 +6130,7 @@ function AllNotesViewer:editNote(note, parent_widget, on_done)
             },
         },
     }
-    UIManager:show(input_dialog)
+    NotesListWidget.showDialog(input_dialog)
     input_dialog:onShowKeyboard()
 end
 function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget)
@@ -6156,13 +6168,13 @@ function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget)
     if updated then
         self:clearBookCache(note.book_path)
         updateListedNote(parent_widget, note, function(n) n.user_note = value end)
-        UIManager:show(InfoMessage:new{ text = _("Note saved."), timeout = 1 })
+        NotesListWidget.showDialog(InfoMessage:new{ text = _("Note saved."), timeout = 1 })
     end
 end
 function AllNotesViewer:openBookAtNote(note)
     local book_path = note.book_path
     if not book_path then
-        UIManager:show(InfoMessage:new{ text = _("Cannot find book path.") })
+        NotesListWidget.showDialog(InfoMessage:new{ text = _("Cannot find book path.") })
         return
     end
     
