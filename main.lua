@@ -1917,8 +1917,8 @@ function NotesListWidget:buildFilterChips(w)
         table.insert(content, TextWidget:new{ text = c.label, face = face, fgcolor = BlitBuffer.COLOR_WHITE,
             max_width = math.floor(avail * 0.6) })
         table.insert(content, HorizontalSpan:new{ width = Screen:scaleBySize(4) })
-        -- KOReader's close icon, inverted to white-on-black to sit on the black chip
-        table.insert(content, IconWidget:new{ icon = "close", width = Screen:scaleBySize(14), height = Screen:scaleBySize(14), invert = true })
+        -- a white ✕ on the black chip: the font character, centred (the icon showed as a white square on e-ink)
+        table.insert(content, NoteItemWidget.TextMark:new{ icon = "close", size = Screen:scaleBySize(14) })
         local chip_w = content:getSize().w + Screen:scaleBySize(20)
         table.insert(items, { w = chip_w, widget = TapBox:new{
             Pill:new{ width = chip_w, height = CHIP_HEIGHT, fill = BlitBuffer.COLOR_BLACK, border = 0, content },
@@ -4427,6 +4427,7 @@ function Page.TextMark:paintTo(bb, x, y)
     if not self.dots then return self.fallback:paintTo(bb, x, y) end
     for _, d in ipairs(self.dots) do bb:paintRect(x + d[1], y + d[2], 1, 1, d[3]) end
 end
+NoteItemWidget.TextMark = Page.TextMark -- also used by the active-filter chips in the list
 function Page.header(owner, title, on_back, right_items, no_back, on_close)
     local W = Screen:getWidth()
     local side = Screen:scaleBySize(8)
