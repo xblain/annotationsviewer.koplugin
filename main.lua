@@ -972,27 +972,21 @@ end
 local function filterToString(filter, skip_presence)
     if not filter then return "" end
     local parts = {}
-    -- Color / Style include
-    if filter.type == "color" or filter.type == "style" then
-        local prefix = filter.type == "color" and "C: " or "S: "
-        local name = nil
-        if filter.type == "color" then
-            for _, v in ipairs(ReaderHighlight.highlight_colors) do
-                if v[2] == filter.value then name = v[1]; break end
+    -- Colour / style
+    if filter.cs and next(filter.cs) then
+        local names = {}
+        for k in pairs(filter.cs) do
+            local t, v = k:match("^(%a+):(.+)$")
+            local name
+            if t == "color" then
+                for _i, hc in ipairs(ReaderHighlight.highlight_colors) do
+                    if hc[2] == v then name = hc[1]; break end
+                end
             end
+            table.insert(names, name or (v:sub(1, 1):upper() .. v:sub(2)))
         end
-        table.insert(parts, prefix .. (name or (filter.value:sub(1,1):upper() .. filter.value:sub(2))))
-    end
-    -- Color / Style exclude
-    if filter.type_exclude == "color" or filter.type_exclude == "style" then
-        local prefix = filter.type_exclude == "color" and "C≠ " or "S≠ "
-        local name = nil
-        if filter.type_exclude == "color" then
-            for _, v in ipairs(ReaderHighlight.highlight_colors) do
-                if v[2] == filter.value_exclude then name = v[1]; break end
-            end
-        end
-        table.insert(parts, prefix .. (name or (filter.value_exclude:sub(1,1):upper() .. filter.value_exclude:sub(2))))
+        table.sort(names)
+        table.insert(parts, (filter.cs_exclude and "C≠ " or "C: ") .. table.concat(names, ", "))
     end
     -- Books include / exclude
     if filter.books and next(filter.books) then
@@ -1142,6 +1136,39 @@ function Pill:paintTo(bb, x, y)
     end
 end
 
+-- Colour & style filter: a set of "color:<key>" / "style:<drawer>" entries in af.cs, and
+-- af.cs_exclude to hide them instead of showing only them. Older saved filters used a single
+-- af.type/af.value (and type_exclude/value_exclude); they are moved into the set here.
+local function normalizeColorStyle(af)
+    if not af then return end
+    if af.type and af.value then
+        af.cs = af.cs or {}
+        af.cs[af.type .. ":" .. af.value] = true
+        af.cs_exclude = false
+    end
+    if af.type_exclude and af.value_exclude then
+        if not (af.cs and next(af.cs)) then
+            af.cs = { [af.type_exclude .. ":" .. af.value_exclude] = true }
+            af.cs_exclude = true
+        end
+    end
+    af.type, af.value, af.type_exclude, af.value_exclude = nil, nil, nil, nil
+    if af.cs and not next(af.cs) then af.cs, af.cs_exclude = nil, nil end
+end
+local function colorStyleMatches(af, note)
+    local nw = NoteWrapper:new(note)
+    local c, d = nw:getNormalizedColor(), nw:getNormalizedDrawer()
+    local has_c, has_s, hit_c, hit_s = false, false, false, false
+    for k in pairs(af.cs) do
+        local t, v = k:match("^(%a+):(.+)$")
+        if t == "color" then has_c = true; if v == c then hit_c = true end
+        elseif t == "style" then has_s = true; if v == d then hit_s = true end end
+    end
+    if af.cs_exclude then return not (hit_c or hit_s) end
+    -- several colours: any of them; colours and styles together: both must match
+    return (not has_c or hit_c) and (not has_s or hit_s)
+end
+
 local NotesListWidget = InputContainer:extend{
     width = nil, height = nil, notes_list = nil, filtered_notes = nil,
     viewer = nil, current_page = 1, pages = nil, active_filter = nil,
@@ -1226,6 +1253,7 @@ function NotesListWidget:applyFilter()
             return true
         end
     end
+    normalizeColorStyle(self.active_filter)
     self.filtered_notes = {}
     local counts = { all = 0, highlights = 0, notes = 0 }
     for _, note in ipairs(self.notes_list) do
@@ -1261,17 +1289,9 @@ function NotesListWidget:applyFilter()
             if match and af.chapters_exclude and next(af.chapters_exclude) then
                 if note.chapter and af.chapters_exclude[note.chapter] then match = false end
             end
-            -- Color / Style include
-            if match and af.type == "color" then
-                match = NoteWrapper:new(note):getNormalizedColor() == af.value
-            elseif match and af.type == "style" then
-                match = NoteWrapper:new(note):getNormalizedDrawer() == af.value
-            end
-            -- Color / Style exclude
-            if match and af.type_exclude == "color" then
-                if NoteWrapper:new(note):getNormalizedColor() == af.value_exclude then match = false end
-            elseif match and af.type_exclude == "style" then
-                if NoteWrapper:new(note):getNormalizedDrawer() == af.value_exclude then match = false end
+            -- Colour / style
+            if match and af.cs and next(af.cs) then
+                match = colorStyleMatches(af, note)
             end
             -- Highlight text include / exclude
             if match and af.search_highlight and af.search_highlight ~= "" then
@@ -1564,15 +1584,21 @@ function NotesListWidget:getFilterChips()
         table.insert(chips, { label = label, clear = clear, colors = colors, prefix = prefix })
     end
     local function quoted(t) return "“" .. t .. "”" end
-    if af.type == "color" then
-        add(colorName(af.value), function() af.type, af.value = nil, nil end, { af.value })
-    elseif af.type == "style" then
-        add(STYLE_NAMES[af.value] or af.value, function() af.type, af.value = nil, nil end)
-    end
-    if af.type_exclude == "color" then
-        add(colorName(af.value_exclude), function() af.type_exclude, af.value_exclude = nil, nil end, { af.value_exclude }, _("Hide"))
-    elseif af.type_exclude == "style" then
-        add(_("Hide") .. " " .. (STYLE_NAMES[af.value_exclude] or af.value_exclude), function() af.type_exclude, af.value_exclude = nil, nil end)
+    normalizeColorStyle(af)
+    if af.cs and next(af.cs) then
+        local keys = {}
+        for k in pairs(af.cs) do table.insert(keys, k) end
+        table.sort(keys)
+        local prefix = af.cs_exclude and _("Hide") or nil
+        for _i, k in ipairs(keys) do
+            local t, v = k:match("^(%a+):(.+)$")
+            local function clear() af.cs[k] = nil; if not next(af.cs) then af.cs, af.cs_exclude = nil, nil end end
+            if t == "color" then
+                add(colorName(v), clear, { v }, prefix)
+            else
+                add((prefix and (prefix .. " ") or "") .. (STYLE_NAMES[v] or v), clear)
+            end
+        end
     end
     if af.books and next(af.books) then add(setLabel(af.books, _("%d books")), function() af.books = nil end) end
     if af.books_exclude and next(af.books_exclude) then
@@ -1747,7 +1773,8 @@ function NotesListWidget:buildHeader()
             align = "center",
             HorizontalSpan:new{ width = side },
             newHeaderButton("appbar.menu", function() self:showMainMenu() end, self),
-            HorizontalSpan:new{ width = Screen:scaleBySize(4) },
+            -- same space between icon and title as between the screen edge and the icon
+            HorizontalSpan:new{ width = side },
             title,
         } },
         RightContainer:new{ dimen = bar_dimen, right },
@@ -1826,7 +1853,7 @@ function NotesListWidget:clearFilters()
     self:refresh()
 end
 
-function NotesListWidget:showSearchDialog()
+function NotesListWidget:showSearchDialog(on_done)
     local InputDialog = require("ui/widget/inputdialog")
     local af = self.active_filter or {}
     local dialog
@@ -1836,6 +1863,7 @@ function NotesListWidget:showSearchDialog()
         self.active_filter.search_any = (text and text ~= "") and text or nil
         self.current_page = 1
         self:refresh()
+        if on_done then on_done() end
     end
     dialog = InputDialog:new{
         title = _("Search annotations"),
@@ -2069,7 +2097,7 @@ function NotesListWidget:exportToMarkdown()
 end
 
 -- back_to_menu == false: opened from the sort button in the tab row, so don't reopen the ☰ menu.
-function NotesListWidget:showSortMenu(back_to_menu)
+function NotesListWidget:showSortMenu(back_to_menu, on_done)
     local sort_mode = getSetting("sort_mode", "date_newest")
     local function check(mode) return sort_mode == mode and "\u{2713} " or "  " end
     local function apply(mode)
@@ -2078,6 +2106,7 @@ function NotesListWidget:showSortMenu(back_to_menu)
         self:refresh()
         UIManager:close(self.sort_dialog)
         if back_to_menu ~= false then self:showMainMenu() end
+        if on_done then on_done() end
     end
 
     local categories = {
@@ -3000,7 +3029,19 @@ function NotesListWidget:showFilterMenu(show_back)
         }
         UIManager:show(self.filter_dialog)
     end
-    showFilterMenu(show_back)
+    -- The full-screen "Filter & sort" screen replaces the old menu above. The pickers it opens
+    -- (books, tags, chapters, text) are the ones defined here; when they finish they call
+    -- showFilterMenu(), which now just redraws that screen.
+    showFilterMenu = function()
+        if self.filter_screen then self.filter_screen:rebuild() end
+    end
+    self:showFilterScreen{
+        books = function() showToggleFilter(FILTER_CONFIGS.book) end,
+        tags = function() showToggleFilter(FILTER_CONFIGS.tags) end,
+        chapters = function() showToggleFilter(FILTER_CONFIGS.chapter) end,
+        chapters_available = isSingleBookContext,
+        text = function(field, title, hint, is_exclude) showTextSearchFilter(field, title, hint, is_exclude) end,
+    }
 end
 function NotesListWidget:refresh()
     self:computeLayout()
@@ -3763,6 +3804,8 @@ function AllNotesViewer:showAllNotes()
     if loading then UIManager:close(loading) end
     UIManager:show(widget)
 end
+-- Annotation sheet and Filter & sort screen (in a block to stay under Lua's 200-locals limit)
+do
 -- Annotation sheet: opens from the bottom when an annotation is tapped. Shows the whole
 -- highlight in its colour, the note, style and colour choices, and Go to / Copy / Delete.
 local HIGHLIGHT_STYLES = {
@@ -4212,8 +4255,384 @@ function AnnotationSheet:onClose()
     return true
 end
 
+-- "Filter & sort": full-screen page from the mockup. Changes apply straight away (the list
+-- behind updates and the button shows how many are left); Cancel / ✕ / Back put everything
+-- back as it was when the page opened.
+local function deepCopy(t)
+    if type(t) ~= "table" then return t end
+    local c = {}
+    for k, v in pairs(t) do c[k] = deepCopy(v) end
+    return c
+end
+local SORT_CHOICES = {
+    { "date_newest", _("Newest") }, { "date_oldest", _("Oldest") },
+    { "book_asc", _("Book A–Z") }, { "author_asc", _("Author A–Z") },
+    { "book_location_asc", _("Position in book") },
+}
+local FilterScreen = InputContainer:extend{ list = nil, helpers = nil, covers_fullscreen = true }
+function FilterScreen:init()
+    self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
+    self.saved_filter = deepCopy(self.list.active_filter or {})
+    self.saved_sort = getSetting("sort_mode", "date_newest")
+    if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
+    self:build()
+end
+function FilterScreen:rebuild()
+    self:build()
+    UIManager:setDirty(self, "ui")
+end
+function FilterScreen:changed()
+    self.list.current_page = 1
+    self.list:refresh()
+    self:rebuild()
+end
+function FilterScreen:build()
+    local list = self.list
+    list.active_filter = list.active_filter or {}
+    local af = list.active_filter
+    normalizeColorStyle(af)
+    local W, H = Screen:getWidth(), Screen:getHeight()
+    local P = Screen:scaleBySize(24)
+    local inner = W - P * 2
+    local thin = Size.border.button
+    local LIGHT = BlitBuffer.gray(0.16)            -- #d6d6d6 row lines
+    local MUTED = BlitBuffer.gray(0.73)
+    local face15 = Font:getFace("cfont", 15)
+    local face14 = Font:getFace("cfont", 14)
+    local face13 = Font:getFace("cfont", 13)
+    local function underlined(text, face)
+        local tw = TextWidget:new{ text = text, face = face }
+        return VerticalGroup:new{ tw, LineWidget:new{ dimen = Geom:new{ w = tw:getSize().w, h = Size.line.medium },
+            background = BlitBuffer.COLOR_BLACK } }
+    end
+    local function rowLine() return LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = LIGHT } end
+    local function padded(widget, top, bottom)
+        return VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top or 0 },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget }, VerticalSpan:new{ width = bottom or 0 } }
+    end
+    local function sectionBar(text)
+        local tw = TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = BlitBuffer.gray(0.8) }
+        return FrameContainer:new{ background = BlitBuffer.gray(0.09), bordersize = 0, margin = 0,
+            padding = Screen:scaleBySize(7), padding_left = P, width = W, tw }
+    end
+    local function labelRow(left, right)
+        local d = Geom:new{ w = inner, h = math.max(left:getSize().h, right and right:getSize().h or 0) }
+        return OverlapGroup:new{ dimen = d, allow_mirroring = false,
+            LeftContainer:new{ dimen = d, left }, right and RightContainer:new{ dimen = d, right } or nil }
+    end
+    -- chip: black with white bold text and ✓ when on; white with a border when off. Width is
+    -- always that of the "on" version so choosing never reflows the rows.
+    local function chip(text, on, callback, opts)
+        opts = opts or {}
+        local h = opts.h or Screen:scaleBySize(34)
+        local color = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK
+        local widest = TextWidget:new{ text = text .. " ✓", face = face13, bold = true }:getSize().w
+        local tw = TextWidget:new{ text = on and (text .. " ✓") or text, face = face13, bold = on, fgcolor = color }
+        local label = decoratedText(tw, opts.deco, color)
+        local content = HorizontalGroup:new{ align = "center" }
+        local extra = 0
+        if opts.dot then
+            table.insert(content, Pill:new{ width = Screen:scaleBySize(12), height = Screen:scaleBySize(12), border = 0,
+                fill = opts.dot == "gray" and BlitBuffer.COLOR_GRAY or getHighlightColor(opts.dot) })
+            table.insert(content, HorizontalSpan:new{ width = Screen:scaleBySize(6) })
+            extra = Screen:scaleBySize(18)
+        end
+        table.insert(content, label)
+        local w = widest + extra + Screen:scaleBySize(28)
+        return { w = w, widget = TapBox:new{
+            Pill:new{ width = w, height = h, fill = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
+                border = on and 0 or thin, border_color = BlitBuffer.COLOR_BLACK, content },
+            callback = callback,
+        } }
+    end
+    local function flow(items, gap)
+        gap = gap or Screen:scaleBySize(8)
+        local rows = VerticalGroup:new{ align = "left" }
+        local row, row_w = HorizontalGroup:new{}, 0
+        for _i, it in ipairs(items) do
+            if row_w > 0 and row_w + gap + it.w > inner then
+                table.insert(rows, row); table.insert(rows, VerticalSpan:new{ width = gap })
+                row, row_w = HorizontalGroup:new{}, 0
+            end
+            if row_w > 0 then table.insert(row, HorizontalSpan:new{ width = gap }); row_w = row_w + gap end
+            table.insert(row, it.widget); row_w = row_w + it.w
+        end
+        if row_w > 0 then table.insert(rows, row) end
+        return rows
+    end
+    local function setSummary(inc, exc, total)
+        local n_inc, n_exc = 0, 0
+        for _k in pairs(inc or {}) do n_inc = n_inc + 1 end
+        for _k in pairs(exc or {}) do n_exc = n_exc + 1 end
+        if n_inc == 0 and n_exc == 0 then return _("Any"), false end
+        local parts = {}
+        if n_inc > 0 then table.insert(parts, total and string.format(_("%d of %d"), n_inc, total) or string.format(_("%d chosen"), n_inc)) end
+        if n_exc > 0 then table.insert(parts, string.format(_("%d hidden"), n_exc)) end
+        return table.concat(parts, ", "), true
+    end
+    local function navRow(label, value, active, callback)
+        local h = Screen:scaleBySize(50)
+        local right = HorizontalGroup:new{ align = "center",
+            TextWidget:new{ text = value, face = face15, bold = active, fgcolor = active and BlitBuffer.COLOR_BLACK or MUTED,
+                max_width = math.floor(inner * 0.55) },
+            HorizontalSpan:new{ width = Screen:scaleBySize(6) },
+            IconWidget:new{ icon = "chevron.right", width = Screen:scaleBySize(16), height = Screen:scaleBySize(16) } }
+        local d = Geom:new{ w = inner, h = h }
+        return VerticalGroup:new{
+            TapBox:new{ HorizontalGroup:new{ HorizontalSpan:new{ width = P },
+                OverlapGroup:new{ dimen = d, allow_mirroring = false,
+                    LeftContainer:new{ dimen = d, TextWidget:new{ text = label, face = face15 } },
+                    RightContainer:new{ dimen = d, right } },
+                HorizontalSpan:new{ width = P } }, callback = callback },
+            rowLine(),
+        }
+    end
+
+    local body = VerticalGroup:new{ align = "left" }
+    table.insert(body, sectionBar(_("FILTER")))
+
+    -- books / tags / chapters (the existing pickers: tap an item to show only it, again to hide it)
+    local book_count
+    do
+        local seen = {}
+        book_count = 0
+        for _i, n in ipairs(list.notes_list) do
+            if n.book_title and not seen[n.book_title] then seen[n.book_title] = true; book_count = book_count + 1 end
+        end
+    end
+    if not list.single_book then
+        local v, on = setSummary(af.books, af.books_exclude, book_count)
+        table.insert(body, navRow(_("Books"), v, on, function() self.helpers.books() end))
+    end
+    do
+        local v, on = setSummary(af.tags, af.tags_exclude)
+        table.insert(body, navRow(_("Tags"), v, on, function() self.helpers.tags() end))
+    end
+    if self.helpers.chapters_available() then
+        local v, on = setSummary(af.chapters, af.chapters_exclude)
+        table.insert(body, navRow(_("Chapters"), v, on, function() self.helpers.chapters() end))
+    end
+
+    -- notes: All / With a note / Without (same as the tabs)
+    do
+        local seg = HorizontalGroup:new{}
+        local cell_h = Screen:scaleBySize(40)
+        local cell_w = math.floor((inner - thin * 2 - thin * 2) / 3)
+        for i, opt in ipairs({ { nil, _("All") }, { "only", _("With a note") }, { "exclude", _("Without") } }) do
+            local on = (af.notes_presence == opt[1])
+            if i > 1 then table.insert(seg, LineWidget:new{ dimen = Geom:new{ w = thin, h = cell_h }, background = BlitBuffer.COLOR_BLACK }) end
+            table.insert(seg, TapBox:new{
+                FrameContainer:new{ bordersize = 0, padding = 0, margin = 0,
+                    background = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
+                    CenterContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
+                        TextWidget:new{ text = opt[2] .. (on and " ✓" or ""), face = face14, bold = on,
+                            max_width = cell_w - Screen:scaleBySize(8),
+                            fgcolor = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK } } },
+                callback = function()
+                    if af.notes_presence ~= opt[1] then af.notes_presence = opt[1]; self:changed() end
+                end,
+            })
+        end
+        table.insert(body, padded(VerticalGroup:new{ align = "left",
+            TextWidget:new{ text = _("Notes"), face = face15 },
+            VerticalSpan:new{ width = Screen:scaleBySize(8) },
+            RoundedOutline:new{ radius = Screen:scaleBySize(8), border = thin, seg },
+        }, Screen:scaleBySize(14), Screen:scaleBySize(14)))
+        table.insert(body, rowLine())
+    end
+
+    -- colour & style: chips for the colours and styles that are used; "Exclude instead" flips
+    -- between showing only these and hiding these
+    do
+        local used_c = {}
+        for _i, n in ipairs(list.notes_list) do
+            local nw = NoteWrapper:new(n)
+            local c = nw:getNormalizedColor()
+            if c then used_c[c] = true end
+        end
+        local items = {}
+        local function toggle(key)
+            af.cs = af.cs or {}
+            if af.cs[key] then af.cs[key] = nil else af.cs[key] = true end
+            if not next(af.cs) then af.cs, af.cs_exclude = nil, nil end
+            self:changed()
+        end
+        for _i, hc in ipairs(ReaderHighlight.highlight_colors) do
+            if used_c[hc[2]] then
+                local key = "color:" .. hc[2]
+                table.insert(items, chip(hc[1], af.cs and af.cs[key], function() toggle(key) end, { dot = hc[2] }))
+            end
+        end
+        -- all four styles are always offered
+        for _i, st in ipairs(HIGHLIGHT_STYLES) do
+            local key = "style:" .. st[1]
+            local deco = (st[1] == "underscore" and "underline") or (st[1] == "strikeout" and "strike") or nil
+            table.insert(items, chip(st[2], af.cs and af.cs[key], function() toggle(key) end, { deco = deco }))
+        end
+        local flip = TapBox:new{ underlined(af.cs_exclude and _("Show only these instead") or _("Hide these instead"), face13),
+            callback = function()
+                af.cs_exclude = not af.cs_exclude
+                if af.cs and next(af.cs) then self:changed() else self:rebuild() end
+            end }
+        table.insert(body, padded(VerticalGroup:new{ align = "left",
+            labelRow(TextWidget:new{ text = af.cs_exclude and _("Hide colour & style") or _("Colour & style"), face = face15 }, flip),
+            VerticalSpan:new{ width = Screen:scaleBySize(8) },
+            flow(items),
+        }, Screen:scaleBySize(14), Screen:scaleBySize(14)))
+        table.insert(body, rowLine())
+    end
+
+    -- text contains: the search box (highlights and notes); more text filters below it
+    do
+        local q = af.search_any
+        local field_h = Screen:scaleBySize(42)
+        local field_text = TextWidget:new{ text = (q and q ~= "") and q or _("Search highlights and notes"), face = face14,
+            fgcolor = (q and q ~= "") and BlitBuffer.COLOR_BLACK or MUTED, max_width = inner - Screen:scaleBySize(24) }
+        local field = TapBox:new{
+            RoundedBox:new{ width = inner, radius = Screen:scaleBySize(8), border = thin, border_color = BlitBuffer.COLOR_BLACK,
+                fill = BlitBuffer.COLOR_WHITE, pad_x = Screen:scaleBySize(12), pad_y = math.floor((field_h - field_text:getSize().h) / 2),
+                field_text },
+            callback = function() list:showSearchDialog(function() self:rebuild() end) end,
+        }
+        local more_active = false
+        for _i, k in ipairs({ "search_highlight", "search_highlight_exclude", "search_note", "search_note_exclude" }) do
+            if af[k] and af[k] ~= "" then more_active = true end
+        end
+        local more = TapBox:new{ underlined((more_active and "✓ " or "") .. _("More text filters"), face13),
+            callback = function() self:showTextFilters() end }
+        table.insert(body, padded(VerticalGroup:new{ align = "left",
+            labelRow(TextWidget:new{ text = _("Text contains"), face = face15 }, more),
+            VerticalSpan:new{ width = Screen:scaleBySize(8) },
+            field,
+        }, Screen:scaleBySize(14), Screen:scaleBySize(14)))
+    end
+
+    -- sort
+    table.insert(body, sectionBar(_("SORT")))
+    do
+        local cur = getSetting("sort_mode", "date_newest")
+        local items, known = {}, false
+        local function apply(mode)
+            setSetting("sort_mode", mode)
+            list:applySort()
+            self:changed()
+        end
+        for _i, sc in ipairs(SORT_CHOICES) do
+            if sc[1] == cur then known = true end
+            table.insert(items, chip(sc[2], sc[1] == cur, function() if sc[1] ~= cur then apply(sc[1]) end end, { h = Screen:scaleBySize(36) }))
+        end
+        -- all other orders (by author/file name, reversed, …) stay in the full sort list
+        table.insert(items, chip(known and _("More…") or sortModeLabel(cur), not known,
+            function() list:showSortMenu(false, function() self:rebuild() end) end, { h = Screen:scaleBySize(36) }))
+        table.insert(body, padded(flow(items), Screen:scaleBySize(14), Screen:scaleBySize(14)))
+    end
+
+    -- header
+    local close_btn = IconButton:new{ icon = "close", width = HEADER_ICON_SIZE, height = HEADER_ICON_SIZE,
+        padding = HEADER_ICON_PAD, allow_flash = false, callback = function() self:onClose() end, show_parent = self }
+    local head_h = Screen:scaleBySize(60)
+    local hd = Geom:new{ w = W, h = head_h }
+    local header = VerticalGroup:new{
+        OverlapGroup:new{ dimen = hd, allow_mirroring = false,
+            LeftContainer:new{ dimen = hd, HorizontalGroup:new{ HorizontalSpan:new{ width = P },
+                TextWidget:new{ text = _("Filter & sort"), face = getFaceOr(SERIF_FONT, 21, "cfont"), bold = true } } },
+            RightContainer:new{ dimen = hd, HorizontalGroup:new{ align = "center",
+                TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = Screen:scaleBySize(90), h = head_h }, underlined(_("Reset all"), face14) },
+                    callback = function()
+                        list.active_filter = {}
+                        self:changed()
+                    end },
+                close_btn, HorizontalSpan:new{ width = Screen:scaleBySize(8) } } },
+        },
+        LineWidget:new{ dimen = Geom:new{ w = W, h = Size.border.thick }, background = BlitBuffer.COLOR_BLACK },
+    }
+
+    -- footer: Cancel | Show N annotations
+    local n = #(list.filtered_notes or {})
+    local gap = Screen:scaleBySize(10)
+    local bw1 = math.floor((inner - gap) / 3)
+    local function button(text, primary, width, callback)
+        local tw = TextWidget:new{ text = text, face = face15, bold = primary, max_width = width - Screen:scaleBySize(12),
+            fgcolor = primary and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK }
+        local h = Screen:scaleBySize(50)
+        return TapBox:new{ RoundedBox:new{ width = width, radius = Screen:scaleBySize(8),
+            fill = primary and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE, border = primary and 0 or thin,
+            border_color = BlitBuffer.COLOR_BLACK, pad_x = 0, pad_y = 0,
+            CenterContainer:new{ dimen = Geom:new{ w = width, h = h }, tw } }, callback = callback }
+    end
+    local footer = VerticalGroup:new{
+        LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = BlitBuffer.gray(0.26) },
+        padded(HorizontalGroup:new{
+            button(_("Cancel"), false, bw1, function() self:onClose() end),
+            HorizontalSpan:new{ width = gap },
+            button(n == 1 and _("Show 1 annotation") or string.format(_("Show %d annotations"), n), true,
+                inner - gap - bw1, function() self:onDone() end),
+        }, Screen:scaleBySize(14), Screen:scaleBySize(20)),
+    }
+
+    -- body scrolls when it doesn't fit (landscape, small screens)
+    local avail = H - header:getSize().h - footer:getSize().h
+    local body_widget = body
+    if body:getSize().h > avail then
+        local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
+        body_widget = ScrollableContainer:new{ dimen = Geom:new{ w = W, h = avail }, show_parent = self, body }
+    end
+    self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0,
+        background = BlitBuffer.COLOR_WHITE,
+        OverlapGroup:new{ dimen = Geom:new{ w = W, h = H }, allow_mirroring = false,
+            VerticalGroup:new{ align = "left", header, body_widget },
+            BottomContainer:new{ dimen = Geom:new{ w = W, h = H }, footer },
+        },
+    }
+end
+function FilterScreen:showTextFilters()
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local af = self.list.active_filter or {}
+    local dialog
+    local function entry(field, is_exclude, label, title, hint)
+        local key = is_exclude and (field .. "_exclude") or field
+        local on = af[key] and af[key] ~= ""
+        return { text = (on and "✓ " or "") .. label, callback = function()
+            UIManager:close(dialog)
+            self.helpers.text(field, title, hint, is_exclude)
+        end }
+    end
+    dialog = ButtonDialog:new{
+        title = _("Text filters"),
+        buttons = {
+            { entry("search_highlight", false, _("Highlight contains"), "Filter by Highlight Text", _("Words in highlighted text…")) },
+            { entry("search_highlight", true, _("Highlight doesn't contain"), "Exclude by Highlight Text", _("Words in highlighted text…")) },
+            { entry("search_note", false, _("Note contains"), "Filter by Note Text", _("Words in your notes…")) },
+            { entry("search_note", true, _("Note doesn't contain"), "Exclude by Note Text", _("Words in your notes…")) },
+            { { text = _("Close"), callback = function() UIManager:close(dialog) end } },
+        },
+    }
+    UIManager:show(dialog)
+end
+function FilterScreen:onDone()
+    self.list.filter_screen = nil
+    UIManager:close(self, "flashui")
+    return true
+end
+function FilterScreen:onClose()
+    -- Cancel: put filters and sort back as they were
+    self.list.active_filter = self.saved_filter
+    if getSetting("sort_mode", "date_newest") ~= self.saved_sort then
+        setSetting("sort_mode", self.saved_sort)
+        self.list:applySort()
+    end
+    self.list:refresh()
+    return self:onDone()
+end
+function NotesListWidget:showFilterScreen(helpers)
+    if self.filter_screen then UIManager:close(self.filter_screen) end
+    self.filter_screen = FilterScreen:new{ list = self, helpers = helpers }
+    UIManager:show(self.filter_screen, "flashui")
+end
+
 function AllNotesViewer:showNoteDetails(note, parent_widget)
     UIManager:show(AnnotationSheet:new{ note = note, viewer = self, parent_widget = parent_widget }, "ui")
+end
 end
 function AllNotesViewer:showColorPicker(note, parent_widget)
     local RadioButtonWidget = require("ui/widget/radiobuttonwidget")
