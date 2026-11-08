@@ -50,7 +50,6 @@ local DEFAULT_TRUNCATE_LINES = 5
 local DEFAULT_TITLE_MARGIN = 8
 local DEFAULT_INFO_MARGIN = 6
 local DEFAULT_TOP_PADDING = 16
-local DEFAULT_PREVIEW_FUDGE = 5
 local function getSetting(key, default)
     local val = G_reader_settings:readSetting("annotationsviewer_" .. key)
     if val == nil then return default end
@@ -100,7 +99,6 @@ local function getInfoFont() return getSetting("info_font", nil) end
 local function getContentFont() return getSetting("content_font", nil) end
 local function getShowTotalNotes() return getSetting("show_total", true) end
 local function getTopPadding() return Screen:scaleBySize(getSetting("top_padding", DEFAULT_TOP_PADDING)) end
-local function getPreviewFudge() return tonumber(getSetting("preview_fudge", DEFAULT_PREVIEW_FUDGE)) end
 local function getHideDupTitle() return getSetting("hide_dup_title", true) ~= false end
 local function getHideDupInfo() return getSetting("hide_dup_info", true) ~= false end
 local function getFilterTitlebarBtn() return getSetting("filter_titlebar_btn", true) ~= false end
@@ -144,7 +142,17 @@ local SB_STRIP_WIDTH  = Screen:scaleBySize(32 + 16 + 3)
 local SB_MARGIN_RIGHT = 0
 local SB_MARGIN_V_TOP    = Screen:scaleBySize(16)
 local SB_MARGIN_V_BOTTOM = SB_MARGIN_V_TOP -- same space below as above
-local SB_TRACK_COLOR = BlitBuffer.COLOR_BLACK
+-- The plugin's own colours (from the design), as fixed grey values rather than KOReader's
+-- named greys, so every screen uses exactly the same shades.
+local COLORS = {
+    ink        = BlitBuffer.COLOR_BLACK,
+    muted      = BlitBuffer.Color8(0x45), -- secondary text: tabs, info line, author, counts
+    disabled   = BlitBuffer.Color8(0xAA), -- buttons that can't be used
+    line       = BlitBuffer.Color8(0xBD), -- separators
+    line_light = BlitBuffer.Color8(0xD6), -- row lines, line under book titles
+    section_bg = BlitBuffer.Color8(0xE9), -- section bars in Filter & sort
+    section_fg = BlitBuffer.Color8(0x33),
+}
 -- where a book starts: a short notch across the track, like chapter ticks on Kindle/Kobo
 local SB_MARK_OVERHANG = Screen:scaleBySize(3)          -- how far it sticks out on each side
 local SB_MARK_HEIGHT   = math.max(1, math.floor(Screen:scaleBySize(1)))
@@ -232,7 +240,6 @@ local SPIN_MENUS = {
             { label = _("Horizontal Margin: "), key = "h_margin", default = DEFAULT_H_MARGIN, min = 5, max = 60, step = 5, getter = function() return getSetting("h_margin", DEFAULT_H_MARGIN) end },
             { label = _("Note Spacing: "), key = "note_spacing", default = DEFAULT_NOTE_SPACING, min = 5, max = 100, step = 2, getter = function() return getSetting("note_spacing", DEFAULT_NOTE_SPACING) end },
             { label = _("Text Margin: "), key = "text_margin", default = DEFAULT_TEXT_MARGIN, min = 0, max = 30, step = 2, getter = function() return getSetting("text_margin", DEFAULT_TEXT_MARGIN) end },
-            { label = _("Preview Fudge: "), key = "preview_fudge", default = DEFAULT_PREVIEW_FUDGE, min = 0, max = 40, step = 1, getter = getPreviewFudge },
         }
     }
 }
@@ -745,7 +752,7 @@ function NoteItemWidget:init()
         if author_text then
             local author_widget = TextWidget:new{
                 text = author_text, face = info_face, max_width = author_w,
-                fgcolor = BlitBuffer.COLOR_DARK_GRAY,
+                fgcolor = COLORS.muted,
             }
             -- line the author up with the middle of the title's first line
             local first_line_h = getLineHeight(title_face)
@@ -759,7 +766,7 @@ function NoteItemWidget:init()
             VerticalSpan:new{ width = HEADER_LINE_GAP },
             LineWidget:new{
                 dimen = Geom:new{ w = content_width, h = Size.line.thin },
-                background = BlitBuffer.COLOR_LIGHT_GRAY,
+                background = COLORS.line_light,
             },
         }
         -- keep the measured and drawn heights identical
@@ -770,11 +777,22 @@ function NoteItemWidget:init()
     local show_info_header = getShowInfo()
     local info_text = buildInfoText(self.note, note_wrapper, self.skip_title)
 
-    local date_widget = TextBoxWidget:new{
-        text = info_text, face = info_face,
-        width = content_width, alignment = "left",
-        fgcolor = BlitBuffer.COLOR_DARK_GRAY,
-    }
+    -- Same colour and same kind of text widget as the tabs (a single-line TextWidget) when it
+    -- fits on one line, so it renders exactly like them; the box keeps the measured height.
+    local date_widget
+    local info_box_h = getBoxHeight(info_text, info_face, content_width, false)
+    if info_text ~= "" and measureTextWidth(info_text, info_face) <= content_width then
+        date_widget = LeftContainer:new{
+            dimen = Geom:new{ w = content_width, h = info_box_h },
+            TextWidget:new{ text = info_text, face = info_face, fgcolor = COLORS.muted },
+        }
+    else
+        date_widget = TextBoxWidget:new{
+            text = info_text, face = info_face,
+            width = content_width, alignment = "left",
+            fgcolor = COLORS.muted,
+        }
+    end
 
     local text_fgcolor = BlitBuffer.COLOR_BLACK
     local show_strikeout = drawer == "strikeout"
@@ -1344,7 +1362,10 @@ function NotesListWidget:calculatePages()
     local current_page_notes, current_height = {}, 0
     
     local available_content_height = self.content_height
-    local effective_content_height = available_content_height + getPreviewFudge()
+    -- An annotation that would end within a few pixels of the bottom goes to the next page
+    -- (and shows here faded and cut off), so a page never ends flush with the screen edge.
+    local end_gap = 3
+    local effective_content_height = available_content_height - end_gap
     
     local dedup_prev_title = nil
     local dedup_prev_info_key = nil
@@ -1401,7 +1422,7 @@ function NotesListWidget:createFooter()
         local page_label = TextWidget:new{
             text = string.format("%d/%d", self.current_page, self.total_pages),
             face = Font:getFace("cfont", 12), bold = true,
-            fgcolor = BlitBuffer.COLOR_DARK_GRAY,
+            fgcolor = COLORS.muted,
             max_width = strip_w + SB_MARGIN_RIGHT,
         }
         local label_h = page_label:getSize().h + Screen:scaleBySize(6)
@@ -1456,13 +1477,13 @@ function NotesListWidget:createFooter()
             local icon_x = x + math.floor((strip_w - icon_size) / 2)
             if up_icon then up_icon:paintTo(bb, icon_x, y) end
             local ty = y + track_y
-            bb:paintRect(track_x, ty, SB_TRACK_WIDTH, track_h, SB_TRACK_COLOR)
+            bb:paintRect(track_x, ty, SB_TRACK_WIDTH, track_h, COLORS.ink)
             -- same overhang on both sides of the track, so the notch is centred on it
             local mark_x = track_x - SB_MARK_OVERHANG
             local mark_w = SB_TRACK_WIDTH + SB_MARK_OVERHANG * 2
             for _i, p in ipairs(marks) do
                 if p > 1 then -- the top of the track already marks page 1
-                    bb:paintRect(mark_x, ty + pageY(p) + math.floor(thumb_h / 2), mark_w, SB_MARK_HEIGHT, SB_TRACK_COLOR)
+                    bb:paintRect(mark_x, ty + pageY(p) + math.floor(thumb_h / 2), mark_w, SB_MARK_HEIGHT, COLORS.ink)
                 end
             end
             local thumb_y = ty + pageY(self_ref.current_page)
@@ -1494,7 +1515,7 @@ function NotesListWidget:createFooter()
         local icon = Screen:scaleBySize(20)
         local function pageButton(text, icon_name, icon_first, enabled, callback, hold_callback)
             local tw = TextWidget:new{ text = text, face = face, bold = enabled,
-                fgcolor = enabled and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_GRAY }
+                fgcolor = enabled and COLORS.ink or COLORS.disabled }
             local iw = IconWidget:new{ icon = icon_name, width = icon, height = icon, dim = not enabled }
             local row = icon_first and HorizontalGroup:new{ align = "center", iw, HorizontalSpan:new{ width = Screen:scaleBySize(4) }, tw }
                 or HorizontalGroup:new{ align = "center", tw, HorizontalSpan:new{ width = Screen:scaleBySize(4) }, iw }
@@ -1536,7 +1557,7 @@ function NotesListWidget:createFooter()
                 width = self.width, padding = 0, margin = 0, bordersize = 0,
                 background = BlitBuffer.COLOR_WHITE,
                 VerticalGroup:new{
-                    LineWidget:new{ dimen = Geom:new{ w = self.width, h = Size.line.medium }, background = BlitBuffer.gray(0.26) },
+                    LineWidget:new{ dimen = Geom:new{ w = self.width, h = Size.line.medium }, background = COLORS.line },
                     bar,
                 },
             },
@@ -1693,7 +1714,7 @@ function NotesListWidget:buildFilterChips(w)
     local h = CHIPS_PAD_TOP + n_rows * CHIP_HEIGHT + (n_rows - 1) * CHIP_GAP + CHIPS_PAD_BOTTOM + Size.line.thin
     local count = TextWidget:new{
         text = string.format(_("%d of %d"), #(self.filtered_notes or {}), #(self.notes_list or {})),
-        face = small, fgcolor = BlitBuffer.COLOR_DARK_GRAY,
+        face = small, fgcolor = COLORS.muted,
     }
     local first_row = Geom:new{ w = avail, h = CHIP_HEIGHT }
     local area = VerticalGroup:new{ align = "left",
@@ -1706,7 +1727,7 @@ function NotesListWidget:buildFilterChips(w)
         },
         VerticalSpan:new{ width = CHIPS_PAD_BOTTOM },
         HorizontalGroup:new{ HorizontalSpan:new{ width = side },
-            LineWidget:new{ dimen = Geom:new{ w = avail, h = Size.line.thin }, background = BlitBuffer.COLOR_GRAY } },
+            LineWidget:new{ dimen = Geom:new{ w = avail, h = Size.line.thin }, background = COLORS.line } },
     }
     return area, h
 end
@@ -1732,7 +1753,7 @@ function NotesListWidget:buildHeader()
         if authors and authors ~= "" and authors ~= "Unknown" then sub = authors .. " · " .. sub end
         local max_w = math.floor(w * 0.55)
         local t = TextWidget:new{ text = book_title, face = getFaceOr(SERIF_FONT, 19, "cfont"), bold = true, max_width = max_w }
-        local st = TextWidget:new{ text = sub, face = Font:getFace("cfont", 12), fgcolor = BlitBuffer.COLOR_DARK_GRAY, max_width = max_w }
+        local st = TextWidget:new{ text = sub, face = Font:getFace("cfont", 12), fgcolor = COLORS.muted, max_width = max_w }
         -- Text boxes include room for descenders and line gap; placing the second line from
         -- the title's baseline keeps the two lines close together, like in the mockup.
         local cap = math.floor(Screen:scaleBySize(12) * 0.72)
@@ -1798,7 +1819,7 @@ function NotesListWidget:buildHeader()
         local text = tab.label .. (show_counts and ("  " .. tab.n) or "")
         local tw = TextWidget:new{
             text = text, face = tab_face, bold = active,
-            fgcolor = active and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_DARK_GRAY,
+            fgcolor = active and COLORS.ink or COLORS.muted,
         }
         local tab_w = tw:getSize().w
         local box = VerticalGroup:new{
@@ -1811,7 +1832,7 @@ function NotesListWidget:buildHeader()
     end
     local sort_text = TextWidget:new{
         text = sortModeLabel(getSetting("sort_mode", "date_newest")),
-        face = Font:getFace("cfont", 13), fgcolor = BlitBuffer.COLOR_DARK_GRAY,
+        face = Font:getFace("cfont", 13), fgcolor = COLORS.muted,
         max_width = math.floor(w * 0.4),
     }
     local arrow_size = Screen:scaleBySize(14)
@@ -1829,7 +1850,7 @@ function NotesListWidget:buildHeader()
         LeftContainer:new{ dimen = tabs_dimen, tabs },
         RightContainer:new{ dimen = tabs_dimen, HorizontalGroup:new{ sort_btn, HorizontalSpan:new{ width = math.floor(h_pad / 2) } } },
     })
-    table.insert(header, LineWidget:new{ dimen = Geom:new{ w = w, h = line_h }, background = BlitBuffer.COLOR_GRAY })
+    table.insert(header, LineWidget:new{ dimen = Geom:new{ w = w, h = line_h }, background = COLORS.line })
 
     -- 3. active-filter chips (the tab is not repeated here)
     local chips = self:buildFilterChips(w)
@@ -3038,10 +3059,11 @@ function NotesListWidget:showFilterMenu(show_back)
     showFilterMenu = function()
         if self.filter_screen then self.filter_screen:rebuild() end
     end
+    local function back() if self.filter_screen then self.filter_screen:rebuild() end end
     self:showFilterScreen{
-        books = function() showToggleFilter(FILTER_CONFIGS.book) end,
-        tags = function() showToggleFilter(FILTER_CONFIGS.tags) end,
-        chapters = function() showToggleFilter(FILTER_CONFIGS.chapter) end,
+        books = function() self:showBookPicker(back) end,
+        tags = function() self:showTagPicker(back) end,
+        chapters = function() self:showChapterPicker(back) end,
         chapters_available = isSingleBookContext,
         text = function(field, title, hint, is_exclude) showTextSearchFilter(field, title, hint, is_exclude) end,
     }
@@ -4003,8 +4025,8 @@ function AnnotationSheet:build()
     -- KOReader's own border sizes (Size.*): scaled for the screen's DPI like all its dialogs
     local thick = Size.border.thick   -- 2px at 160dpi
     local thin = Size.border.button   -- 1.5px at 160dpi
-    local LIGHT = BlitBuffer.gray(0.26)        -- #bdbdbd
-    local MUTED = BlitBuffer.gray(0.73)        -- #454545
+    local LIGHT = COLORS.line
+    local MUTED = COLORS.muted
     local label_face = Font:getFace("cfont", 11)
     local group = VerticalGroup:new{ align = "left" }
     local function sectionLabel(text, right)
@@ -4234,7 +4256,7 @@ function AnnotationSheet:build()
     self.sheet = SheetFrame:new{
         -- Size.border.window: the outline KOReader uses on its own dialogs and buttons
         width = sheet_w, radius = Screen:scaleBySize(14), border = Size.border.window,
-        pad_x = P, pad_top = Screen:scaleBySize(18), pad_bottom = Screen:scaleBySize(24),
+        pad_x = P, pad_top = Screen:scaleBySize(18), pad_bottom = Screen:scaleBySize(18), -- same as screen footers
         group,
     }
     local sheet_h = self.sheet:getSize().h
@@ -4261,6 +4283,64 @@ end
 -- "Filter & sort": full-screen page from the mockup. Changes apply straight away (the list
 -- behind updates and the button shows how many are left); Cancel / ✕ / Back put everything
 -- back as it was when the page opened.
+-- Shared title bar for full-screen pages (Filter & sort, pickers): same height, icon size,
+-- spacing and serif title as the list's top bar; ‹ on the left, ✕ on the right (both cancel).
+local Page = {} -- shared pieces of the full-screen pages (kept in one table: Lua allows 200 locals)
+function Page.header(owner, title, on_back, right_items)
+    local W = Screen:getWidth()
+    local side = Screen:scaleBySize(8)
+    local d = Geom:new{ w = W, h = TOPBAR_HEIGHT }
+    local right = HorizontalGroup:new{ align = "center" }
+    for _i, it in ipairs(right_items or {}) do table.insert(right, it) end
+    table.insert(right, newHeaderButton("close", on_back, owner, nil, false))
+    table.insert(right, HorizontalSpan:new{ width = side })
+    local right_w = right:getSize().w
+    local left_w = side + HEADER_ICON_SIZE + HEADER_ICON_PAD * 2 + side
+    return VerticalGroup:new{
+        OverlapGroup:new{ dimen = d, allow_mirroring = false,
+            LeftContainer:new{ dimen = d, HorizontalGroup:new{ align = "center",
+                HorizontalSpan:new{ width = side },
+                newHeaderButton(BD.mirroredUILayout() and "chevron.right" or "chevron.left", on_back, owner, nil, false),
+                HorizontalSpan:new{ width = side },
+                TextWidget:new{ text = title, face = getFaceOr(SERIF_FONT, 21, "cfont"), bold = true,
+                    max_width = W - left_w - right_w - side } } },
+            RightContainer:new{ dimen = d, right },
+        },
+        LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line },
+    }
+end
+-- Shared bottom bar: line, then Cancel (1/3) and the main button (2/3), 48 high, same padding
+-- everywhere.
+Page.BUTTON_H = Screen:scaleBySize(48)
+Page.FOOTER_TOP, Page.FOOTER_BOTTOM = Screen:scaleBySize(12), Screen:scaleBySize(18)
+function Page.button(text, primary, width, callback)
+    local tw = TextWidget:new{ text = text, face = Font:getFace("cfont", 15), bold = primary,
+        max_width = width - Screen:scaleBySize(12), fgcolor = primary and BlitBuffer.COLOR_WHITE or COLORS.ink }
+    return TapBox:new{ RoundedBox:new{ width = width, radius = Screen:scaleBySize(8),
+        fill = primary and COLORS.ink or BlitBuffer.COLOR_WHITE, border = primary and 0 or Size.border.button,
+        border_color = COLORS.ink, pad_x = 0, pad_y = 0,
+        CenterContainer:new{ dimen = Geom:new{ w = width, h = Page.BUTTON_H }, tw } }, callback = callback }
+end
+function Page.footer(cancel_cb, primary_text, primary_cb)
+    local W = Screen:getWidth()
+    local P = Screen:scaleBySize(24)
+    local inner = W - P * 2
+    local gap = Screen:scaleBySize(10)
+    local bw1 = math.floor((inner - gap) / 3)
+    return VerticalGroup:new{
+        LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line },
+        VerticalSpan:new{ width = Page.FOOTER_TOP },
+        HorizontalGroup:new{ HorizontalSpan:new{ width = P },
+            Page.button(_("Cancel"), false, bw1, cancel_cb),
+            HorizontalSpan:new{ width = gap },
+            Page.button(primary_text, true, inner - gap - bw1, primary_cb) },
+        VerticalSpan:new{ width = Page.FOOTER_BOTTOM },
+    }
+end
+function Page.countText(n)
+    return n == 1 and _("Show 1 annotation") or string.format(_("Show %d annotations"), n)
+end
+
 local function deepCopy(t)
     if type(t) ~= "table" then return t end
     local c = {}
@@ -4281,7 +4361,10 @@ function FilterScreen:init()
     self:build()
 end
 function FilterScreen:rebuild()
+    -- keep the scroll position when the page is rebuilt after a change
+    local offset = self.scroller and self.scroller:getScrolledOffset()
     self:build()
+    if offset and self.scroller then self.scroller:setScrolledOffset(offset) end
     UIManager:setDirty(self, "ui")
 end
 function FilterScreen:changed()
@@ -4298,8 +4381,8 @@ function FilterScreen:build()
     local P = Screen:scaleBySize(24)
     local inner = W - P * 2
     local thin = Size.border.button
-    local LIGHT = BlitBuffer.gray(0.16)            -- #d6d6d6 row lines
-    local MUTED = BlitBuffer.gray(0.73)
+    local LIGHT = COLORS.line_light   -- row lines
+    local MUTED = COLORS.muted
     local face15 = Font:getFace("cfont", 15)
     local face14 = Font:getFace("cfont", 14)
     local face13 = Font:getFace("cfont", 13)
@@ -4314,8 +4397,8 @@ function FilterScreen:build()
             HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget }, VerticalSpan:new{ width = bottom or 0 } }
     end
     local function sectionBar(text)
-        local tw = TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = BlitBuffer.gray(0.8) }
-        return FrameContainer:new{ background = BlitBuffer.gray(0.09), bordersize = 0, margin = 0,
+        local tw = TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.section_fg }
+        return FrameContainer:new{ background = COLORS.section_bg, bordersize = 0, margin = 0,
             padding = Screen:scaleBySize(7), padding_left = P, width = W, tw }
     end
     local function labelRow(left, right)
@@ -4538,55 +4621,25 @@ function FilterScreen:build()
         table.insert(body, padded(flow(items), Screen:scaleBySize(14), Screen:scaleBySize(14)))
     end
 
-    -- header
-    local close_btn = IconButton:new{ icon = "close", width = HEADER_ICON_SIZE, height = HEADER_ICON_SIZE,
-        padding = HEADER_ICON_PAD, allow_flash = false, callback = function() self:onClose() end, show_parent = self }
-    local head_h = Screen:scaleBySize(60)
-    local hd = Geom:new{ w = W, h = head_h }
-    local header = VerticalGroup:new{
-        OverlapGroup:new{ dimen = hd, allow_mirroring = false,
-            LeftContainer:new{ dimen = hd, HorizontalGroup:new{ HorizontalSpan:new{ width = P },
-                TextWidget:new{ text = _("Filter & sort"), face = getFaceOr(SERIF_FONT, 21, "cfont"), bold = true } } },
-            RightContainer:new{ dimen = hd, HorizontalGroup:new{ align = "center",
-                TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = Screen:scaleBySize(90), h = head_h }, underlined(_("Reset all"), face14) },
-                    callback = function()
-                        list.active_filter = {}
-                        self:changed()
-                    end },
-                close_btn, HorizontalSpan:new{ width = Screen:scaleBySize(8) } } },
-        },
-        LineWidget:new{ dimen = Geom:new{ w = W, h = Size.border.thick }, background = BlitBuffer.COLOR_BLACK },
-    }
-
-    -- footer: Cancel | Show N annotations
-    local n = #(list.filtered_notes or {})
-    local gap = Screen:scaleBySize(10)
-    local bw1 = math.floor((inner - gap) / 3)
-    local function button(text, primary, width, callback)
-        local tw = TextWidget:new{ text = text, face = face15, bold = primary, max_width = width - Screen:scaleBySize(12),
-            fgcolor = primary and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK }
-        local h = Screen:scaleBySize(50)
-        return TapBox:new{ RoundedBox:new{ width = width, radius = Screen:scaleBySize(8),
-            fill = primary and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE, border = primary and 0 or thin,
-            border_color = BlitBuffer.COLOR_BLACK, pad_x = 0, pad_y = 0,
-            CenterContainer:new{ dimen = Geom:new{ w = width, h = h }, tw } }, callback = callback }
-    end
-    local footer = VerticalGroup:new{
-        LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = BlitBuffer.gray(0.26) },
-        padded(HorizontalGroup:new{
-            button(_("Cancel"), false, bw1, function() self:onClose() end),
-            HorizontalSpan:new{ width = gap },
-            button(n == 1 and _("Show 1 annotation") or string.format(_("Show %d annotations"), n), true,
-                inner - gap - bw1, function() self:onDone() end),
-        }, Screen:scaleBySize(14), Screen:scaleBySize(20)),
-    }
+    -- title bar and bottom bar, shared with the pickers
+    local header = Page.header(self, _("Filter & sort"), function() self:onClose() end, {
+        TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = Screen:scaleBySize(90), h = TOPBAR_HEIGHT }, underlined(_("Reset all"), face14) },
+            callback = function()
+                list.active_filter = {}
+                self:changed()
+            end },
+    })
+    local footer = Page.footer(function() self:onClose() end, Page.countText(#(list.filtered_notes or {})),
+        function() self:onDone() end)
 
     -- body scrolls when it doesn't fit (landscape, small screens)
     local avail = H - header:getSize().h - footer:getSize().h
     local body_widget = body
+    self.scroller = nil
     if body:getSize().h > avail then
         local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
         body_widget = ScrollableContainer:new{ dimen = Geom:new{ w = W, h = avail }, show_parent = self, body }
+        self.scroller = body_widget
     end
     self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0,
         background = BlitBuffer.COLOR_WHITE,
@@ -4639,6 +4692,321 @@ function NotesListWidget:showFilterScreen(helpers)
     if self.filter_screen then UIManager:close(self.filter_screen) end
     self.filter_screen = FilterScreen:new{ list = self, helpers = helpers }
     UIManager:show(self.filter_screen, "flashui")
+end
+
+-- Full-screen picker for Books, Chapters and Tags (BookFilter / ChapterFilter boards).
+-- Books and Chapters: "Only these" / "Hide these" switch and checkboxes. Tags: each tag can be
+-- shown-only (✓) or hidden (✕), tap cycles through, because "has tag A but not tag B" is useful.
+-- Changes count live ("Show N annotations"); Cancel / ‹ / ✕ put the filter back.
+local ListPicker = InputContainer:extend{
+    list = nil, title = "", items = nil, inc_key = nil, exc_key = nil,
+    mode_labels = nil, tri_state = false, search_hint = nil, on_done = nil,
+    covers_fullscreen = true,
+}
+function ListPicker:init()
+    self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
+    local af = self.list.active_filter or {}
+    self.list.active_filter = af
+    self.saved_inc = deepCopy(af[self.inc_key])
+    self.saved_exc = deepCopy(af[self.exc_key])
+    self.query = ""
+    if not self.tri_state then
+        -- one side at a time; legacy filters with both keep the "only" side
+        self.mode = (af[self.inc_key] and next(af[self.inc_key])) and "inc"
+            or ((af[self.exc_key] and next(af[self.exc_key])) and "exc" or "inc")
+    end
+    if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
+    self:build()
+end
+function ListPicker:state(key)
+    local af = self.list.active_filter
+    if af[self.inc_key] and af[self.inc_key][key] then return "inc" end
+    if af[self.exc_key] and af[self.exc_key][key] then return "exc" end
+    return nil
+end
+function ListPicker:set(key, st)
+    local af = self.list.active_filter
+    for _i, k in ipairs({ self.inc_key, self.exc_key }) do
+        if af[k] then af[k][key] = nil; if not next(af[k]) then af[k] = nil end end
+    end
+    if st then
+        local k = (st == "inc") and self.inc_key or self.exc_key
+        af[k] = af[k] or {}
+        af[k][key] = true
+    end
+end
+function ListPicker:changed()
+    self.list:applyFilter() -- count only; the list is redrawn when the picker closes
+    local offset = self.scroller and self.scroller:getScrolledOffset()
+    self:build()
+    if offset and self.scroller then self.scroller:setScrolledOffset(offset) end
+    UIManager:setDirty(self, "ui")
+end
+function ListPicker:visibleItems()
+    if self.query == "" then return self.items end
+    local q = self.query:lower()
+    local out = {}
+    for _i, it in ipairs(self.items) do
+        if ((it.title or "") .. " " .. (it.subtitle or "")):lower():find(q, 1, true) then table.insert(out, it) end
+    end
+    return out
+end
+function ListPicker:build()
+    local W, H = Screen:getWidth(), Screen:getHeight()
+    local P = Screen:scaleBySize(24)
+    local inner = W - P * 2
+    local thin = Size.border.button
+    local face13, face14, face15 = Font:getFace("cfont", 13), Font:getFace("cfont", 14), Font:getFace("cfont", 15)
+    local function underlined(text)
+        local tw = TextWidget:new{ text = text, face = face13 }
+        return VerticalGroup:new{ tw, LineWidget:new{ dimen = Geom:new{ w = tw:getSize().w, h = Size.line.medium }, background = COLORS.ink } }
+    end
+    local visible = self:visibleItems()
+
+    local header = Page.header(self, self.title, function() self:onClose() end)
+
+    -- controls: mode switch, search, "N of M selected", Select all / Clear
+    local controls = VerticalGroup:new{ align = "left" }
+    if not self.tri_state then
+        local seg = HorizontalGroup:new{}
+        local cell_h = Screen:scaleBySize(40)
+        local cell_w = math.floor((inner - thin * 3) / 2)
+        for i, m in ipairs({ { "inc", self.mode_labels[1] }, { "exc", self.mode_labels[2] } }) do
+            local on = (self.mode == m[1])
+            if i > 1 then table.insert(seg, LineWidget:new{ dimen = Geom:new{ w = thin, h = cell_h }, background = COLORS.ink }) end
+            table.insert(seg, TapBox:new{
+                FrameContainer:new{ bordersize = 0, padding = 0, margin = 0, background = on and COLORS.ink or BlitBuffer.COLOR_WHITE,
+                    CenterContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
+                        TextWidget:new{ text = m[2], face = face14, bold = on, max_width = cell_w - Screen:scaleBySize(8),
+                            fgcolor = on and BlitBuffer.COLOR_WHITE or COLORS.ink } } },
+                callback = function()
+                    if self.mode == m[1] then return end
+                    -- move the current choice to the other side
+                    local chosen = {}
+                    for _i, it in ipairs(self.items) do if self:state(it.key) then table.insert(chosen, it.key) end end
+                    self.mode = m[1]
+                    for _i, key in ipairs(chosen) do self:set(key, m[1]) end
+                    self:changed()
+                end,
+            })
+        end
+        table.insert(controls, RoundedOutline:new{ radius = Screen:scaleBySize(8), border = thin, seg })
+        table.insert(controls, VerticalSpan:new{ width = Screen:scaleBySize(12) })
+    end
+    if self.search_hint then
+        local has_q = self.query ~= ""
+        local qtext = TextWidget:new{ text = has_q and self.query or self.search_hint, face = face14,
+            fgcolor = has_q and COLORS.ink or COLORS.muted, max_width = inner - Screen:scaleBySize(60) }
+        local field_h = Screen:scaleBySize(42)
+        table.insert(controls, TapBox:new{
+            RoundedBox:new{ width = inner, radius = Screen:scaleBySize(8), border = thin, border_color = COLORS.line,
+                fill = BlitBuffer.COLOR_WHITE, pad_x = Screen:scaleBySize(12), pad_y = math.floor((field_h - qtext:getSize().h) / 2),
+                HorizontalGroup:new{ align = "center",
+                    IconWidget:new{ icon = "appbar.search", width = Screen:scaleBySize(18), height = Screen:scaleBySize(18) },
+                    HorizontalSpan:new{ width = Screen:scaleBySize(8) }, qtext } },
+            callback = function() self:askQuery() end,
+        })
+        table.insert(controls, VerticalSpan:new{ width = Screen:scaleBySize(10) })
+    end
+    local n_sel = 0
+    for _i, it in ipairs(self.items) do if self:state(it.key) then n_sel = n_sel + 1 end end
+    local d = Geom:new{ w = inner, h = Screen:scaleBySize(32) }
+    local links = HorizontalGroup:new{ align = "center" }
+    if not self.tri_state then
+        table.insert(links, TapBox:new{ underlined(_("Select all")), callback = function()
+            for _i, it in ipairs(visible) do self:set(it.key, self.mode) end
+            self:changed()
+        end })
+        table.insert(links, HorizontalSpan:new{ width = Screen:scaleBySize(18) })
+    end
+    table.insert(links, TapBox:new{ underlined(_("Clear")), callback = function()
+        for _i, it in ipairs(self.items) do self:set(it.key, nil) end
+        self:changed()
+    end })
+    table.insert(controls, OverlapGroup:new{ dimen = d, allow_mirroring = false,
+        LeftContainer:new{ dimen = d, TextWidget:new{ text = string.format(_("%d of %d selected"), n_sel, #self.items),
+            face = face13, fgcolor = COLORS.muted } },
+        RightContainer:new{ dimen = d, links } })
+    local top = VerticalGroup:new{ align = "left", header,
+        HorizontalGroup:new{ HorizontalSpan:new{ width = P }, VerticalGroup:new{ align = "left",
+            -- same space above the switch as between the switch and the search field
+            VerticalSpan:new{ width = Screen:scaleBySize(12) }, controls,
+            VerticalSpan:new{ width = Screen:scaleBySize(6) } } },
+        LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line } }
+
+    -- rows (grouped when items have a group, e.g. chapters by book)
+    local rows = VerticalGroup:new{ align = "left" }
+    local box = Screen:scaleBySize(24)
+    local last_group
+    for _i, it in ipairs(visible) do
+        if it.group and it.group ~= last_group then
+            last_group = it.group
+            local gd = Geom:new{ w = inner, h = Screen:scaleBySize(40) }
+            local group_name = it.group
+            table.insert(rows, OverlapGroup:new{ dimen = gd, allow_mirroring = false,
+                LeftContainer:new{ dimen = gd, TextWidget:new{ text = group_name, face = getFaceOr(SERIF_FONT, 17, "cfont"), bold = true,
+                    max_width = inner - Screen:scaleBySize(60) } },
+                RightContainer:new{ dimen = gd, TapBox:new{ underlined(_("All")), callback = function()
+                    for _j, x in ipairs(self.items) do if x.group == group_name then self:set(x.key, self.mode or "inc") end end
+                    self:changed()
+                end } } })
+            table.insert(rows, LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light })
+        end
+        local st = self:state(it.key)
+        local mark
+        if st == "exc" and self.tri_state then
+            mark = RoundedBox:new{ width = box, radius = Screen:scaleBySize(5), fill = COLORS.ink, pad_x = 0, pad_y = 0,
+                CenterContainer:new{ dimen = Geom:new{ w = box, h = box },
+                    IconWidget:new{ icon = "close", width = Screen:scaleBySize(16), height = Screen:scaleBySize(16), invert = true } } }
+        elseif st then
+            mark = RoundedBox:new{ width = box, radius = Screen:scaleBySize(5), fill = COLORS.ink, pad_x = 0, pad_y = 0,
+                CenterContainer:new{ dimen = Geom:new{ w = box, h = box },
+                    TextWidget:new{ text = "✓", face = Font:getFace("cfont", 15), bold = true, fgcolor = BlitBuffer.COLOR_WHITE } } }
+        else
+            mark = RoundedBox:new{ width = box, radius = Screen:scaleBySize(5), border = Size.border.thick, border_color = COLORS.ink,
+                fill = BlitBuffer.COLOR_WHITE, pad_x = 0, pad_y = 0, VerticalSpan:new{ width = box } }
+        end
+        local count = TextWidget:new{ text = tostring(it.count or ""), face = face13, fgcolor = COLORS.muted }
+        local text_w = inner - box - Screen:scaleBySize(14) * 2 - count:getSize().w
+        local texts = VerticalGroup:new{ align = "left",
+            TextWidget:new{ text = it.title, face = it.serif and getFaceOr(SERIF_FONT, 17, "cfont") or face15,
+                bold = it.serif, max_width = text_w } }
+        if it.subtitle and it.subtitle ~= "" then
+            table.insert(texts, TextWidget:new{ text = it.subtitle, face = Font:getFace("cfont", 12), fgcolor = COLORS.muted, max_width = text_w })
+        end
+        local pad = Screen:scaleBySize(12)
+        local row_h = math.max(box, texts:getSize().h) + pad * 2
+        local rd = Geom:new{ w = inner, h = row_h }
+        local key = it.key
+        table.insert(rows, TapBox:new{ OverlapGroup:new{ dimen = rd, allow_mirroring = false,
+            LeftContainer:new{ dimen = rd, HorizontalGroup:new{ align = "center", mark, HorizontalSpan:new{ width = Screen:scaleBySize(14) }, texts } },
+            RightContainer:new{ dimen = rd, count } },
+            callback = function()
+                local cur = self:state(key)
+                if self.tri_state then
+                    self:set(key, (cur == nil and "inc") or (cur == "inc" and "exc") or nil)
+                else
+                    self:set(key, (cur == nil) and self.mode or nil)
+                end
+                self:changed()
+            end })
+        table.insert(rows, LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light })
+    end
+    if #visible == 0 then
+        table.insert(rows, VerticalSpan:new{ width = Screen:scaleBySize(24) })
+        table.insert(rows, TextWidget:new{ text = _("Nothing found."), face = face14, fgcolor = COLORS.muted })
+    end
+    local list_body = HorizontalGroup:new{ HorizontalSpan:new{ width = P }, rows }
+
+    local footer = Page.footer(function() self:onClose() end, Page.countText(#(self.list.filtered_notes or {})),
+        function() self:onDone() end)
+
+    local avail = H - top:getSize().h - footer:getSize().h
+    self.scroller = nil
+    local body = list_body
+    if list_body:getSize().h > avail then
+        local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
+        self.scroller = ScrollableContainer:new{ dimen = Geom:new{ w = W, h = avail }, show_parent = self, list_body }
+        body = self.scroller
+    end
+    self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0, background = BlitBuffer.COLOR_WHITE,
+        OverlapGroup:new{ dimen = Geom:new{ w = W, h = H }, allow_mirroring = false,
+            VerticalGroup:new{ align = "left", top, body },
+            BottomContainer:new{ dimen = Geom:new{ w = W, h = H }, footer } } }
+end
+function ListPicker:askQuery()
+    local InputDialog = require("ui/widget/inputdialog")
+    local dialog
+    dialog = InputDialog:new{
+        title = self.search_hint, input = self.query,
+        buttons = {{
+            { text = _("Cancel"), id = "close", callback = function() UIManager:close(dialog) end },
+            { text = _("Clear"), callback = function() UIManager:close(dialog); self.query = ""; self:changed() end },
+            { text = _("Search"), is_enter_default = true, callback = function()
+                self.query = dialog:getInputText() or ""
+                UIManager:close(dialog)
+                self:changed()
+            end },
+        }},
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+function ListPicker:onDone()
+    UIManager:close(self, "flashui")
+    self.list.current_page = 1
+    self.list:refresh()
+    if self.on_done then self.on_done() end
+    return true
+end
+function ListPicker:onClose()
+    local af = self.list.active_filter
+    af[self.inc_key] = self.saved_inc
+    af[self.exc_key] = self.saved_exc
+    self.list:applyFilter()
+    UIManager:close(self, "flashui")
+    if self.on_done then self.on_done() end
+    return true
+end
+
+function NotesListWidget:showBookPicker(on_done)
+    local by_title, items = {}, {}
+    for _i, n in ipairs(self.notes_list) do
+        local t = n.book_title or _("Unknown")
+        local it = by_title[t]
+        if not it then
+            local a = NoteWrapper:new(n):getDisplayAuthors()
+            it = { key = t, title = t, subtitle = (a and a ~= "Unknown") and a or nil, count = 0, serif = true }
+            by_title[t] = it
+            table.insert(items, it)
+        end
+        it.count = it.count + 1
+    end
+    table.sort(items, function(a, b) return normalizeBookTitle(a.title) < normalizeBookTitle(b.title) end)
+    UIManager:show(ListPicker:new{ list = self, title = _("Books"), items = items, inc_key = "books", exc_key = "books_exclude",
+        mode_labels = { _("Only these books"), _("Hide these books") }, search_hint = _("Search title or author"), on_done = on_done })
+end
+function NotesListWidget:showChapterPicker(on_done)
+    local seen, items = {}, {}
+    local book_filter = self.active_filter and self.active_filter.books
+    for _i, n in ipairs(self.notes_list) do
+        if n.chapter and n.chapter ~= "" and (not book_filter or not next(book_filter) or book_filter[n.book_title]) then
+            local it = seen[n.chapter]
+            if not it then
+                it = { key = n.chapter, title = n.chapter, group = n.book_title, count = 0 }
+                seen[n.chapter] = it
+                table.insert(items, it)
+            end
+            it.count = it.count + 1
+        end
+    end
+    -- grouped by book, chapters in reading order where known
+    local first_pos = {}
+    for i, n in ipairs(self.notes_list) do if n.chapter and not first_pos[n.chapter] then first_pos[n.chapter] = i end end
+    table.sort(items, function(a, b)
+        if a.group ~= b.group then return normalizeBookTitle(a.group or "") < normalizeBookTitle(b.group or "") end
+        return (first_pos[a.key] or 0) < (first_pos[b.key] or 0)
+    end)
+    UIManager:show(ListPicker:new{ list = self, title = _("Chapters"), items = items, inc_key = "chapters", exc_key = "chapters_exclude",
+        mode_labels = { _("Only these chapters"), _("Hide these chapters") }, on_done = on_done })
+end
+function NotesListWidget:showTagPicker(on_done)
+    local seen, items = {}, {}
+    local book_filter = self.active_filter and self.active_filter.books
+    for _i, n in ipairs(self.notes_list) do
+        if not book_filter or not next(book_filter) or book_filter[n.book_title] then
+            for _j, tag in ipairs(NoteWrapper:new(n):getTags()) do
+                if tag ~= "" then
+                    local it = seen[tag]
+                    if not it then it = { key = tag, title = tag, count = 0 }; seen[tag] = it; table.insert(items, it) end
+                    it.count = it.count + 1
+                end
+            end
+        end
+    end
+    table.sort(items, function(a, b) return a.title:lower() < b.title:lower() end)
+    UIManager:show(ListPicker:new{ list = self, title = _("Tags"), items = items, inc_key = "tags", exc_key = "tags_exclude",
+        tri_state = true, on_done = on_done })
 end
 
 function AllNotesViewer:showNoteDetails(note, parent_widget)
