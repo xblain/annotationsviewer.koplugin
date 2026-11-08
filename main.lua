@@ -4316,6 +4316,16 @@ function Page.preview(list, h)
         Page.PreviewClip:new{ w = W, h = h, g },
         LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line } }
 end
+-- Menus, sheets and dropdowns sit above the list: pass the gestures they don't use on to the
+-- KOReader gestures plugin, as the list does (corner taps, edge swipes, ...).
+function Page.forwardGestures(cls)
+    function cls:onGesture(ev)
+        if self.toast then return false end -- toasts let everything through anyway
+        if InputContainer.onGesture(self, ev) then return true end
+        return _forwardGestureToPlugin(ev)
+    end
+end
+Page.forwardGestures(AnnotationSheet)
 -- Full-screen pages: rebuild for the new size when the screen was rotated.
 function Page.watchResize(cls)
     function cls:paintTo(bb, x, y)
@@ -4490,6 +4500,7 @@ States.Card = InputContainer:extend{
     anchor = "center", build = nil, modal = false, toast = false, timeout = nil, cancel_cb = nil,
     width = nil, pad_h = nil, pad_v = nil, left = nil, top = nil, -- for the ☰ menu: own size and place
 }
+Page.forwardGestures(States.Card)
 function States.Card:init()
     local W, H = Screen:getWidth(), Screen:getHeight()
     local col_w = W > H and math.min(W, math.floor(H * 1.1)) or W
@@ -4805,6 +4816,7 @@ local SORT_CHOICES = {
 }
 local FilterScreen = InputContainer:extend{ list = nil, helpers = nil, covers_fullscreen = true }
 Page.watchResize(FilterScreen)
+Page.forwardGestures(FilterScreen)
 function FilterScreen:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
     self.saved_filter = deepCopy(self.list.active_filter or {})
@@ -5227,6 +5239,7 @@ end
 do -- own scope: keeps the main chunk under Lua's 200-locals limit
 local SS = InputContainer:extend{ list = nil, page = nil, parent_screen = nil, covers_fullscreen = true }
 Page.watchResize(SS)
+Page.forwardGestures(SS)
 NotesListWidget.SettingsScreen = SS
 function SS:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
@@ -5505,6 +5518,7 @@ end
 do -- own scope: keeps the main chunk under Lua's 200-locals limit
 NotesListWidget.SubPage = InputContainer:extend{ list = nil, parent = nil, font_key = nil, title = "", covers_fullscreen = true }
 Page.watchResize(NotesListWidget.SubPage)
+Page.forwardGestures(NotesListWidget.SubPage)
 function NotesListWidget.SubPage:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
     if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
@@ -5590,6 +5604,7 @@ local ListPicker = InputContainer:extend{
     covers_fullscreen = true,
 }
 Page.watchResize(ListPicker)
+Page.forwardGestures(ListPicker)
 function ListPicker:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
     local af = self.list.active_filter or {}
