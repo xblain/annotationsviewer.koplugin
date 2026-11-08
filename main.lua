@@ -101,7 +101,6 @@ local function getShowTotalNotes() return getSetting("show_total", true) end
 local function getTopPadding() return Screen:scaleBySize(getSetting("top_padding", DEFAULT_TOP_PADDING)) end
 local function getHideDupTitle() return getSetting("hide_dup_title", true) ~= false end
 local function getHideDupInfo() return getSetting("hide_dup_info", true) ~= false end
-local function getFilterTitlebarBtn() return getSetting("filter_titlebar_btn", true) ~= false end
 local function getSwipeSetting() return getSetting("swipe_direction", "both") end
 local function getDedupInfoFields() return getSetting("dedup_info_fields", "date,author,chapter") end
 local function getShowInfo() return getSetting("show_info", true) ~= false end
@@ -2041,7 +2040,7 @@ function NotesListWidget:buildHeader()
     end
     local right = HorizontalGroup:new{ align = "center" }
     table.insert(right, newHeaderButton("appbar.search", function() self:showSearchDialog() end, self))
-    if getFilterTitlebarBtn() then
+    do -- the filter button is always there (the badge shows how many filters are on)
         local fbtn = newHeaderButton("appbar.settings", function() self:showFilterMenu(false) end, self,
             pluginIcon("appbar.filter"))
         local n = #self:getFilterChips()
@@ -4942,16 +4941,11 @@ function States.exported(count, path)
 end
 
 -- The ☰ menu: a card under the button with an icon, a label and a short status on each row.
--- (Sort is on the tab row and in Filter & sort.)
+-- (Filters and sort are behind the funnel button and the tab row.)
 function States.menu(list)
     local W = Screen:getWidth()
     local af = list.active_filter or {}
-    local n_filters = #list:getFilterChips()
-    local items = {
-        { icon = "filter", label = _("Filter & sort"),
-            value = n_filters == 0 and _("None active") or string.format(_("%d active"), n_filters),
-            cb = function() list:showFilterMenu(false) end },
-    }
+    local items = {}
     if not list.single_book then
         local seen, n_books = {}, 0
         for _i, n in ipairs(list.notes_list) do
@@ -5810,7 +5804,6 @@ function SS:build()
                 function() UIManager:show(SS:new{ list = list, page = "info", parent_screen = self }, "flashui") end))
         end
         add(toggle(_("Counts on tabs"), nil, "show_total", getShowTotalNotes))
-        add(toggle(_("Filter button in title bar"), nil, "filter_titlebar_btn", getFilterTitlebarBtn))
 
         add(sectionBar(_("PAGES")))
         add(segment(_("Page controls"), { { "default", _("Prev / Next") }, { "scrollbar", _("Scrollbar") },
