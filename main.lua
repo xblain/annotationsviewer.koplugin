@@ -699,6 +699,8 @@ local NOTE_ICON_CHAR = "\u{F040}"
 
 -- Height NoteItemWidget:init() would produce for these params, computed without building
 -- any widgets. Must mirror the layout in NoteItemWidget:init().
+function NoteItemWidget.showHeadings() return getSetting("chapter_headings", true) ~= false end
+function NoteItemWidget.repeatChapter() return getSetting("repeat_chapter_on_page", true) ~= false end
 -- Chapter heading of the one-book list: drawn exactly like a book header (same font, line, margin).
 function NoteItemWidget.headingHeight(chapter, width)
     local content_width = width - getHMargin() * 2 - Size.padding.default * 2
@@ -849,7 +851,7 @@ function NoteItemWidget:init()
 
     local drawer = self.note.drawer or "lighten"
     local show_info_header = getShowInfo()
-    local info_text = buildInfoText(self.note, note_wrapper, self.skip_title, self.show_parent and self.show_parent.single_book)
+    local info_text = buildInfoText(self.note, note_wrapper, self.skip_title, self.show_parent and self.show_parent.single_book and NoteItemWidget.showHeadings())
 
     -- Same colour and same kind of text widget as the tabs (a single-line TextWidget) when it
     -- fits on one line, so it renders exactly like them; the box keeps the measured height.
@@ -1453,7 +1455,7 @@ function NotesListWidget:calculatePages()
     local note_width = self.note_width
     -- pages on which a new book starts, for the marks next to the scrollbar
     self.book_start_pages = {}
-    NoteItemWidget.measure_hide_chapter = self.single_book and true or false
+    NoteItemWidget.measure_hide_chapter = (self.single_book and NoteItemWidget.showHeadings()) and true or false
     local layout_sig = getLayoutSignature(note_width)
     local prev_chapter = nil
     for i, note in ipairs(self.filtered_notes) do
@@ -1461,8 +1463,8 @@ function NotesListWidget:calculatePages()
         local skip_title, skip_info = getHeaderSkips(note, is_first_on_page, dedup_prev_title, dedup_prev_info_key, dedup_fields)
         if self.single_book then skip_title = true end
         local item_height = getNoteHeight(note, note_width, skip_title, skip_info, layout_sig)
-        local has_ch = self.single_book and note.chapter and note.chapter ~= ""
-        if has_ch and (is_first_on_page or note.chapter ~= prev_chapter) then item_height = item_height + NoteItemWidget.headingHeight(note.chapter, note_width) end
+        local has_ch = self.single_book and NoteItemWidget.showHeadings() and note.chapter and note.chapter ~= ""
+        if has_ch and ((is_first_on_page and NoteItemWidget.repeatChapter()) or note.chapter ~= prev_chapter) then item_height = item_height + NoteItemWidget.headingHeight(note.chapter, note_width) end
         local spacing = 0
         if not is_first_on_page then
             spacing = note_spacing + (skip_title and 0 or BOOK_GAP)
@@ -2037,7 +2039,7 @@ function NotesListWidget:updatePage()
                 table.insert(notes_group, VerticalSpan:new{ width = gap })
                 row_y = row_y + gap
             end
-            if self.single_book and note.chapter and note.chapter ~= "" and (is_first_on_page or note.chapter ~= prev_chapter) then
+            if self.single_book and NoteItemWidget.showHeadings() and note.chapter and note.chapter ~= "" and ((is_first_on_page and NoteItemWidget.repeatChapter()) or note.chapter ~= prev_chapter) then
                 table.insert(notes_group, place(NoteItemWidget.chapterHeading(note.chapter, note_width)))
                 row_y = row_y + NoteItemWidget.headingHeight(note.chapter, note_width)
             end
@@ -4314,13 +4316,17 @@ function Page.preview(list, h)
     local g = VerticalGroup:new{ align = "left" }
     local top = getTopPadding()
     if top > 0 then table.insert(g, VerticalSpan:new{ width = top }) end
-    local nw = (list.note_width and list.note_width < W) and list.note_width or W
+    -- same width and centring as the real list
+    local avail = isScrollbarStyle() and (W - SB_STRIP_WIDTH - SB_MARGIN_RIGHT + math.floor(SB_STRIP_WIDTH / 2)) or W
+    local nw = avail
+    if W > Screen:getHeight() then nw = math.min(avail, math.floor(Screen:getHeight() * 1.1)) end
+    local x_off = math.floor((avail - nw) / 2)
     for i, n in ipairs(samples) do
         if i > 1 then table.insert(g, VerticalSpan:new{ width = getNoteSpacing() }) end
         local ok, wdg = pcall(function()
             return NoteItemWidget:new{ width = nw, note = n, show_parent = list, skip_title = i > 1, disable_tap = true }
         end)
-        if ok then table.insert(g, wdg) end
+        if ok then table.insert(g, x_off > 0 and HorizontalGroup:new{ HorizontalSpan:new{ width = x_off }, wdg } or wdg) end
     end
     return VerticalGroup:new{ align = "left",
         Page.PreviewClip:new{ w = W, h = h, g },
@@ -5192,6 +5198,8 @@ function SS:build()
         add(toggle(_("Show book / info row"), nil, "show_info", getShowInfo))
         add(fieldChips(_("Info row shows"), nil, getInfoFields, "info_fields"))
         add(toggle(_("Title on each page"), nil, "repeat_title_on_page", getRepeatTitleOnPage))
+        add(toggle(_("Chapter headings in one book"), _("Heading above each chapter when you open a single book"), "chapter_headings", NoteItemWidget.showHeadings))
+        add(toggle(_("Chapter heading on each page"), nil, "repeat_chapter_on_page", NoteItemWidget.repeatChapter))
         add(toggle(_("Chapter / date on each page"), nil, "repeat_info_on_page", getRepeatInfoOnPage))
         add(toggle(_("Hide duplicate book header"), nil, "hide_dup_title", getHideDupTitle))
         add(toggle(_("Hide duplicate info header"), nil, "hide_dup_info", getHideDupInfo))
