@@ -699,6 +699,33 @@ local function getNoteFaces()
     return title_face, info_face, content_face
 end
 
+-- Font of the author name in the book header: its own font / size when set, otherwise exactly the
+-- info face (what the author always used).
+function NoteItemWidget.authorFace()
+    local font, size = getSetting("author_font", nil), getSetting("author_font_size", nil)
+    local _, info_face = getNoteFaces()
+    if (not font or font == "") and not size then return info_face end
+    if not font or font == "" then font = getInfoFont() end
+    return getFaceOr(font, tonumber(size) or getInfoFontSize(), "cfont")
+end
+
+-- Capitals: KOReader's UTF-8 aware upper-casing when it has one (accents), else plain ASCII upper
+function NoteItemWidget.upper(str)
+    local ok, u = pcall(require, "ffi/utf8proc")
+    if ok and type(u) == "table" and u.uppercase_dumb then
+        local ok2, r = pcall(u.uppercase_dumb, str)
+        if ok2 and type(r) == "string" then return r end
+    end
+    return str:upper()
+end
+-- Book title and chapter headings / the chapter · date line, in capitals when the setting says so
+function NoteItemWidget.titleText(str)
+    return getSetting("title_case", "normal") == "upper" and NoteItemWidget.upper(str) or str
+end
+function NoteItemWidget.infoText(str)
+    return getSetting("info_case", "normal") == "upper" and NoteItemWidget.upper(str) or str
+end
+
 -- Text of the line above each highlight (chapter · date), or "" when the row is turned off.
 -- The author is shown in the book header instead (see getHeaderAuthor).
 local function buildInfoText(note, note_wrapper, skip_title, hide_chapter) -- luacheck: ignore 212
@@ -711,7 +738,7 @@ local function buildInfoText(note, note_wrapper, skip_title, hide_chapter) -- lu
     end
     local date_text = NoteItemWidget:formatDate(note.datetime) or ""
     if info_fields["date"] and date_text ~= "" then table.insert(info_parts, date_text) end
-    return table.concat(info_parts, " · ")
+    return NoteItemWidget.infoText(table.concat(info_parts, " · "))
 end
 
 -- "1." or "12" on its own reads oddly; show it as "Chapter 1"
@@ -767,13 +794,13 @@ function NoteItemWidget.markLine(widget, text, query, case_sensitive, face)
     end
     return og
 end
--- Author shown on the right of the book header, in capitals; nil when off.
+-- Author shown on the right of the book header, in capitals (or as written, by setting); nil when off.
 local function getHeaderAuthor(note_wrapper)
     if not getShowInfo() then return nil end
     if not getInfoFields():find("author", 1, true) then return nil end
     local a = note_wrapper:getDisplayAuthors()
     if not a or a == "" or a == "Unknown" then return nil end
-    return a:upper()
+    return getSetting("author_case", "upper") == "normal" and a or NoteItemWidget.upper(a)
 end
 local HEADER_AUTHOR_GAP = Screen:scaleBySize(12)
 local HEADER_LINE_GAP = Screen:scaleBySize(3)
@@ -820,7 +847,7 @@ function NoteItemWidget.repeatChapter() return getSetting("repeat_chapter_on_pag
 function NoteItemWidget.headingHeight(chapter, width)
     local content_width = width - getHMargin() * 2 - Size.padding.default * 2
     local title_face, info_face = getNoteFaces()
-    local _tw, _aw, header_h = getHeaderLayout(NoteItemWidget.chapterLabel(chapter), nil, title_face, info_face, content_width)
+    local _tw, _aw, header_h = getHeaderLayout(NoteItemWidget.titleText(NoteItemWidget.chapterLabel(chapter)), nil, title_face, info_face, content_width)
     return header_h + getTitleMargin()
 end
 function NoteItemWidget.chapterHeading(chapter, width)
@@ -829,7 +856,7 @@ function NoteItemWidget.chapterHeading(chapter, width)
     local inner_width = width - h_margin * 2
     local content_width = inner_width - h_padding * 2
     local title_face, info_face = getNoteFaces()
-    local text = NoteItemWidget.chapterLabel(chapter)
+    local text = NoteItemWidget.titleText(NoteItemWidget.chapterLabel(chapter))
     local title_w, _aw, header_h = getHeaderLayout(text, nil, title_face, info_face, content_width)
     local widget = VerticalGroup:new{ align = "left",
         TextBoxWidget:new{ text = text, face = title_face, width = title_w, alignment = "left", bold = true },
@@ -850,8 +877,8 @@ local function measureNoteHeight(note, width, skip_title, skip_info)
 
     local h = 0
     if not skip_title then
-        local _tw, _aw, header_h = getHeaderLayout(note.book_title or "Unknown",
-            getHeaderAuthor(note_wrapper), title_face, info_face, content_width)
+        local _tw, _aw, header_h = getHeaderLayout(NoteItemWidget.titleText(note.book_title or "Unknown"),
+            getHeaderAuthor(note_wrapper), title_face, NoteItemWidget.authorFace(), content_width)
         h = h + header_h + getTitleMargin()
     end
     local info_text = buildInfoText(note, note_wrapper, skip_title, NoteItemWidget.measure_hide_chapter)
@@ -897,7 +924,8 @@ local function getLayoutSignature(width)
         width, getHMargin(), getTextMargin(), NoteItemWidget.lineSpacing(), getTitleMargin(), getInfoMargin(),
         getTitleFontSize(), getInfoFontSize(), getContentFontSize(),
         tostring(getTitleFont()), tostring(getInfoFont()), tostring(getContentFont()),
-        tostring(getSetting("note_font", nil)), tostring(getSetting("note_font_size", nil)), NoteItemWidget.noteOffset(), NoteItemWidget.noteIndent(),
+        tostring(getSetting("note_font", nil)), tostring(getSetting("note_font_size", nil)),
+        tostring(getSetting("author_font", nil)), tostring(getSetting("author_font_size", nil)), getSetting("author_case", "upper"), getSetting("title_case", "normal"), getSetting("info_case", "normal"), NoteItemWidget.noteOffset(), NoteItemWidget.noteIndent(),
         tostring(getTruncateLines()), tostring(NoteItemWidget.noteLinesMax()), tostring(getShowInfo()), getInfoFields(), tostring(NoteItemWidget.measure_hide_chapter),
         os.date("%Y%m%d"), -- "Today"/"Yesterday" labels change the info row text
     }, "|")
@@ -933,14 +961,15 @@ function NoteItemWidget:init()
     local justify = getJustify()
 
     local note_wrapper = NoteWrapper:new(self.note)
-    local title_text = self.note.book_title or "Unknown"
+    local title_text = NoteItemWidget.titleText(self.note.book_title or "Unknown")
 
     local title_face, info_face, content_face = getNoteFaces()
     local header_widget
     if not self.skip_title then
         -- Book header: title left, author right (in capitals), thin line underneath
         local author_text = getHeaderAuthor(note_wrapper)
-        local title_w, author_w, header_h = getHeaderLayout(title_text, author_text, title_face, info_face, content_width)
+        local author_face = NoteItemWidget.authorFace()
+        local title_w, author_w, header_h = getHeaderLayout(title_text, author_text, title_face, author_face, content_width)
         local title_widget = TextBoxWidget:new{
             text = title_text, face = title_face,
             width = title_w, alignment = "left", bold = true,
@@ -948,7 +977,7 @@ function NoteItemWidget:init()
         local row = HorizontalGroup:new{ align = "top", title_widget }
         if author_text then
             local author_widget = TextWidget:new{
-                text = author_text, face = info_face, max_width = author_w,
+                text = author_text, face = author_face, max_width = author_w,
                 fgcolor = COLORS.muted,
             }
             -- line the author up with the middle of the title's first line
@@ -5702,6 +5731,10 @@ function SS:build()
         add(sectionBar(_("FONTS")))
         add(fontRow(_("Title font"), "title_font", getTitleFont))
         add(fontRow(_("Info font"), "info_font", getInfoFont))
+        add(navRow(_("Author font"), getSetting("author_font", nil) and NotesListWidget.SubPage.fontName(getSetting("author_font", nil))
+                or _("Same as info"), function()
+            UIManager:show(NotesListWidget.SubPage:new{ list = list, parent = self, font_key = "author_font", title = _("Author font") })
+        end))
         add(fontRow(_("Content font"), "content_font", getContentFont))
         add(navRow(_("Note font"), getSetting("note_font", nil) and NotesListWidget.SubPage.fontName(getSetting("note_font", nil))
                 or _("Same as content"), function()
@@ -5709,12 +5742,23 @@ function SS:build()
         end))
         add(sectionBar(_("SIZES")))
         numberRows("font_size")
+        local info_size = getInfoFontSize()
+        add(stepper(_("Author size"), _("Same as the info size until you change it"), "author_font_size",
+            getSetting("author_font_size", nil) or info_size, 8, 48, 1, info_size))
         local content_size = getContentFontSize()
         add(stepper(_("Note size"), _("Same as the content size until you change it"), "note_font_size",
             getSetting("note_font_size", nil) or content_size, 8, 48, 1, content_size))
         add(stepper(_("Lines per highlight"), _("Longer ones end with “…”; tap to read all"), "truncate_lines", getTruncateLines(), 1, 20))
         add(stepper(_("Lines per note"), _("Longer notes end with “…”; tap to read all"), "truncate_note_lines", NoteItemWidget.noteLinesMax(), 1, 20))
         add(toggle(_("Justify text"), nil, "justify", getJustify))
+        add(sectionBar(_("CAPITALS")))
+        local case_opts = { { "normal", _("As written") }, { "upper", _("CAPITALS") } }
+        add(segment(_("Book and chapter titles"), case_opts, getSetting("title_case", "normal"),
+            function(v) setSetting("title_case", v); self:changed() end))
+        add(segment(_("Chapter · date line"), case_opts, getSetting("info_case", "normal"),
+            function(v) setSetting("info_case", v); self:changed() end))
+        add(segment(_("Author name"), { { "upper", _("CAPITALS") }, { "normal", _("As written") } },
+            getSetting("author_case", "upper"), function(v) setSetting("author_case", v); self:changed() end))
     elseif self.page == "spacing" then
         -- grouped by where the space is, in the order an annotation is drawn: page, between annotations,
         -- the heading, the highlight text, the note
@@ -5799,6 +5843,8 @@ function SS:build()
                 if self.page == "text" then
                     setSetting("title_font", nil); setSetting("info_font", nil); setSetting("content_font", nil)
                     setSetting("note_font", nil); setSetting("note_font_size", nil)
+                    setSetting("author_font", nil); setSetting("author_font_size", nil); setSetting("author_case", "upper")
+                    setSetting("title_case", "normal"); setSetting("info_case", "normal")
                     setSetting("truncate_lines", DEFAULT_TRUNCATE_LINES); setSetting("truncate_note_lines", NoteItemWidget.DEFAULT_NOTE_LINES); setSetting("justify", false)
                 end
                 self:changed()
