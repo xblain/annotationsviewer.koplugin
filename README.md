@@ -29,6 +29,8 @@ Key behaviors:
 - Night mode keeps the real highlight colors
 - Chinese, Japanese and Korean text wraps correctly
 - Choose how many lines a note shows before it ends with "...", tap it to read all
+- Line spacing (also negative), and a separate font, size, space above and indent for notes
+- Scrollbar marks follow the sort order: books, authors, months or chapters
 - Menus and dropdowns pass gestures you don't use on to KOReader
 - Everything scales with your screen DPI
 - Customize fonts, margins, spacing, truncation and many other options
