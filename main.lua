@@ -562,6 +562,14 @@ local function createJustifiedLine(text, face, target_width, fgcolor)
         total_word_width = total_word_width + tw:getSize().w
         table.insert(word_widgets, tw)
     end
+    -- a line that is far shorter than the column (end of a truncated highlight) is not stretched
+    local natural = TextWidget:new{ text = text, face = face }
+    local natural_w = natural:getSize().w
+    natural:free()
+    if natural_w < target_width * 0.8 then
+        for _, w in ipairs(word_widgets) do w:free() end
+        return TextWidget:new{ text = text, face = face, fgcolor = fgcolor }
+    end
     local available_space = target_width - total_word_width
     local gaps = #words - 1
     if gaps <= 0 or available_space <= 0 then
@@ -3852,7 +3860,9 @@ function SheetFrame:paintTo(bb, x, y)
     -- a scratch copy of the strip under it. That rounded box is wider than the sheet (by
     -- `ext` on each side), so the corners curve on past the sheet's edges instead of ending
     -- in a short upright line; only the visible middle and top rows are copied back.
-    local ext = math.floor(r * 0.3)
+    -- narrower than the screen (landscape): real corners and outlined sides instead
+    local narrow = w < Screen:getWidth()
+    local ext = narrow and 0 or math.floor(r * 0.3)
     local band_h = math.min(h, r * 2 + bw * 2)
     local tmp = BlitBuffer.new(w + ext * 2, band_h, bb:getType())
     tmp:fill(BlitBuffer.COLOR_WHITE)
@@ -3862,6 +3872,10 @@ function SheetFrame:paintTo(bb, x, y)
     bb:blitFrom(tmp, x, y, ext, 0, w, r)
     tmp:free()
     bb:paintRect(x, y + r, w, h - r, BlitBuffer.COLOR_WHITE)
+    if narrow then
+        bb:paintRect(x, y + r, bw, h - r, BlitBuffer.COLOR_BLACK)
+        bb:paintRect(x + w - bw, y + r, bw, h - r, BlitBuffer.COLOR_BLACK)
+    end
     self[1]:paintTo(bb, x + self.pad_x, y + bw + self.pad_top)
 end
 
