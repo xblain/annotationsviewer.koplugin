@@ -2284,6 +2284,9 @@ function NotesListWidget:showSettingsMenu()
         {
             { text = _("Book Marks on Scrollbar: ") .. onoff(getScrollbarBookMarks()), callback = makeToggleSetting("sb_book_marks", getScrollbarBookMarks) },
         },
+        {
+            { text = _("Filter: Only Used Colours/Styles: ") .. onoff(getSetting("hide_unused_cs", false) == true), callback = makeToggleSetting("hide_unused_cs", function() return getSetting("hide_unused_cs", false) == true end) },
+        },
         {{ text = _("Back"), callback = function()
             UIManager:close(self.settings_dialog)
             self:showMainMenu()
@@ -4445,22 +4448,37 @@ function FilterScreen:build()
     -- between showing only these and hiding these
     do
         local items = {}
+        -- setting: only offer colours/styles that some highlight uses (off = offer all)
+        local only_used = getSetting("hide_unused_cs", false) == true
+        local used = {}
+        if only_used then
+            for _i, n in ipairs(list.notes_list) do
+                local nw = NoteWrapper:new(n)
+                local c, d = nw:getNormalizedColor(), nw:getNormalizedDrawer()
+                if c then used["color:" .. c] = true end
+                if d then used["style:" .. d] = true end
+            end
+        end
+        -- shown: all, or (setting) only used ones, plus whatever is currently chosen
+        local function offered(key) return not only_used or used[key] or (af.cs and af.cs[key]) end
         local function toggle(key)
             af.cs = af.cs or {}
             if af.cs[key] then af.cs[key] = nil else af.cs[key] = true end
             if not next(af.cs) then af.cs, af.cs_exclude = nil, nil end
             self:changed()
         end
-        -- every colour KOReader offers, used or not
         for _i, hc in ipairs(ReaderHighlight.highlight_colors) do
             local key = "color:" .. hc[2]
-            table.insert(items, chip(hc[1], af.cs and af.cs[key], function() toggle(key) end, { dot = hc[2] }))
+            if offered(key) then
+                table.insert(items, chip(hc[1], af.cs and af.cs[key], function() toggle(key) end, { dot = hc[2] }))
+            end
         end
-        -- all four styles are always offered
         for _i, st in ipairs(HIGHLIGHT_STYLES) do
             local key = "style:" .. st[1]
-            local deco = (st[1] == "underscore" and "underline") or (st[1] == "strikeout" and "strike") or nil
-            table.insert(items, chip(st[2], af.cs and af.cs[key], function() toggle(key) end, { deco = deco }))
+            if offered(key) then
+                local deco = (st[1] == "underscore" and "underline") or (st[1] == "strikeout" and "strike") or nil
+                table.insert(items, chip(st[2], af.cs and af.cs[key], function() toggle(key) end, { deco = deco }))
+            end
         end
         local flip = TapBox:new{ underlined(af.cs_exclude and _("Show only these instead") or _("Hide these instead"), face13),
             callback = function()
