@@ -150,11 +150,12 @@ local SB_MARK_OVERHANG = Screen:scaleBySize(3)          -- how far it sticks out
 local SB_MARK_HEIGHT   = math.max(1, math.floor(Screen:scaleBySize(1)))
 -- Header: top bar (menu, title, search, filter, close), tab row, optional active-filter row
 local TOPBAR_HEIGHT    = Screen:scaleBySize(50)
+local TOPBAR_BOOK_HEIGHT = TOPBAR_HEIGHT -- one-book view: same bar, title + author line
 local TABS_HEIGHT      = Screen:scaleBySize(38)
-local FILTERROW_HEIGHT = Screen:scaleBySize(30)
 local FOOTER_BAR_HEIGHT = Screen:scaleBySize(48) -- page buttons bar (non-scrollbar styles)
-local HEADER_ICON_SIZE = Screen:scaleBySize(26)
-local HEADER_ICON_PAD  = Screen:scaleBySize(9)
+-- mockup: 22px icons in 44px buttons, 8px from the screen edges, 4px between menu and title
+local HEADER_ICON_SIZE = Screen:scaleBySize(22)
+local HEADER_ICON_PAD  = Screen:scaleBySize(11)
 -- Serif used for book titles, highlights and the screen title unless the user picked a font
 local SERIF_FONT = "NotoSerif-Regular.ttf"
 -- Icons shipped with the plugin (drawn in the style of KOReader's own mdlight set)
@@ -1111,6 +1112,36 @@ local function newHeaderButton(icon, callback, show_parent, file, allow_flash)
     return btn
 end
 
+-- Fully rounded chip filled with a colour. Draws its own fill row by row, because
+-- FrameContainer's rounded fill leaves square colour corners outside the border on colour screens.
+local Pill = InputContainer:extend{ width = 0, height = 0, fill = nil, border = 1, border_color = nil }
+function Pill:getSize() return Geom:new{ w = self.width, h = self.height } end
+function Pill:paintTo(bb, x, y)
+    self.dimen = Geom:new{ x = x, y = y, w = self.width, h = self.height }
+    local w, h = self.width, self.height
+    local r = math.floor(h / 2)
+    if self.fill then
+        local rgb = not BlitBuffer.isColor8(self.fill)
+        for row = 0, h - 1 do
+            local dy = math.abs(row + 0.5 - h / 2)
+            local inset = math.ceil(r - math.sqrt(math.max(0, r * r - dy * dy)))
+            if rgb then
+                bb:paintRectRGB32(x + inset, y + row, w - inset * 2, 1, self.fill)
+            else
+                bb:paintRect(x + inset, y + row, w - inset * 2, 1, self.fill)
+            end
+        end
+    end
+    if self.border > 0 then
+        bb:paintBorder(x, y, w, h, self.border, self.border_color or BlitBuffer.COLOR_BLACK, r,
+            G_reader_settings:nilOrTrue("anti_alias_ui"))
+    end
+    if self[1] then
+        local cs = self[1]:getSize()
+        self[1]:paintTo(bb, x + math.floor((w - cs.w) / 2), y + math.floor((h - cs.h) / 2))
+    end
+end
+
 local NotesListWidget = InputContainer:extend{
     width = nil, height = nil, notes_list = nil, filtered_notes = nil,
     viewer = nil, current_page = 1, pages = nil, active_filter = nil,
@@ -1122,9 +1153,10 @@ function NotesListWidget:computeLayout()
     self.width = Screen:getWidth()
     self.height = Screen:getHeight()
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    self.filter_row_text = filterToString(self.active_filter, true)
-    self.title_height = TOPBAR_HEIGHT + TABS_HEIGHT
-        + (self.filter_row_text ~= "" and FILTERROW_HEIGHT or 0)
+    local _chips, chips_h = self:buildFilterChips(self.width)
+    self.chips_height = chips_h
+    self.topbar_height = self.single_book and TOPBAR_BOOK_HEIGHT or TOPBAR_HEIGHT
+    self.title_height = self.topbar_height + TABS_HEIGHT + chips_h
     local pag_style = getPaginationStyle()
     -- scrollbar column: its left edge (sb_x) and the middle of the track
     self.sb_x = self.width - SB_STRIP_WIDTH - SB_MARGIN_RIGHT
@@ -1304,6 +1336,7 @@ function NotesListWidget:calculatePages()
     for i, note in ipairs(self.filtered_notes) do
         local is_first_on_page = (#current_page_notes == 0)
         local skip_title, skip_info = getHeaderSkips(note, is_first_on_page, dedup_prev_title, dedup_prev_info_key, dedup_fields)
+        if self.single_book then skip_title = true end
         local item_height = getNoteHeight(note, note_width, skip_title, skip_info, layout_sig)
         local spacing = 0
         if not is_first_on_page then
@@ -1318,6 +1351,7 @@ function NotesListWidget:calculatePages()
             -- Re-measure as first on the new page: the repeat options may bring headers back
             current_page_notes = {i}
             local st, si = getHeaderSkips(note, true, dedup_prev_title, dedup_prev_info_key, dedup_fields)
+            if self.single_book then st = true end
             current_height = getNoteHeight(note, note_width, st, si, layout_sig)
         end
         if note.book_title ~= dedup_prev_title then
@@ -1503,35 +1537,217 @@ local function sortModeLabel(mode)
     return (SORT_CATEGORY_LABELS[cat] or cat) .. " · " .. (SORT_SHORT_LABELS[rest] or SORT_MODES[mode].label)
 end
 
+-- Active-filter chips under the tabs: one black chip per filter (tap to remove it),
+-- "Clear all", and "N of M" on the right. Laid out over as many rows as needed.
+local STYLE_NAMES = { lighten = _("Lighten"), underscore = _("Underline"), strikeout = _("Strikeout"), invert = _("Invert") }
+local function colorName(key)
+    for _i, v in ipairs(ReaderHighlight.highlight_colors) do
+        if v[2] == key then return v[1] end
+    end
+    return key and (key:sub(1, 1):upper() .. key:sub(2)) or ""
+end
+local function setLabel(set, many)
+    local keys = {}
+    for k in pairs(set) do table.insert(keys, k) end
+    if #keys == 1 then return keys[1] end
+    return string.format(many, #keys)
+end
+local CHIP_HEIGHT = Screen:scaleBySize(32)
+local CHIP_GAP = Screen:scaleBySize(8)
+local CHIPS_PAD_TOP, CHIPS_PAD_BOTTOM = Screen:scaleBySize(6), Screen:scaleBySize(6)
+
+function NotesListWidget:getFilterChips()
+    local af = self.active_filter or {}
+    local chips = {}
+    -- prefix: shown before the colour dot ("Hide ● Yellow")
+    local function add(label, clear, colors, prefix)
+        table.insert(chips, { label = label, clear = clear, colors = colors, prefix = prefix })
+    end
+    local function quoted(t) return "“" .. t .. "”" end
+    if af.type == "color" then
+        add(colorName(af.value), function() af.type, af.value = nil, nil end, { af.value })
+    elseif af.type == "style" then
+        add(STYLE_NAMES[af.value] or af.value, function() af.type, af.value = nil, nil end)
+    end
+    if af.type_exclude == "color" then
+        add(colorName(af.value_exclude), function() af.type_exclude, af.value_exclude = nil, nil end, { af.value_exclude }, _("Hide"))
+    elseif af.type_exclude == "style" then
+        add(_("Hide") .. " " .. (STYLE_NAMES[af.value_exclude] or af.value_exclude), function() af.type_exclude, af.value_exclude = nil, nil end)
+    end
+    if af.books and next(af.books) then add(setLabel(af.books, _("%d books")), function() af.books = nil end) end
+    if af.books_exclude and next(af.books_exclude) then
+        add(_("Hide") .. " " .. setLabel(af.books_exclude, _("%d books")), function() af.books_exclude = nil end)
+    end
+    if af.chapters and next(af.chapters) then add(setLabel(af.chapters, _("%d chapters")), function() af.chapters = nil end) end
+    if af.chapters_exclude and next(af.chapters_exclude) then
+        add(_("Hide") .. " " .. setLabel(af.chapters_exclude, _("%d chapters")), function() af.chapters_exclude = nil end)
+    end
+    if af.tags and next(af.tags) then add(setLabel(af.tags, _("%d tags")), function() af.tags = nil end) end
+    if af.tags_exclude and next(af.tags_exclude) then
+        add(_("Hide") .. " " .. setLabel(af.tags_exclude, _("%d tags")), function() af.tags_exclude = nil end)
+    end
+    if af.search_any and af.search_any ~= "" then add(quoted(af.search_any), function() af.search_any = nil end) end
+    if af.search_highlight and af.search_highlight ~= "" then
+        add(_("Highlight:") .. " " .. quoted(af.search_highlight), function() af.search_highlight = nil end)
+    end
+    if af.search_highlight_exclude and af.search_highlight_exclude ~= "" then
+        add(_("Highlight not:") .. " " .. quoted(af.search_highlight_exclude), function() af.search_highlight_exclude = nil end)
+    end
+    if af.search_note and af.search_note ~= "" then
+        add(_("Note:") .. " " .. quoted(af.search_note), function() af.search_note = nil end)
+    end
+    if af.search_note_exclude and af.search_note_exclude ~= "" then
+        add(_("Note not:") .. " " .. quoted(af.search_note_exclude), function() af.search_note_exclude = nil end)
+    end
+    return chips
+end
+
+-- Builds the chips area for width w. Returns the widget (nil when no filters) and its height.
+function NotesListWidget:buildFilterChips(w)
+    local chips = self:getFilterChips()
+    if #chips == 0 then return nil, 0 end
+    local side = Screen:scaleBySize(24)
+    local face = Font:getFace("cfont", 13)
+    local small = Font:getFace("cfont", 12)
+    local count_w = TextWidget:new{ text = string.format(_("%d of %d"), 9999, 9999), face = small }:getSize().w + Screen:scaleBySize(8)
+    local avail = w - side * 2
+    local items = {}
+    for _i, c in ipairs(chips) do
+        local content = HorizontalGroup:new{ align = "center" }
+        if c.prefix then
+            table.insert(content, TextWidget:new{ text = c.prefix, face = face, fgcolor = BlitBuffer.COLOR_WHITE })
+            table.insert(content, HorizontalSpan:new{ width = Screen:scaleBySize(6) })
+        end
+        if c.colors then
+            for _j, key in ipairs(c.colors) do
+                table.insert(content, Pill:new{ width = Screen:scaleBySize(10), height = Screen:scaleBySize(10), border = 0,
+                    fill = key == "gray" and BlitBuffer.COLOR_GRAY or getHighlightColor(key) })
+                table.insert(content, HorizontalSpan:new{ width = Screen:scaleBySize(6) })
+            end
+        end
+        table.insert(content, TextWidget:new{ text = c.label, face = face, fgcolor = BlitBuffer.COLOR_WHITE,
+            max_width = math.floor(avail * 0.6) })
+        table.insert(content, HorizontalSpan:new{ width = Screen:scaleBySize(4) })
+        -- KOReader's close icon, inverted to white-on-black to sit on the black chip
+        table.insert(content, IconWidget:new{ icon = "close", width = Screen:scaleBySize(14), height = Screen:scaleBySize(14), invert = true })
+        local chip_w = content:getSize().w + Screen:scaleBySize(20)
+        table.insert(items, { w = chip_w, widget = TapBox:new{
+            Pill:new{ width = chip_w, height = CHIP_HEIGHT, fill = BlitBuffer.COLOR_BLACK, border = 0, content },
+            callback = function()
+                c.clear()
+                self.current_page = 1
+                self:refresh()
+            end,
+        } })
+    end
+    local clear = TextWidget:new{ text = _("Clear all"), face = face }
+    local clear_sz = clear:getSize()
+    local clear_w = clear_sz.w + Screen:scaleBySize(16)
+    table.insert(items, { w = clear_w, widget = TapBox:new{
+        CenterContainer:new{ dimen = Geom:new{ w = clear_w, h = CHIP_HEIGHT }, VerticalGroup:new{ clear,
+            LineWidget:new{ dimen = Geom:new{ w = clear_sz.w, h = Size.line.medium }, background = BlitBuffer.COLOR_BLACK } } },
+        callback = function() self:clearFilters() end,
+    } })
+    -- flow into rows; the first row keeps room for the count on the right
+    local rows = VerticalGroup:new{ align = "left" }
+    local row, row_w, limit = HorizontalGroup:new{ align = "center" }, 0, avail - count_w
+    local n_rows = 1
+    for _i, it in ipairs(items) do
+        if row_w > 0 and row_w + CHIP_GAP + it.w > limit then
+            table.insert(rows, row)
+            table.insert(rows, VerticalSpan:new{ width = CHIP_GAP })
+            row, row_w, limit = HorizontalGroup:new{ align = "center" }, 0, avail
+            n_rows = n_rows + 1
+        end
+        if row_w > 0 then table.insert(row, HorizontalSpan:new{ width = CHIP_GAP }); row_w = row_w + CHIP_GAP end
+        table.insert(row, it.widget)
+        row_w = row_w + it.w
+    end
+    table.insert(rows, row)
+    local h = CHIPS_PAD_TOP + n_rows * CHIP_HEIGHT + (n_rows - 1) * CHIP_GAP + CHIPS_PAD_BOTTOM + Size.line.thin
+    local count = TextWidget:new{
+        text = string.format(_("%d of %d"), #(self.filtered_notes or {}), #(self.notes_list or {})),
+        face = small, fgcolor = BlitBuffer.COLOR_DARK_GRAY,
+    }
+    local first_row = Geom:new{ w = avail, h = CHIP_HEIGHT }
+    local area = VerticalGroup:new{ align = "left",
+        VerticalSpan:new{ width = CHIPS_PAD_TOP },
+        HorizontalGroup:new{ HorizontalSpan:new{ width = side },
+            OverlapGroup:new{ dimen = Geom:new{ w = avail, h = rows:getSize().h }, allow_mirroring = false,
+                rows,
+                RightContainer:new{ dimen = first_row, count },
+            },
+        },
+        VerticalSpan:new{ width = CHIPS_PAD_BOTTOM },
+        HorizontalGroup:new{ HorizontalSpan:new{ width = side },
+            LineWidget:new{ dimen = Geom:new{ w = avail, h = Size.line.thin }, background = BlitBuffer.COLOR_GRAY } },
+    }
+    return area, h
+end
+
 -- Top bar, tab row and (when filters are on) the active-filter row. Height is self.title_height.
 function NotesListWidget:buildHeader()
     local w = self.width
-    local side = Screen:scaleBySize(4)
+    local side = Screen:scaleBySize(8)
     local h_pad = getHMargin() + Size.padding.default
     if h_pad > Screen:scaleBySize(24) then h_pad = Screen:scaleBySize(24) end
     local header = VerticalGroup:new{ align = "left" }
 
     -- 1. top bar
-    local title = TextWidget:new{
-        text = _("Annotations"), face = getFaceOr(SERIF_FONT, 21, "cfont"), bold = true,
-        max_width = math.floor(w / 2),
-    }
+    local title
+    local bar_h = self.topbar_height or TOPBAR_HEIGHT
+    if self.single_book then
+        -- one book: its title, and "Author · N annotations" underneath
+        local first = self.notes_list and self.notes_list[1] or {}
+        local book_title = self.book_title or first.book_title or _("Annotations")
+        local authors = first.book_authors and NoteWrapper:new(first):getDisplayAuthors()
+        local n = #(self.notes_list or {})
+        local sub = (n == 1) and _("1 annotation") or string.format(_("%d annotations"), n)
+        if authors and authors ~= "" and authors ~= "Unknown" then sub = authors .. " · " .. sub end
+        local max_w = math.floor(w * 0.55)
+        local t = TextWidget:new{ text = book_title, face = getFaceOr(SERIF_FONT, 19, "cfont"), bold = true, max_width = max_w }
+        local st = TextWidget:new{ text = sub, face = Font:getFace("cfont", 12), fgcolor = BlitBuffer.COLOR_DARK_GRAY, max_width = max_w }
+        -- Text boxes include room for descenders and line gap; placing the second line from
+        -- the title's baseline keeps the two lines close together, like in the mockup.
+        local cap = math.floor(Screen:scaleBySize(12) * 0.72)
+        local sub_y = t:getBaseline() + Screen:scaleBySize(5) - (st:getBaseline() - cap)
+        local tsz, ssz = t:getSize(), st:getSize()
+        st.overlap_offset = { 0, sub_y }
+        title = OverlapGroup:new{ allow_mirroring = false,
+            dimen = Geom:new{ w = math.max(tsz.w, ssz.w), h = math.max(tsz.h, sub_y + ssz.h) }, t, st }
+    else
+        title = TextWidget:new{
+            text = _("Annotations"), face = getFaceOr(SERIF_FONT, 21, "cfont"), bold = true,
+            max_width = math.floor(w / 2),
+        }
+    end
     local right = HorizontalGroup:new{ align = "center" }
     table.insert(right, newHeaderButton("appbar.search", function() self:showSearchDialog() end, self))
     if getFilterTitlebarBtn() then
-        table.insert(right, newHeaderButton("appbar.settings", function() self:showFilterMenu(false) end, self,
-            pluginIcon("appbar.filter")))
+        local fbtn = newHeaderButton("appbar.settings", function() self:showFilterMenu(false) end, self,
+            pluginIcon("appbar.filter"))
+        local n = #self:getFilterChips()
+        if n > 0 then
+            -- small black badge with the number of active filters, top right of the icon
+            local d = Screen:scaleBySize(16)
+            local num = TextWidget:new{ text = tostring(n), face = Font:getFace("cfont", 10), bold = true, fgcolor = BlitBuffer.COLOR_WHITE }
+            local badge = Pill:new{ width = d, height = d, fill = BlitBuffer.COLOR_BLACK, border = 0, num }
+            local bs = fbtn:getSize()
+            badge.overlap_offset = { bs.w - d - Screen:scaleBySize(4), Screen:scaleBySize(4) }
+            fbtn = OverlapGroup:new{ dimen = Geom:new{ w = bs.w, h = bs.h }, allow_mirroring = false, fbtn, badge }
+        end
+        table.insert(right, fbtn)
     end
     table.insert(right, newHeaderButton("close", function() self:onClose() end, self, nil, false))
     table.insert(right, HorizontalSpan:new{ width = side })
-    local bar_dimen = Geom:new{ w = w, h = TOPBAR_HEIGHT }
+    local bar_dimen = Geom:new{ w = w, h = bar_h }
     table.insert(header, OverlapGroup:new{
         dimen = bar_dimen, allow_mirroring = false,
         LeftContainer:new{ dimen = bar_dimen, HorizontalGroup:new{
             align = "center",
             HorizontalSpan:new{ width = side },
             newHeaderButton("appbar.menu", function() self:showMainMenu() end, self),
-            HorizontalSpan:new{ width = Screen:scaleBySize(2) },
+            HorizontalSpan:new{ width = Screen:scaleBySize(4) },
             title,
         } },
         RightContainer:new{ dimen = bar_dimen, right },
@@ -1588,32 +1804,9 @@ function NotesListWidget:buildHeader()
     })
     table.insert(header, LineWidget:new{ dimen = Geom:new{ w = w, h = line_h }, background = BlitBuffer.COLOR_GRAY })
 
-    -- 3. active filters (other than the tab), tap to change, "Clear" to remove
-    if self.filter_row_text ~= "" then
-        local small = Font:getFace("cfont", 13)
-        local clear = TextWidget:new{ text = _("Clear"), face = small, bold = true }
-        local clear_w = clear:getSize().w + h_pad * 2
-        local label = TextWidget:new{
-            text = _("Filtered: ") .. self.filter_row_text, face = small,
-            fgcolor = BlitBuffer.COLOR_DARK_GRAY,
-            max_width = w - h_pad - clear_w,
-        }
-        local row_dimen = Geom:new{ w = w, h = FILTERROW_HEIGHT }
-        table.insert(header, OverlapGroup:new{
-            dimen = row_dimen, allow_mirroring = false,
-            LeftContainer:new{ dimen = row_dimen, HorizontalGroup:new{
-                HorizontalSpan:new{ width = h_pad },
-                TapBox:new{
-                    CenterContainer:new{ dimen = Geom:new{ w = label:getSize().w, h = FILTERROW_HEIGHT }, label },
-                    callback = function() self:showFilterMenu(false) end,
-                },
-            } },
-            RightContainer:new{ dimen = row_dimen, TapBox:new{
-                CenterContainer:new{ dimen = Geom:new{ w = clear_w, h = FILTERROW_HEIGHT }, clear },
-                callback = function() self:clearFilters() end,
-            } },
-        })
-    end
+    -- 3. active-filter chips (the tab is not repeated here)
+    local chips = self:buildFilterChips(w)
+    if chips then table.insert(header, chips) end
     return header
 end
 
@@ -1703,6 +1896,7 @@ function NotesListWidget:updatePage()
         if note then
             local is_first_on_page = (i == 1)
             local skip_title, skip_info = getHeaderSkips(note, is_first_on_page, dedup_prev_title, dedup_prev_info_key, dedup_fields)
+            if self.single_book then skip_title = true end
             if not is_first_on_page then
                 local gap = note_spacing + (skip_title and 0 or BOOK_GAP)
                 table.insert(notes_group, VerticalSpan:new{ width = gap })
@@ -1730,6 +1924,7 @@ function NotesListWidget:updatePage()
             local available_height = self.height - self.title_height - self.footer_height - used_height - note_spacing - 2
             if available_height > 0 then
                 local preview_skip_title, preview_skip_info = getHeaderSkips(next_note, false, dedup_prev_title, dedup_prev_info_key, dedup_fields)
+                if self.single_book then preview_skip_title = true end
                 local preview_widget = NoteItemWidget:new{
                     width = note_width, note = next_note, show_parent = self,
                     is_preview = true, disable_tap = true,
@@ -3509,7 +3704,7 @@ function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations)
     if #notes_list == 0 then return end
     local sort_mode = getSetting("sort_mode", "date_newest")
     NotesListWidget:sortNotesList(notes_list, sort_mode)
-    UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self, single_book = true })
+    UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self, single_book = true, book_title = book_title })
 end
 function AllNotesViewer:showAllNotes()
     -- The first open after starting KOReader may have to read many books: say so
@@ -3634,36 +3829,6 @@ local function buildHighlightLines(text, face, width, drawer, color, max_lines, 
         end
     end
     return group, cut
-end
-
--- Fully rounded chip filled with a colour. Draws its own fill row by row, because
--- FrameContainer's rounded fill leaves square colour corners outside the border on colour screens.
-local Pill = InputContainer:extend{ width = 0, height = 0, fill = nil, border = 1, border_color = nil }
-function Pill:getSize() return Geom:new{ w = self.width, h = self.height } end
-function Pill:paintTo(bb, x, y)
-    self.dimen = Geom:new{ x = x, y = y, w = self.width, h = self.height }
-    local w, h = self.width, self.height
-    local r = math.floor(h / 2)
-    if self.fill then
-        local rgb = not BlitBuffer.isColor8(self.fill)
-        for row = 0, h - 1 do
-            local dy = math.abs(row + 0.5 - h / 2)
-            local inset = math.ceil(r - math.sqrt(math.max(0, r * r - dy * dy)))
-            if rgb then
-                bb:paintRectRGB32(x + inset, y + row, w - inset * 2, 1, self.fill)
-            else
-                bb:paintRect(x + inset, y + row, w - inset * 2, 1, self.fill)
-            end
-        end
-    end
-    if self.border > 0 then
-        bb:paintBorder(x, y, w, h, self.border, self.border_color or BlitBuffer.COLOR_BLACK, r,
-            G_reader_settings:nilOrTrue("anti_alias_ui"))
-    end
-    if self[1] then
-        local cs = self[1]:getSize()
-        self[1]:paintTo(bb, x + math.floor((w - cs.w) / 2), y + math.floor((h - cs.h) / 2))
-    end
 end
 
 local AnnotationSheet = InputContainer:extend{
@@ -4021,7 +4186,8 @@ function AnnotationSheet:build()
     table.insert(group, btn_row)
 
     self.sheet = SheetFrame:new{
-        width = sheet_w, radius = Screen:scaleBySize(14), border = thick,
+        -- Size.border.window: the outline KOReader uses on its own dialogs and buttons
+        width = sheet_w, radius = Screen:scaleBySize(14), border = Size.border.window,
         pad_x = P, pad_top = Screen:scaleBySize(18), pad_bottom = Screen:scaleBySize(24),
         group,
     }
