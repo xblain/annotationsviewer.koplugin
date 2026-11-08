@@ -7,22 +7,31 @@ Key behaviors:
 - Shows book title, date, chapter, highlighted text and any user note for each annotation
 - Lets you open the source book at the annotated location
 - Edit or delete annotations, change highlight style or color
-- Extensive annotations filtering system enabling filtering by highlight color, style, books,tags, chapters, words in highlights and notes using inclusion and exclusion
+- Extensive annotations filtering system enabling filtering by highlight color, style, books, tags, chapters, words in highlights and notes using inclusion and exclusion
+- Save a filter and bring it back with one tap
 - Caching annotations for faster loading
-- Configure font sizes, margins, truncation length and many more display options from the plugin Settings menu for lots of customization
+- Configure fonts, margins, spacing, truncation length and many more display options from the plugin Settings menu for lots of customization
 
 ## Features
 
 - Unified view of all annotations across books
-- Pagination for long annotation lists
-- Pagination customisation
-- Filter by highlight color, style (underline/strikeout/invert/lighten), book titles, tags, highlight text, note text using inclusions and/or exclusions
+- Pagination for long annotation lists, with swipes, page keys or Prev / Next buttons
+- Chapter headings in the list, styled like the book title
+- Filter by highlight color, style (underline/strikeout/invert/lighten), books, tags, chapters, highlight text and note text using inclusions and/or exclusions
+- Saved filters, shown as chips in Filter & sort
+- Sort by date, book, author, filename or location in the book, from a dropdown
+- Search matches are underlined in highlights and notes
 - Edit note text in-place and save back to the book's settings
 - Change highlight style and color and save back to book settings
 - Delete annotations
 - Go to the highlighted location in the reader
-- Customize fonts, margins, truncation and many other options
-
+- Works in portrait and landscape, the list redraws when you rotate. Landscape width is a setting
+- Night mode keeps the real highlight colors
+- Chinese, Japanese and Korean text wraps correctly
+- Choose how many lines a note shows before it ends with "...", tap it to read all
+- Menus and dropdowns pass gestures you don't use on to KOReader
+- Everything scales with your screen DPI
+- Customize fonts, margins, spacing, truncation and many other options
 
 ## Usage
 
@@ -34,7 +43,7 @@ Key behaviors:
    - Change highlight style or color
    - Delete annotation
 
-Use the plugin Settings (accessible from the plugin menu) to adjust fonts, font sizes, margins,and other display preferences.
+Use the plugin Settings (accessible from the plugin menu) to adjust fonts, font sizes, margins, spacing and other display preferences. Text and spacing have their own page with a preview on top.
 
 ## Screenshot
 
