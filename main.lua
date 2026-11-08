@@ -372,10 +372,14 @@ local SORT_COMPARATORS = {
 
 local function getHighlightColor(color)
         local val = HIGHLIGHT_COLORS[color and color:lower() or ""]
-    if val and BlitBuffer.colorFromString then
-        return BlitBuffer.colorFromString(val)
+    local c = BlitBuffer.COLOR_GRAY
+    if val and BlitBuffer.colorFromString then c = BlitBuffer.colorFromString(val) end
+    -- night mode inverts the whole screen: draw the colour pre-inverted so it shows as chosen
+    if Screen.night_mode and c.invert then
+        local ok, inv = pcall(c.invert, c)
+        if ok and inv then return inv end
     end
-    return BlitBuffer.COLOR_GRAY
+    return c
 end
 local function isNoBackgroundStyle(drawer)
     if not drawer then return false end
@@ -897,6 +901,8 @@ function NoteItemWidget:init()
         bg_color = BlitBuffer.COLOR_BLACK
     elseif not no_background then
         bg_color = getHighlightColor(self.note.color)
+        -- night mode inverts the screen: the colour is drawn pre-inverted, so the text is too
+        if Screen.night_mode then text_fgcolor = BlitBuffer.COLOR_WHITE end
     end
 
     local text_content_width = content_width - text_margin * 2
@@ -3752,6 +3758,7 @@ local function buildHighlightLines(text, face, width, drawer, color, max_lines, 
         fg, bg = BlitBuffer.COLOR_WHITE, BlitBuffer.COLOR_BLACK
     elseif not isNoBackgroundStyle(drawer) then
         bg = getHighlightColor(color)
+        if Screen.night_mode then fg = BlitBuffer.COLOR_WHITE end -- pre-inverted like the colour
     end
     local lines, para_end = wrapText(text, face, line_width)
     local cut = max_lines and #lines > max_lines
