@@ -4232,6 +4232,45 @@ function Page.footer(cancel_cb, primary_text, primary_cb)
         VerticalSpan:new{ width = Page.FOOTER_BOTTOM },
     }
 end
+-- Scrolling body for the full-screen pages. KOReader's scroll container keeps room for its bar
+-- on the right (3 bar widths) and would add a horizontal bar when the content is as wide as
+-- the screen, so the content is measured that much narrower (the right padding is what gets
+-- cut). The bar is drawn like the list's own: a thin line with a rounded, outlined thumb.
+-- How much narrower than the screen the content of a scrolling page is laid out, so the right
+-- padding plus the scrollbar strip match the list (strip of SB_STRIP_WIDTH, thumb centred).
+-- (plus a little slack, so nothing at the right edge can end up under the crop line)
+Page.SCROLL_EXTRA = 0 -- (a wider strip made the right-hand controls get cut off on the device)
+function Page.scrollable(w, h, show_parent, child)
+    if not Page.ScrollClass then
+        local SC = require("ui/widget/container/scrollablecontainer")
+        local C = SC:extend{ scroll_bar_width = SB_THUMB_WIDTH }
+        function C:initState()
+            SC.initState(self)
+            local bar = self._v_scroll_bar
+            if not bar then return end
+            bar.paintTo = function(b, bb, x, y)
+                b.touch_dimen = Geom:new{ x = x - b.extra_touch_on_side, y = y,
+                    w = b.width + 2 * b.extra_touch_on_side, h = b.height }
+                -- thumb centred in the strip, with the same space above and below as the list's
+                local tx = x + math.floor((b.width - SB_THUMB_WIDTH) / 2)
+                local top, th_total = y + SB_MARGIN_V_TOP, b.height - SB_MARGIN_V_TOP - SB_MARGIN_V_BOTTOM
+                bb:paintRect(tx + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2), top, SB_TRACK_WIDTH, th_total, COLORS.ink)
+                local th = math.max(Screen:scaleBySize(16), math.floor(th_total * (b.high - b.low)))
+                local ty = top + math.min(math.floor(b.low * th_total), th_total - th)
+                local radius = math.floor(SB_THUMB_WIDTH / 2)
+                bb:paintRoundedRect(tx, ty, SB_THUMB_WIDTH, th, BlitBuffer.COLOR_WHITE, radius)
+                bb:paintBorder(tx, ty, SB_THUMB_WIDTH, th, Size.border.default, BlitBuffer.COLOR_BLACK, radius)
+            end
+        end
+        Page.ScrollClass = C
+        Page.ClipClass = WidgetContainer:extend{ clip_w = 0 }
+        function Page.ClipClass:getSize()
+            return Geom:new{ w = self.clip_w, h = self[1]:getSize().h }
+        end
+    end
+    return Page.ScrollClass:new{ dimen = Geom:new{ w = w, h = h }, show_parent = show_parent,
+        Page.ClipClass:new{ clip_w = w - 3 * SB_THUMB_WIDTH, child } }
+end
 function Page.countText(n)
     return n == 1 and _("Show 1 annotation") or string.format(_("Show %d annotations"), n)
 end
@@ -4467,7 +4506,7 @@ function FilterScreen:build()
     normalizeColorStyle(af)
     local W, H = Screen:getWidth(), Screen:getHeight()
     local P = Screen:scaleBySize(24)
-    local inner = W - P * 2
+    local inner = W - P * 2 - (self.narrow and Page.SCROLL_EXTRA or 0)
     local thin = Size.border.button
     local LIGHT = COLORS.line_light   -- row lines
     local MUTED = COLORS.muted
@@ -4725,8 +4764,9 @@ function FilterScreen:build()
     local body_widget = body
     self.scroller = nil
     if body:getSize().h > avail then
-        local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
-        body_widget = ScrollableContainer:new{ dimen = Geom:new{ w = W, h = avail }, show_parent = self, body }
+        -- rows get narrower to leave room for the scrollbar strip: lay the page out again
+        if not self.narrow then self.narrow = true; return self:build() end
+        body_widget = Page.scrollable(W, avail, self, body)
         self.scroller = body_widget
     end
     self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0,
@@ -4814,7 +4854,7 @@ end
 function SS:build()
     local W, H = Screen:getWidth(), Screen:getHeight()
     local P = Screen:scaleBySize(24)
-    local inner = W - P * 2
+    local inner = W - P * 2 - (self.narrow and Page.SCROLL_EXTRA or 0)
     local thin = Size.border.button
     local MUTED = COLORS.muted
     local face15, face13 = Font:getFace("cfont", 15), Font:getFace("cfont", 13)
@@ -4908,20 +4948,20 @@ function SS:build()
                 Screen:scaleBySize(12), Screen:scaleBySize(14)),
             rowLine() }
     end
-    -- which of date / author / chapter are on: chips that are black with a ✓ when on
-    local function fieldChips(label, getter, key)
+    -- which of date / author / chapter are on: small chips on the right (black with a ✓ when on)
+    local function fieldChips(label, sub, getter, key)
         local active = {}
         for f in getter():gmatch("[^,]+") do active[f] = true end
-        local chips = HorizontalGroup:new{}
+        local chips = HorizontalGroup:new{ align = "center" }
         for i, f in ipairs({ { "date", _("Date") }, { "author", _("Author") }, { "chapter", _("Chapter") } }) do
             local on = active[f[1]]
             local text = f[2] .. (on and " ✓" or "")
             local widest = TextWidget:new{ text = f[2] .. " ✓", face = face13, bold = true }:getSize().w
-            local w = widest + Screen:scaleBySize(28)
+            local w = widest + Screen:scaleBySize(20)
             local color = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK
-            if i > 1 then table.insert(chips, HorizontalSpan:new{ width = Screen:scaleBySize(8) }) end
+            if i > 1 then table.insert(chips, HorizontalSpan:new{ width = Screen:scaleBySize(6) }) end
             table.insert(chips, TapBox:new{
-                Pill:new{ width = w, height = Screen:scaleBySize(34), fill = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
+                Pill:new{ width = w, height = Screen:scaleBySize(32), fill = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
                     border = on and 0 or thin, border_color = BlitBuffer.COLOR_BLACK,
                     TextWidget:new{ text = text, face = face13, bold = on, fgcolor = color } },
                 callback = function()
@@ -4932,8 +4972,7 @@ function SS:build()
                     self:changed()
                 end })
         end
-        return VerticalGroup:new{ padded(VerticalGroup:new{ align = "left", TextWidget:new{ text = label, face = face15 },
-            VerticalSpan:new{ width = Screen:scaleBySize(8) }, chips }, Screen:scaleBySize(12), Screen:scaleBySize(14)), rowLine() }
+        return row(label, sub, chips)
     end
     local list = self.list
     local function back() self:rebuild() end
@@ -4954,12 +4993,12 @@ function SS:build()
     add(toggle(_("Counts on tabs"), nil, "show_total", getShowTotalNotes))
     add(toggle(_("Filter button in title bar"), nil, "filter_titlebar_btn", getFilterTitlebarBtn))
     add(toggle(_("Show book / info row"), nil, "show_info", getShowInfo))
-    add(fieldChips(_("Info row shows"), getInfoFields, "info_fields"))
+    add(fieldChips(_("Info row shows"), nil, getInfoFields, "info_fields"))
     add(toggle(_("Title on each page"), nil, "repeat_title_on_page", getRepeatTitleOnPage))
     add(toggle(_("Chapter / date on each page"), nil, "repeat_info_on_page", getRepeatInfoOnPage))
     add(toggle(_("Hide duplicate book header"), nil, "hide_dup_title", getHideDupTitle))
     add(toggle(_("Hide duplicate info header"), nil, "hide_dup_info", getHideDupInfo))
-    add(fieldChips(_("Info counts as duplicate when these match"), getDedupInfoFields, "dedup_info_fields"))
+    add(fieldChips(_("Duplicate check"), _("Repeated info is hidden when these match"), getDedupInfoFields, "dedup_info_fields"))
 
     add(sectionBar(_("PAGES")))
     add(segment(_("Page controls"), { { "default", _("Prev / Next") }, { "scrollbar", _("Scrollbar") },
@@ -4976,8 +5015,8 @@ function SS:build()
 
     local header = Page.header(self, _("Settings"), function() self:onClose() end)
     local avail = H - header:getSize().h
-    local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
-    self.scroller = ScrollableContainer:new{ dimen = Geom:new{ w = W, h = avail }, show_parent = self, body }
+    if not self.narrow and body:getSize().h > avail then self.narrow = true; return self:build() end
+    self.scroller = Page.scrollable(W, avail, self, body)
     self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0,
         background = BlitBuffer.COLOR_WHITE,
         VerticalGroup:new{ align = "left", header, self.scroller } }
@@ -5125,22 +5164,23 @@ function ListPicker:build()
         LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line } }
 
     -- rows (grouped when items have a group, e.g. chapters by book)
+    local rinner = inner - (self.narrow and Page.SCROLL_EXTRA or 0)
     local rows = VerticalGroup:new{ align = "left" }
     local box = Screen:scaleBySize(24)
     local last_group
     for _i, it in ipairs(visible) do
         if it.group and it.group ~= last_group then
             last_group = it.group
-            local gd = Geom:new{ w = inner, h = Screen:scaleBySize(40) }
+            local gd = Geom:new{ w = rinner, h = Screen:scaleBySize(40) }
             local group_name = it.group
             table.insert(rows, OverlapGroup:new{ dimen = gd, allow_mirroring = false,
                 LeftContainer:new{ dimen = gd, TextWidget:new{ text = group_name, face = getFaceOr(SERIF_FONT, 17, "cfont"), bold = true,
-                    max_width = inner - Screen:scaleBySize(60) } },
+                    max_width = rinner - Screen:scaleBySize(60) } },
                 RightContainer:new{ dimen = gd, TapBox:new{ underlined(_("All")), callback = function()
                     for _j, x in ipairs(self.items) do if x.group == group_name then self:set(x.key, self.mode or "inc") end end
                     self:changed()
                 end } } })
-            table.insert(rows, LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light })
+            table.insert(rows, LineWidget:new{ dimen = Geom:new{ w = rinner, h = Size.line.thin }, background = COLORS.line_light })
         end
         local st = self:state(it.key)
         local mark
@@ -5157,7 +5197,7 @@ function ListPicker:build()
                 fill = BlitBuffer.COLOR_WHITE, pad_x = 0, pad_y = 0, VerticalSpan:new{ width = box } }
         end
         local count = TextWidget:new{ text = tostring(it.count or ""), face = face13, fgcolor = COLORS.muted }
-        local text_w = inner - box - Screen:scaleBySize(14) * 2 - count:getSize().w
+        local text_w = rinner - box - Screen:scaleBySize(14) * 2 - count:getSize().w
         local texts = VerticalGroup:new{ align = "left",
             TextWidget:new{ text = it.title, face = it.serif and getFaceOr(SERIF_FONT, 17, "cfont") or face15,
                 bold = it.serif, max_width = text_w } }
@@ -5166,7 +5206,7 @@ function ListPicker:build()
         end
         local pad = Screen:scaleBySize(12)
         local row_h = math.max(box, texts:getSize().h) + pad * 2
-        local rd = Geom:new{ w = inner, h = row_h }
+        local rd = Geom:new{ w = rinner, h = row_h }
         local key = it.key
         table.insert(rows, TapBox:new{ OverlapGroup:new{ dimen = rd, allow_mirroring = false,
             LeftContainer:new{ dimen = rd, HorizontalGroup:new{ align = "center", mark, HorizontalSpan:new{ width = Screen:scaleBySize(14) }, texts } },
@@ -5180,7 +5220,7 @@ function ListPicker:build()
                 end
                 self:changed()
             end })
-        table.insert(rows, LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light })
+        table.insert(rows, LineWidget:new{ dimen = Geom:new{ w = rinner, h = Size.line.thin }, background = COLORS.line_light })
     end
     if #visible == 0 then
         table.insert(rows, VerticalSpan:new{ width = Screen:scaleBySize(24) })
@@ -5195,8 +5235,8 @@ function ListPicker:build()
     self.scroller = nil
     local body = list_body
     if list_body:getSize().h > avail then
-        local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
-        self.scroller = ScrollableContainer:new{ dimen = Geom:new{ w = W, h = avail }, show_parent = self, list_body }
+        if not self.narrow then self.narrow = true; return self:build() end
+        self.scroller = Page.scrollable(W, avail, self, list_body)
         body = self.scroller
     end
     self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0, background = BlitBuffer.COLOR_WHITE,
