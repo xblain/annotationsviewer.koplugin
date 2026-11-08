@@ -1978,7 +1978,9 @@ function NotesListWidget:showSearchDialog(on_done)
     local InputDialog = require("ui/widget/inputdialog")
     local af = self.active_filter or {}
     local dialog
-    local function run(text)
+    local buttons
+    local run
+    function run(text)
         UIManager:close(dialog)
         self.active_filter = self.active_filter or {}
         self.active_filter.search_any = (text and text ~= "") and text or nil
@@ -1986,15 +1988,16 @@ function NotesListWidget:showSearchDialog(on_done)
         self:refresh()
         if on_done then on_done() end
     end
+    buttons = {{
+        { text = _("Cancel"), id = "close", callback = function() UIManager:close(dialog) end },
+        { text = _("Clear"), callback = function() run(nil) end },
+        { text = _("Search"), is_enter_default = true, callback = function() run(dialog:getInputText()) end },
+    }}
     dialog = InputDialog:new{
         title = _("Search annotations"),
         input = af.search_any or "",
         input_hint = _("Words in highlights or notes"),
-        buttons = {{
-            { text = _("Cancel"), id = "close", callback = function() UIManager:close(dialog) end },
-            { text = _("Clear"), callback = function() run(nil) end },
-            { text = _("Search"), is_enter_default = true, callback = function() run(dialog:getInputText()) end },
-        }},
+        buttons = buttons,
     }
     UIManager:show(dialog)
     dialog:onShowKeyboard()
@@ -4364,7 +4367,16 @@ function Page.paged(owner, W, avail, rows, opts)
         for i = fixed_n + 1, n do
             local rh = rows[i]:getSize().h
             if not cur or (h + rh > cap and h > 0) then
-                cur = { first = i, last = i }; h = 0
+                local start = i
+                if cur and i > 1 and rows[i - 1].keep_with_next and cur.last == i - 1 and cur.first < i - 1 then
+                    -- a heading would end the page: it moves to the next one with its rows
+                    cur.last = i - 2
+                    start = i - 1
+                    h = rows[start]:getSize().h
+                else
+                    h = 0
+                end
+                cur = { first = start, last = start }
                 table.insert(pages, cur)
             end
             cur.last = i
@@ -4373,6 +4385,7 @@ function Page.paged(owner, W, avail, rows, opts)
         if #pages == 0 then pages[1] = { first = n + 1, last = n } end
     end
     local count = #pages
+    if count == 1 and owner.ges_events then owner.ges_events.PagedSwipe = nil end
     owner.page_idx = math.max(1, math.min(owner.page_idx or 1, count))
     local pg = pages[owner.page_idx]
     local g = VerticalGroup:new{ align = "left" }
@@ -4416,6 +4429,30 @@ function Page.paged(owner, W, avail, rows, opts)
             pageButton(_("Next"), cr, false, has_next, function() go(cur + 1) end, function() go(count) end),
             jumpButton(clast, has_next, function() go(count) end),
             HorizontalSpan:new{ width = side } } } }
+    -- swipes (as the list's swipe setting) and page-turn keys also turn the pages
+    local sw = getSwipeSetting()
+    owner.ges_events = owner.ges_events or {}
+    owner.ges_events.PagedSwipe = sw ~= "disabled" and { GestureRange:new{ ges = "swipe",
+        range = Geom:new{ x = 0, y = 0, w = W, h = Screen:getHeight() } } } or nil
+    owner.onPagedSwipe = function(_self, _args, ges)
+        local d = ges and ges.direction
+        local horiz = sw == "horizontal" or sw == "both"
+        local vert = sw == "vertical" or sw == "both"
+        if (d == "west" and horiz) or (d == "north" and vert) then
+            if has_next then go(cur + 1) end
+            return true
+        elseif (d == "east" and horiz) or (d == "south" and vert) then
+            if has_prev then go(cur - 1) end
+            return true
+        end
+    end
+    if Device:hasKeys() then
+        owner.key_events = owner.key_events or {}
+        owner.key_events.PagedNext = { { Input.group.PgFwd } }
+        owner.key_events.PagedPrev = { { Input.group.PgBack } }
+        owner.onPagedNext = function() if has_next then go(cur + 1) end return true end
+        owner.onPagedPrev = function() if has_prev then go(cur - 1) end return true end
+    end
     local used = content:getSize().h
     return VerticalGroup:new{ align = "left", content,
         VerticalSpan:new{ width = math.max(0, avail - bar_h - used) },
@@ -4819,11 +4856,13 @@ function FilterScreen:build()
     local function sectionBar(text)
         local top = Screen:scaleBySize(first_section and 10 or 20)
         first_section = false
-        return VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top },
+        local bar = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top },
             HorizontalGroup:new{ HorizontalSpan:new{ width = P }, VerticalGroup:new{ align = "left",
                 TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted },
                 VerticalSpan:new{ width = Screen:scaleBySize(6) },
                 LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.medium }, background = COLORS.ink } } } }
+        bar.keep_with_next = true -- Page.paged never leaves a heading alone at the end of a page
+        return bar
     end
     local function labelRow(left, right)
         local d = Geom:new{ w = inner, h = math.max(left:getSize().h, right and right:getSize().h or 0) }
@@ -4841,18 +4880,19 @@ function FilterScreen:build()
         local label = decoratedText(tw, opts.deco, color)
         local content = HorizontalGroup:new{ align = "center" }
         local extra = 0
-        if opts.dot then
+        local dots = opts.dots or (opts.dot and { opts.dot }) or {}
+        for _i, dname in ipairs(dots) do
             table.insert(content, Pill:new{ width = Screen:scaleBySize(12), height = Screen:scaleBySize(12), border = 0,
-                fill = opts.dot == "gray" and BlitBuffer.COLOR_GRAY or getHighlightColor(opts.dot) })
+                fill = dname == "gray" and BlitBuffer.COLOR_GRAY or getHighlightColor(dname) })
             table.insert(content, HorizontalSpan:new{ width = Screen:scaleBySize(6) })
-            extra = Screen:scaleBySize(18)
+            extra = extra + Screen:scaleBySize(18)
         end
         table.insert(content, label)
         local w = widest + extra + Screen:scaleBySize(28)
         return { w = w, widget = TapBox:new{
             Pill:new{ width = w, height = h, fill = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
                 border = on and 0 or thin, border_color = BlitBuffer.COLOR_BLACK, content },
-            callback = callback,
+            callback = callback, hold_callback = opts.hold,
         } }
     end
     local function flow(items, gap)
@@ -5045,6 +5085,75 @@ function FilterScreen:build()
         table.insert(body, padded(flow(items), Screen:scaleBySize(14), Screen:scaleBySize(14)))
     end
 
+    -- saved filters: the current filters and sort order under a name, one tap to bring them back
+    table.insert(body, sectionBar(_("SAVED FILTERS")))
+    do
+        local presets = getSetting("filter_presets", {})
+        local function same(a, b)
+            if type(a) ~= type(b) then return false end
+            if type(a) ~= "table" then return a == b end
+            for k, v in pairs(a) do if k ~= "notes_presence" and not same(v, b[k]) then return false end end
+            for k in pairs(b) do if k ~= "notes_presence" and a[k] == nil then return false end end
+            return true
+        end
+        local chips = {}
+        for i, p in ipairs(presets) do
+            local on = same(p.filter or {}, list.active_filter or {}) and (p.sort or "") == getSetting("sort_mode", "date_newest")
+            table.insert(chips, chip(p.name, on, function()
+                local presence = list.active_filter and list.active_filter.notes_presence
+                list.active_filter = deepCopy(p.filter) or {}
+                list.active_filter.notes_presence = presence
+                if p.sort and p.sort ~= getSetting("sort_mode", "date_newest") then
+                    setSetting("sort_mode", p.sort)
+                    list:applySort()
+                end
+                self:changed()
+            end, { hold = function()
+                local ConfirmBox = require("ui/widget/confirmbox")
+                UIManager:show(ConfirmBox:new{
+                    text = string.format(_("Delete the saved filter “%s”?"), p.name),
+                    ok_text = _("Delete"),
+                    ok_callback = function()
+                        table.remove(presets, i)
+                        setSetting("filter_presets", presets)
+                        self:rebuild()
+                    end })
+            end }))
+        end
+        if #presets == 0 then
+            table.insert(body, padded(TextWidget:new{ text = _("Nothing saved yet."), face = face13, fgcolor = COLORS.muted },
+                Screen:scaleBySize(12), Screen:scaleBySize(4)))
+        else
+            table.insert(body, padded(flow(chips), Screen:scaleBySize(14), Screen:scaleBySize(6)))
+            table.insert(body, padded(TextWidget:new{ text = _("Hold one to delete it."), face = Font:getFace("cfont", 12), fgcolor = COLORS.muted },
+                0, Screen:scaleBySize(4)))
+        end
+        local save_tw = TextWidget:new{ text = _("Save current filters…"), face = face13 }
+        table.insert(body, padded(TapBox:new{ VerticalGroup:new{ save_tw, LineWidget:new{
+                dimen = Geom:new{ w = save_tw:getSize().w, h = Size.line.medium }, background = BlitBuffer.COLOR_BLACK } },
+            callback = function()
+                local InputDialog = require("ui/widget/inputdialog")
+                local dlg
+                local function save()
+                    local name = (dlg:getInputText() or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                    if name == "" then name = string.format(_("Filter %d"), #presets + 1) end
+                    local copy = deepCopy(list.active_filter) or {}
+                    copy.notes_presence = nil
+                    table.insert(presets, { name = name, filter = copy, sort = getSetting("sort_mode", "date_newest") })
+                    setSetting("filter_presets", presets)
+                    UIManager:close(dlg)
+                    self:rebuild()
+                end
+                dlg = InputDialog:new{ title = _("Save filters"), input = "", input_hint = _("Name"),
+                    description = _("Saves the filters and sort order as they are now."),
+                    buttons = {{
+                        { text = _("Cancel"), id = "close", callback = function() UIManager:close(dlg) end },
+                        { text = _("Save"), is_enter_default = true, callback = save } } } }
+                UIManager:show(dlg)
+                dlg:onShowKeyboard()
+            end }, Screen:scaleBySize(14), Screen:scaleBySize(14)))
+    end
+
     -- title bar and bottom bar, shared with the pickers
     local header = Page.header(self, _("Filter & sort"), function() self:onClose() end, {
         TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = Screen:scaleBySize(90), h = TOPBAR_HEIGHT }, underlined(_("Reset all"), face14) },
@@ -5161,11 +5270,13 @@ function SS:build()
     local function sectionBar(text)
         local top = Screen:scaleBySize(first_section and 10 or 20)
         first_section = false
-        return VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top },
+        local bar = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top },
             HorizontalGroup:new{ HorizontalSpan:new{ width = P }, VerticalGroup:new{ align = "left",
                 TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted },
                 VerticalSpan:new{ width = Screen:scaleBySize(6) },
                 LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.medium }, background = COLORS.ink } } } }
+        bar.keep_with_next = true -- Page.paged never leaves a heading alone at the end of a page
+        return bar
     end
     local function padded(widget, top, bottom)
         return VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top or 0 },
