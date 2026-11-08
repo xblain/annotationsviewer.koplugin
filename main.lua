@@ -2042,27 +2042,7 @@ function NotesListWidget:updatePage()
     UIManager:setDirty(self, "ui")
 end
 function NotesListWidget:showMainMenu()
-    local buttons = {
-        {{ text = _("Filter"), callback = function()
-            UIManager:close(self.main_menu)
-            self:showFilterMenu(true)
-        end }},
-        {{ text = _("Sort"), callback = function()
-            UIManager:close(self.main_menu)
-            self:showSortMenu()
-        end }},
-        {{ text = _("Settings"), callback = function()
-            UIManager:close(self.main_menu)
-            self:showSettingsMenu()
-        end }},
-        {{ text = _("Export to Markdown"), callback = function()
-            UIManager:close(self.main_menu)
-            self:exportToMarkdown()
-        end }},
-        {{ text = _("Cancel"), callback = function() UIManager:close(self.main_menu) end }},
-    }
-    self.main_menu = ButtonDialogTitle:new{ title = _("Menu"), buttons = buttons }
-    UIManager:show(self.main_menu)
+    NotesListWidget.States.menu(self)
 end
 -- Builds Markdown for a list of notes, grouped under a heading per book (in list order).
 local function notesToMarkdown(notes, filter_label)
@@ -3426,6 +3406,20 @@ function AllNotesViewer:notifyLiveReader(book_path, note)
         ui:handleEvent(Event:new("AnnotationsModified", { item }))
     end
 end
+-- "Reload annotations" in the ☰ menu: forget everything read so far (memory and the file in the
+-- cache folder), then open the list again, which reads all books afresh.
+function AllNotesViewer:reloadAnnotations(list)
+    for k in pairs(_annotation_cache) do _annotation_cache[k] = nil end
+    for k in pairs(_book_info_cache) do _book_info_cache[k] = nil end
+    if _persist then
+        _persist.data = { version = CACHE_VERSION, books = {} }
+        pcall(_persist.flush, _persist)
+    end
+    _persist, _persist_dirty, _persist_count = nil, false, 0
+    local single = list and list.single_book
+    if list then list:onClose() end
+    if single then self:showCurrentBookNotes() else self:showAllNotes() end
+end
 function AllNotesViewer:clearBookCache(book_path)
     _annotation_cache[book_path] = nil
     -- book_info rarely changes, but clear it too so tags/title edits are reflected
@@ -4300,6 +4294,7 @@ end
 -- (taps go through) and closes itself after `timeout` seconds.
 States.Card = InputContainer:extend{
     anchor = "center", build = nil, modal = false, toast = false, timeout = nil, cancel_cb = nil,
+    width = nil, pad_h = nil, pad_v = nil, left = nil, top = nil, -- for the ☰ menu: own size and place
 }
 function States.Card:init()
     local W, H = Screen:getWidth(), Screen:getHeight()
@@ -4307,12 +4302,15 @@ function States.Card:init()
     local margin = Screen:scaleBySize(14)
     local bw = Size.border.window
     local pad = Screen:scaleBySize(16) + bw
-    local box_w = col_w - margin * 2
+    local pad_x, pad_y = self.pad_h or pad, self.pad_v or pad
+    local box_w = self.width or (col_w - margin * 2)
     self.box = RoundedBox:new{ width = box_w, fill = BlitBuffer.COLOR_WHITE, radius = Screen:scaleBySize(10),
-        border = bw, border_color = COLORS.ink, pad_x = pad, pad_y = pad, self.build(box_w - pad * 2, self) }
+        border = bw, border_color = COLORS.ink, pad_x = pad_x, pad_y = pad_y, self.build(box_w - pad_x * 2, self) }
     local box_h = self.box:getSize().h
-    self.box_x = math.floor((W - box_w) / 2)
-    if self.anchor == "bottom" then
+    self.box_x = self.left or math.floor((W - box_w) / 2)
+    if self.top then
+        self.box_y = self.top
+    elseif self.anchor == "bottom" then
         self.box_y = H - box_h - Screen:scaleBySize(16)
     else
         self.box_y = math.floor((H - box_h) / 2)
@@ -4429,6 +4427,79 @@ function States.exported(count, path)
             TextWidget:new{ text = rel, face = Font:getFace("cfont", 12), fgcolor = COLORS.muted, max_width = w },
         }
     end }:show()
+end
+
+-- The ☰ menu: a card under the button with an icon, a label and a short status on each row.
+-- (Sort is on the tab row and in Filter & sort.)
+function States.menu(list)
+    local W = Screen:getWidth()
+    local af = list.active_filter or {}
+    local n_filters = #list:getFilterChips()
+    local items = {
+        { icon = "filter", label = _("Filter & sort"),
+            value = n_filters == 0 and _("None active") or string.format(_("%d active"), n_filters),
+            cb = function() list:showFilterMenu(false) end },
+    }
+    if not list.single_book then
+        local seen, n_books = {}, 0
+        for _i, n in ipairs(list.notes_list) do
+            if n.book_title and not seen[n.book_title] then seen[n.book_title] = true; n_books = n_books + 1 end
+        end
+        local filtered = (af.books and next(af.books)) or (af.books_exclude and next(af.books_exclude))
+        table.insert(items, { icon = "book.opened", label = _("Books"),
+            value = filtered and _("Filtered") or string.format(_("All %d"), n_books),
+            cb = function() list:showBookPicker(function() end) end })
+    end
+    table.insert(items, "line")
+    table.insert(items, { icon = "move.up", label = _("Export to Markdown"),
+        value = string.format(_("%d shown"), #(list.filtered_notes or {})), cb = function() list:exportToMarkdown() end })
+    table.insert(items, { icon = "cre.render.reload", label = _("Reload annotations"),
+        cb = function() list.viewer:reloadAnnotations(list) end })
+    table.insert(items, "line")
+    table.insert(items, { icon = "appbar.settings", label = _("Settings"), chevron = true,
+        cb = function() list:showSettingsMenu() end })
+    local bw = Size.border.window
+    States.Card:new{ modal = true, width = math.min(Screen:scaleBySize(330), W - Screen:scaleBySize(20)),
+        left = Screen:scaleBySize(10), top = TOPBAR_HEIGHT + Screen:scaleBySize(4),
+        pad_h = bw, pad_v = bw + Screen:scaleBySize(6),
+        build = function(w, card)
+            local g = VerticalGroup:new{ align = "left" }
+            local side, icon_s, gap = Screen:scaleBySize(16), Screen:scaleBySize(22), Screen:scaleBySize(14)
+            for _i, it in ipairs(items) do
+                if it == "line" then
+                    table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(6) })
+                    table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
+                        LineWidget:new{ dimen = Geom:new{ w = w - side * 2, h = Size.line.thin }, background = COLORS.line_light } })
+                    table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(6) })
+                else
+                    local icon_file = it.icon == "filter" and pluginIcon("appbar.filter") or nil
+                    local icon
+                    if icon_file and lfs.attributes(icon_file, "mode") == "file" then
+                        icon = IconWidget:new{ file = icon_file, width = icon_s, height = icon_s }
+                    else
+                        icon = IconWidget:new{ icon = it.icon == "filter" and "appbar.settings" or it.icon, width = icon_s, height = icon_s }
+                    end
+                    local value = it.value and TextWidget:new{ text = it.value, face = Font:getFace("cfont", 12),
+                        fgcolor = COLORS.muted, max_width = math.floor(w * 0.35) }
+                    local right = HorizontalGroup:new{ align = "center" }
+                    if value then table.insert(right, value) end
+                    if it.chevron then
+                        table.insert(right, IconWidget:new{ icon = "chevron.right", width = Screen:scaleBySize(16), height = Screen:scaleBySize(16) })
+                    end
+                    table.insert(right, HorizontalSpan:new{ width = side })
+                    local label_w = w - side - icon_s - gap - right:getSize().w - gap
+                    local d = Geom:new{ w = w, h = Screen:scaleBySize(50) }
+                    local cb = it.cb
+                    table.insert(g, TapBox:new{ OverlapGroup:new{ dimen = d, allow_mirroring = false,
+                        LeftContainer:new{ dimen = d, HorizontalGroup:new{ align = "center",
+                            HorizontalSpan:new{ width = side }, icon, HorizontalSpan:new{ width = gap },
+                            TextWidget:new{ text = it.label, face = Font:getFace("cfont", 15), max_width = label_w } } },
+                        RightContainer:new{ dimen = d, right } },
+                        callback = function() card:onClose(); cb() end })
+                end
+            end
+            return g
+        end }:show()
 end
 
 -- Centre of the list when filters (or the tab) leave nothing: what happened, and one tap to undo.
