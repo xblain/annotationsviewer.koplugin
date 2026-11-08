@@ -372,14 +372,10 @@ local SORT_COMPARATORS = {
 
 local function getHighlightColor(color)
         local val = HIGHLIGHT_COLORS[color and color:lower() or ""]
-    local c = BlitBuffer.COLOR_GRAY
-    if val and BlitBuffer.colorFromString then c = BlitBuffer.colorFromString(val) end
-    -- night mode inverts the whole screen: draw the colour pre-inverted so it shows as chosen
-    if Screen.night_mode and c.invert then
-        local ok, inv = pcall(c.invert, c)
-        if ok and inv then return inv end
+    if val and BlitBuffer.colorFromString then
+        return BlitBuffer.colorFromString(val)
     end
-    return c
+    return BlitBuffer.COLOR_GRAY
 end
 local function isNoBackgroundStyle(drawer)
     if not drawer then return false end
@@ -607,6 +603,27 @@ function UnderlineWidget:paintTo(bb, x, y)
     bb:paintRect(x, y + self.height - Size.line.medium, self.width, Size.line.medium, BlitBuffer.COLOR_BLACK)
 end
 local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_parent = nil, is_last = false, is_preview = false, disable_tap = false, skip_title = false, skip_info = false }
+
+-- Night mode inverts the whole screen. Things that must keep their real colours (highlight
+-- colours and the text on them) are drawn in true colour into a copy of what is behind them and
+-- copied back inverted, so the screen's own inversion turns them right again -- the same idea
+-- as an image widget's `original_in_nightmode = false`.
+function NoteItemWidget.paintTrue(bb, x, y, w, h, draw)
+    if not Screen.night_mode or w <= 0 or h <= 0 then return draw(bb, x, y) end
+    local buf = BlitBuffer.new(w, h, bb:getType())
+    buf:blitFrom(bb, 0, 0, x, y, w, h)
+    buf:invert()
+    draw(buf, 0, 0)
+    bb:invertblitFrom(buf, x, y, 0, 0, w, h)
+    buf:free()
+end
+NoteItemWidget.TruePaint = WidgetContainer:extend{}
+function NoteItemWidget.TruePaint:getSize() return self[1]:getSize() end
+function NoteItemWidget.TruePaint:paintTo(bb, x, y)
+    local size = self[1]:getSize()
+    self.dimen = Geom:new{ x = x, y = y, w = size.w, h = size.h }
+    NoteItemWidget.paintTrue(bb, x, y, size.w, size.h, function(b, xx, yy) self[1]:paintTo(b, xx, yy) end)
+end
 
 -- Faces used by NoteItemWidget (shared by the real layout and the height measurement).
 local function getNoteFaces()
@@ -901,8 +918,6 @@ function NoteItemWidget:init()
         bg_color = BlitBuffer.COLOR_BLACK
     elseif not no_background then
         bg_color = getHighlightColor(self.note.color)
-        -- night mode inverts the screen: the colour is drawn pre-inverted, so the text is too
-        if Screen.night_mode then text_fgcolor = BlitBuffer.COLOR_WHITE end
     end
 
     local text_content_width = content_width - text_margin * 2
@@ -1020,9 +1035,13 @@ function NoteItemWidget:init()
             table.insert(lines_group, line_container)
         end
 
+        local lines_widget = lines_group
+        if drawer ~= "invert" and not no_background then -- coloured highlight: keeps its colour at night
+            lines_widget = NoteItemWidget.TruePaint:new{ lines_group }
+        end
         table.insert(note_content, LeftContainer:new{
             dimen = Geom:new{ w = inner_width, h = lines_group:getSize().h },
-            HorizontalGroup:new{ HorizontalSpan:new{ width = h_padding + text_margin }, lines_group },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = h_padding + text_margin }, lines_widget },
         })
     end
 
@@ -1773,7 +1792,7 @@ function NotesListWidget:buildFilterChips(w)
         end
         if c.colors then
             for _j, key in ipairs(c.colors) do
-                table.insert(content, Pill:new{ width = Screen:scaleBySize(10), height = Screen:scaleBySize(10), border = 0,
+                table.insert(content, Pill:new{ width = Screen:scaleBySize(10), height = Screen:scaleBySize(10), border = 0, true_color = true,
                     fill = key == "gray" and BlitBuffer.COLOR_GRAY or getHighlightColor(key) })
                 table.insert(content, HorizontalSpan:new{ width = Screen:scaleBySize(6) })
             end
@@ -3150,19 +3169,6 @@ end
 -- Rotation doesn't always reach this widget as an event, so also check the size whenever
 -- we're painted and re-layout (outside the paint) if the screen changed.
 function NotesListWidget:paintTo(bb, x, y)
-    -- night mode switched while open: colours are drawn pre-inverted, so draw them again
-    local night = Screen.night_mode and true or false
-    if self._night == nil then self._night = night end
-    if self._night ~= night and not self._resize_pending then
-        self._night = night
-        self._resize_pending = true
-        UIManager:nextTick(function()
-            self._resize_pending = nil
-            self:calculatePages()
-            self:updatePage()
-            UIManager:setDirty(self, "full")
-        end)
-    end
     if (self.width ~= Screen:getWidth() or self.height ~= Screen:getHeight()) and not self._resize_pending then
         self._resize_pending = true
         UIManager:nextTick(function()
@@ -3771,7 +3777,6 @@ local function buildHighlightLines(text, face, width, drawer, color, max_lines, 
         fg, bg = BlitBuffer.COLOR_WHITE, BlitBuffer.COLOR_BLACK
     elseif not isNoBackgroundStyle(drawer) then
         bg = getHighlightColor(color)
-        if Screen.night_mode then fg = BlitBuffer.COLOR_WHITE end -- pre-inverted like the colour
     end
     local lines, para_end = wrapText(text, face, line_width)
     local cut = max_lines and #lines > max_lines
@@ -4025,6 +4030,7 @@ function AnnotationSheet:build()
         local lines, cut = buildHighlightLines(quote_text, content_face, inner - (pad_h + ob) * 2,
             drawer, note.color, max_lines, true)
         local box = RoundedBox:new{
+            true_color = not no_fill and drawer ~= "invert",
             width = inner, fill = fill or BlitBuffer.COLOR_WHITE, radius = Screen:scaleBySize(6),
             border = bw, border_color = LIGHT, pad_x = pad_h + ob, pad_y = pad_v + ob,
             lines,
@@ -4117,7 +4123,7 @@ function AnnotationSheet:build()
         local on = (cur_color == key)
         local widest = TextWidget:new{ text = name .. " ✓", face = chip_face, bold = true }:getSize().w
         local label = HorizontalGroup:new{ align = "center",
-            Pill:new{ width = dot, height = dot, border = 0,
+            Pill:new{ width = dot, height = dot, border = 0, true_color = true,
                 fill = key == "gray" and BlitBuffer.COLOR_GRAY or getHighlightColor(key) },
             HorizontalSpan:new{ width = Screen:scaleBySize(6) },
             TextWidget:new{ text = on and (name .. " ✓") or name, face = chip_face, bold = on },
@@ -4348,6 +4354,20 @@ function Page.preview(list, h)
         Page.PreviewClip:new{ w = W, h = h, g },
         LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line } }
 end
+-- Pill / RoundedBox with `true_color = true` keep their colours in night mode (see paintTrue).
+do
+    local function trueColor(cls)
+        local base = cls.paintTo
+        function cls:paintTo(bb, x, y)
+            if not self.true_color or not Screen.night_mode then return base(self, bb, x, y) end
+            local size = self:getSize()
+            NoteItemWidget.paintTrue(bb, x, y, size.w, size.h, function(b, xx, yy) base(self, b, xx, yy) end)
+            self.dimen = Geom:new{ x = x, y = y, w = size.w, h = size.h }
+        end
+    end
+    trueColor(Pill)
+    trueColor(RoundedBox)
+end
 -- Menus, sheets and dropdowns sit above the list: pass the gestures they don't use on to the
 -- KOReader gestures plugin, as the list does (corner taps, edge swipes, ...).
 function Page.forwardGestures(cls)
@@ -4358,31 +4378,11 @@ function Page.forwardGestures(cls)
     end
 end
 Page.forwardGestures(AnnotationSheet)
-do -- redraw the open sheet when night mode is switched (its colours are drawn pre-inverted)
-    local base_paint = AnnotationSheet.paintTo
-    function AnnotationSheet:paintTo(bb, x, y)
-        local night = Screen.night_mode and true or false
-        if self._night == nil then self._night = night end
-        if self._night ~= night and not self._night_pending then
-            self._night, self._night_pending = night, true
-            UIManager:nextTick(function()
-                self._night_pending = nil
-                self:rebuild()
-                UIManager:setDirty("all", "full")
-            end)
-        end
-        return base_paint(self, bb, x, y)
-    end
-end
 -- Full-screen pages: rebuild for the new size when the screen was rotated.
 function Page.watchResize(cls)
     function cls:paintTo(bb, x, y)
         local W, H = Screen:getWidth(), Screen:getHeight()
-        local night = Screen.night_mode and true or false
-        if self._night == nil then self._night = night end
-        local night_changed = self._night ~= night
-        self._night = night
-        if self.dimen and (night_changed or self.dimen.w ~= W or self.dimen.h ~= H) and not self._resize_pending then
+        if self.dimen and (self.dimen.w ~= W or self.dimen.h ~= H) and not self._resize_pending then
             self._resize_pending = true
             UIManager:nextTick(function()
                 self._resize_pending = nil
@@ -4642,6 +4642,7 @@ function States.confirmDelete(note, on_delete)
             local lines = buildHighlightLines(cleanHighlightText(note.highlighted_text), face,
                 w - (pad_h + ob) * 2, drawer, note.color, 2, true)
             table.insert(g, RoundedBox:new{ width = w, fill = fill or BlitBuffer.COLOR_WHITE,
+                true_color = not no_fill and drawer ~= "invert",
                 radius = Screen:scaleBySize(6), border = no_fill and ob or 0, border_color = COLORS.line,
                 pad_x = pad_h + ob, pad_y = pad_v + ob, lines })
         end
@@ -4946,7 +4947,7 @@ function FilterScreen:build()
         local extra = 0
         local dots = opts.dots or (opts.dot and { opts.dot }) or {}
         for _i, dname in ipairs(dots) do
-            table.insert(content, Pill:new{ width = Screen:scaleBySize(12), height = Screen:scaleBySize(12), border = 0,
+            table.insert(content, Pill:new{ width = Screen:scaleBySize(12), height = Screen:scaleBySize(12), border = 0, true_color = true,
                 fill = dname == "gray" and BlitBuffer.COLOR_GRAY or getHighlightColor(dname) })
             table.insert(content, HorizontalSpan:new{ width = Screen:scaleBySize(6) })
             extra = extra + Screen:scaleBySize(18)
