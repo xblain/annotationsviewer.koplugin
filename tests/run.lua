@@ -28,6 +28,21 @@ local real = {
     ["ui/widget/textwidget"] = TextWidget,
     ["device"] = { screen = { scaleBySize = function(_, v) return v end, getWidth = function() return 600 end,
                               getHeight = function() return 800 end }, input = {} },
+    -- KOReader's util.splitToWords for the tests: Chinese / Japanese characters one by one,
+    -- everything else (Latin, Hangul) stays whole
+    ["util"] = { splitToWords = function(str)
+        local out = {}
+        for ch in str:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+            local b = ch:byte(1)
+            local cjk = #ch == 3 and b >= 227 and b <= 233
+            if cjk or #out == 0 or (out[#out]:byte(1) >= 227 and out[#out]:byte(1) <= 233 and #out[#out] == 3) then
+                table.insert(out, ch)
+            else
+                out[#out] = out[#out] .. ch
+            end
+        end
+        return out
+    end },
     ["logger"] = { info = function() end, warn = function() end, dbg = function() end },
     ["datastorage"] = { getSettingsDir = function() return "/tmp" end, getDataDir = function() return "/tmp" end },
     ["luasettings"] = { open = function() return { data = {}, readSetting = function() return nil end,
@@ -76,6 +91,31 @@ for _, text in ipairs(samples) do
         check("wrap '" .. text:sub(1, 12) .. "' @" .. w, join(T.wrapText(text, face, w)) == join(naiveWrap(text, w)),
             join(T.wrapText(text, face, w)) .. " vs " .. join(naiveWrap(text, w)))
     end
+end
+-- Chinese / Japanese / Korean text: no spaces to wrap at, so lines must break between characters
+-- (the stand-in measures 10px per byte, a character is 3 bytes = 30px)
+do
+    local function noLineWiderThan(lines, max)
+        for _i, l in ipairs(lines) do if 10 * #l > max then return false end end
+        return true
+    end
+    local samples = {
+        chinese  = "这是一个很长的句子用来测试中文文本在高亮中是否可以正确换行而不会超出屏幕的宽度",
+        japanese = "吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。",
+        korean   = "대한민국은 민주공화국이다 대한민국의 주권은 국민에게 있고 모든 권력은 국민으로부터 나온다",
+        mixed    = "Chapter 3 第三章 The 旅 begins 시작 here",
+    }
+    for name, text in pairs(samples) do
+        local got = T.wrapText(text, face, 240)
+        check(name .. ": wraps into several lines", #got > 1, #got .. " line(s)")
+        check(name .. ": no line wider than the column", noLineWiderThan(got, 240), join(got))
+        -- nothing lost: joining the lines (with a space where the source had one) restores the text
+        local flat = join(got):gsub("|", ""):gsub("%s+", "")
+        check(name .. ": all characters kept", flat == text:gsub("%s+", ""), flat)
+    end
+    -- Latin text is wrapped exactly as before
+    check("latin unchanged", join(T.wrapText("one two three four", face, 100)) == "one two|three four",
+        join(T.wrapText("one two three four", face, 100)))
 end
 -- paragraphs are kept, blank lines dropped, paragraph ends marked
 local lines, para_end = T.wrapText("first para\n\nsecond one here\r\nthird", face, 100)

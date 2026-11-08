@@ -484,10 +484,27 @@ end
 -- measured once per face and summed; only lines that end up within the rounding error of
 -- max_width are measured for real, so the line breaks are unchanged.
 local function wrapParagraph(text, face, max_width, lines)
+-- Words to wrap: split at spaces; Chinese / Japanese / Korean text has none, so such words are
+-- cut into their characters with KOReader's util.splitToWords (the pieces join without a space).
+    local function wrapTokens(txt)
+        local tokens = {}
+        for word in txt:gmatch("%S+") do
+            if word:find("[\227-\237\239]") then
+                for i, piece in ipairs(require("util").splitToWords(word)) do
+                    table.insert(tokens, { piece, i > 1 })
+                end
+            else
+                table.insert(tokens, { word, false })
+            end
+        end
+        return tokens
+    end
     local widths = getWordWidths(face)
     local space_w = widths[" "]
     local current_line, current_w, words_since_exact = "", 0, 0
-    for word in text:gmatch("%S+") do
+    for _t, tok in ipairs(wrapTokens(text)) do
+        local word, joined = tok[1], tok[2]
+        local sep, sep_w = joined and "" or " ", joined and 0 or space_w
         local ww = widths[word]
         if not ww then
             ww = measureTextWidth(word, face)
@@ -496,7 +513,7 @@ local function wrapParagraph(text, face, max_width, lines)
         if current_line == "" then
             current_line, current_w, words_since_exact = word, ww, 0
         else
-            local est = current_w + space_w + ww
+            local est = current_w + sep_w + ww
             -- each summed width can be off by about a pixel of rounding
             local slack = 2 + words_since_exact
             local fits
@@ -507,12 +524,12 @@ local function wrapParagraph(text, face, max_width, lines)
             elseif est > max_width + slack then
                 fits = false
             else
-                local exact = measureTextWidth(current_line .. " " .. word, face)
+                local exact = measureTextWidth(current_line .. sep .. word, face)
                 fits = exact <= max_width
                 if fits then current_w, words_since_exact = exact, 0 end
             end
             if fits then
-                current_line = current_line .. " " .. word
+                current_line = current_line .. sep .. word
             else
                 table.insert(lines, current_line)
                 current_line, current_w, words_since_exact = word, ww, 0
@@ -604,6 +621,25 @@ function UnderlineWidget:paintTo(bb, x, y)
 end
 local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_parent = nil, is_last = false, is_preview = false, disable_tap = false, skip_title = false, skip_info = false }
 
+-- Longest a note (the text you wrote) is shown in the list; longer ones end with "...".
+NoteItemWidget.DEFAULT_NOTE_LINES = 5
+function NoteItemWidget.noteLinesMax()
+    local v = tonumber(getSetting("truncate_note_lines", NoteItemWidget.DEFAULT_NOTE_LINES))
+    if not v or v < 1 then return NoteItemWidget.DEFAULT_NOTE_LINES end
+    return v
+end
+-- First `max` lines, the last one shortened to take the "..." (cutting whole characters).
+function NoteItemWidget.cutLines(lines, max, face, width)
+    if #lines <= max then return lines, false end
+    local out = {}
+    for i = 1, max do out[i] = lines[i] end
+    local last = out[max]
+    while #last > 0 and measureTextWidth(last .. "...", face) > width do
+        last = last:gsub("[\128-\191]*[^\128-\191]$", "")
+    end
+    out[max] = last .. "..."
+    return out, true
+end
 -- Night mode inverts the whole screen. Things that must keep their real colours (highlight
 -- colours and the text on them) are drawn in true colour into a copy of what is behind them and
 -- copied back inverted, so the screen's own inversion turns them right again -- the same idea
@@ -799,7 +835,8 @@ local function measureNoteHeight(note, width, skip_title, skip_info)
             icon_w = measureTextWidth(NOTE_ICON_CHAR, content_face)
             widths[NOTE_ICON_CHAR] = icon_w
         end
-        local n = #wrapText(note.user_note, content_face, line_width - icon_w - Screen:scaleBySize(6))
+        local n = math.min(#wrapText(note.user_note, content_face, line_width - icon_w - Screen:scaleBySize(6)),
+            NoteItemWidget.noteLinesMax())
         h = h + math.max(line_h, n * line_h)
     end
     return h
@@ -814,7 +851,7 @@ local function getLayoutSignature(width)
         width, getHMargin(), getTextMargin(), getTitleMargin(), getInfoMargin(),
         getTitleFontSize(), getInfoFontSize(), getContentFontSize(),
         tostring(getTitleFont()), tostring(getInfoFont()), tostring(getContentFont()),
-        tostring(getTruncateLines()), tostring(getShowInfo()), getInfoFields(), tostring(NoteItemWidget.measure_hide_chapter),
+        tostring(getTruncateLines()), tostring(NoteItemWidget.noteLinesMax()), tostring(getShowInfo()), getInfoFields(), tostring(NoteItemWidget.measure_hide_chapter),
         os.date("%Y%m%d"), -- "Today"/"Yesterday" labels change the info row text
     }, "|")
 end
@@ -1058,7 +1095,8 @@ function NoteItemWidget:init()
         local icon_size = note_icon:getSize().w
 
         local note_text_width = line_width - icon_size - icon_margin
-        local note_lines = wrapText(self.note.user_note, content_face, note_text_width)
+        local note_lines = NoteItemWidget.cutLines(wrapText(self.note.user_note, content_face, note_text_width),
+            NoteItemWidget.noteLinesMax(), content_face, note_text_width)
         local note_text_group = VerticalGroup:new{ align = "left" }
         for _, line in ipairs(note_lines) do
             local line_widget = markw(TextWidget:new{
@@ -5481,6 +5519,7 @@ function SS:build()
         add(sectionBar(_("SIZES")))
         numberRows("font_size")
         add(stepper(_("Lines per highlight"), _("Longer ones end with “…”; tap to read all"), "truncate_lines", getTruncateLines(), 1, 20))
+        add(stepper(_("Lines per note"), _("Longer notes end with “…”; tap to read all"), "truncate_note_lines", NoteItemWidget.noteLinesMax(), 1, 20))
         add(toggle(_("Justify text"), nil, "justify", getJustify))
     elseif self.page == "spacing" then
         add(sectionBar(_("MARGINS")))
@@ -5547,7 +5586,7 @@ function SS:build()
                 end
                 if self.page == "text" then
                     setSetting("title_font", nil); setSetting("info_font", nil); setSetting("content_font", nil)
-                    setSetting("truncate_lines", DEFAULT_TRUNCATE_LINES); setSetting("justify", false)
+                    setSetting("truncate_lines", DEFAULT_TRUNCATE_LINES); setSetting("truncate_note_lines", NoteItemWidget.DEFAULT_NOTE_LINES); setSetting("justify", false)
                 end
                 self:changed()
             end } }
