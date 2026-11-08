@@ -4441,15 +4441,9 @@ function FilterScreen:build()
         table.insert(body, rowLine())
     end
 
-    -- colour & style: chips for the colours and styles that are used; "Exclude instead" flips
+    -- colour & style: chips for all colours and styles; "Hide these instead" flips
     -- between showing only these and hiding these
     do
-        local used_c = {}
-        for _i, n in ipairs(list.notes_list) do
-            local nw = NoteWrapper:new(n)
-            local c = nw:getNormalizedColor()
-            if c then used_c[c] = true end
-        end
         local items = {}
         local function toggle(key)
             af.cs = af.cs or {}
@@ -4457,11 +4451,10 @@ function FilterScreen:build()
             if not next(af.cs) then af.cs, af.cs_exclude = nil, nil end
             self:changed()
         end
+        -- every colour KOReader offers, used or not
         for _i, hc in ipairs(ReaderHighlight.highlight_colors) do
-            if used_c[hc[2]] then
-                local key = "color:" .. hc[2]
-                table.insert(items, chip(hc[1], af.cs and af.cs[key], function() toggle(key) end, { dot = hc[2] }))
-            end
+            local key = "color:" .. hc[2]
+            table.insert(items, chip(hc[1], af.cs and af.cs[key], function() toggle(key) end, { dot = hc[2] }))
         end
         -- all four styles are always offered
         for _i, st in ipairs(HIGHLIGHT_STYLES) do
