@@ -4168,6 +4168,44 @@ function Page.scrollable(w, h, show_parent, child)
     return Page.ScrollClass:new{ dimen = Geom:new{ w = w, h = h }, show_parent = show_parent,
         Page.ClipClass:new{ clip_w = w - 3 * SB_THUMB_WIDTH, child } }
 end
+-- Live sample of the list for the Text / Spacing pages: two real annotations drawn with the
+-- current settings, clipped to a fixed height so the page below does not move.
+Page.PreviewClip = WidgetContainer:extend{ w = 0, h = 0 }
+function Page.PreviewClip:getSize() return Geom:new{ w = self.w, h = self.h } end
+function Page.PreviewClip:paintTo(bb, x, y)
+    self.dimen = Geom:new{ x = x, y = y, w = self.w, h = self.h }
+    local buf = BlitBuffer.new(self.w, self.h, bb:getType())
+    buf:fill(BlitBuffer.COLOR_WHITE)
+    self[1]:paintTo(buf, 0, 0)
+    bb:blitFrom(buf, x, y, 0, 0, self.w, self.h)
+    buf:free()
+end
+function Page.preview(list, h)
+    local W = Screen:getWidth()
+    local samples = {
+        { book_title = "Arrow of God", book_authors = "Chinua Achebe", chapter = "Chapter Two",
+          datetime = "2026-01-09 10:12:00", drawer = "lighten", color = "yellow",
+          highlighted_text = "pots in all the surrounding country. Everyone carried a towering load of five or six or even more big water pots held together with a net of ropes on a long basket.",
+          user_note = "Lovely image of the water carriers." },
+        { book_title = "Arrow of God", book_authors = "Chinua Achebe", chapter = "Chapter Two",
+          datetime = "2026-01-09 10:20:00", drawer = "lighten", color = "blue",
+          highlighted_text = "A man who has just come in from the farm and is still wearing his working clothes." },
+    }
+    local g = VerticalGroup:new{ align = "left" }
+    local top = getTopPadding()
+    if top > 0 then table.insert(g, VerticalSpan:new{ width = top }) end
+    local nw = (list.note_width and list.note_width < W) and list.note_width or W
+    for i, n in ipairs(samples) do
+        if i > 1 then table.insert(g, VerticalSpan:new{ width = getNoteSpacing() }) end
+        local ok, wdg = pcall(function()
+            return NoteItemWidget:new{ width = nw, note = n, show_parent = list, skip_title = i > 1, disable_tap = true }
+        end)
+        if ok then table.insert(g, wdg) end
+    end
+    return VerticalGroup:new{ align = "left",
+        Page.PreviewClip:new{ w = W, h = h, g },
+        LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line } }
+end
 function Page.countText(n)
     return n == 1 and _("Show 1 annotation") or string.format(_("Show %d annotations"), n)
 end
@@ -4989,27 +5027,19 @@ function SS:build()
         end
     end
     if self.page == "text" then
-        add(sectionBar(_("TEXT")))
+        add(sectionBar(_("FONTS")))
         add(fontRow(_("Title font"), "title_font", getTitleFont))
         add(fontRow(_("Info font"), "info_font", getInfoFont))
         add(fontRow(_("Content font"), "content_font", getContentFont))
+        add(sectionBar(_("SIZES")))
         numberRows("font_size")
         add(stepper(_("Lines per highlight"), _("Longer ones end with “…”; tap to read all"), "truncate_lines", getTruncateLines(), 1, 20))
         add(toggle(_("Justify text"), nil, "justify", getJustify))
-
-        add(sectionBar(_("SPACING")))
+    elseif self.page == "spacing" then
+        add(sectionBar(_("MARGINS")))
         numberRows("margins")
+        add(sectionBar(_("AROUND HEADINGS")))
         numberRows("section_margin")
-        do -- back to the defaults for all sizes and spacing
-            local tw = TextWidget:new{ text = _("Reset text and spacing"), face = face13 }
-            add(padded(TapBox:new{ VerticalGroup:new{ tw, LineWidget:new{ dimen = Geom:new{ w = tw:getSize().w, h = Size.line.medium },
-                background = BlitBuffer.COLOR_BLACK } }, callback = function()
-                    for _i, key in ipairs({ "font_size", "margins", "section_margin" }) do
-                        for _j, st in ipairs(SPIN_MENUS[key].settings) do setSetting(st.key, st.default) end
-                    end
-                    self:changed()
-                end }, Screen:scaleBySize(14), Screen:scaleBySize(14)))
-        end
     elseif self.page == "info" then
         add(sectionBar(_("INFO ROW")))
         add(toggle(_("Show book / info row"), nil, "show_info", getShowInfo))
@@ -5021,8 +5051,10 @@ function SS:build()
         add(fieldChips(_("Duplicate check"), _("Repeated info is hidden when these match"), getDedupInfoFields, "dedup_info_fields"))
     else
         add(sectionBar(_("LIST")))
-        add(navRow(_("Text and spacing"), string.format("%d · %d · %d", getTitleFontSize(), getInfoFontSize(), getContentFontSize()),
+        add(navRow(_("Text"), string.format("%d · %d · %d", getTitleFontSize(), getInfoFontSize(), getContentFontSize()),
             function() UIManager:show(SS:new{ list = list, page = "text" }, "flashui") end))
+        add(navRow(_("Spacing"), string.format("%d · %d", getSetting("h_margin", DEFAULT_H_MARGIN), getSetting("note_spacing", DEFAULT_NOTE_SPACING)),
+            function() UIManager:show(SS:new{ list = list, page = "spacing" }, "flashui") end))
         do
             local names = {}
             local active = {}
@@ -5050,14 +5082,37 @@ function SS:build()
             function() return getSetting("hide_unused_cs", false) == true end))
     end
 
-    local titles = { text = _("Text and spacing"), info = _("Info row and repeats") }
-    local header = Page.header(self, titles[self.page] or _("Settings"), function() self:onClose() end)
-    local avail = H - header:getSize().h
-    if not self.narrow and body:getSize().h > avail then self.narrow = true; return self:build() end
+    local titles = { text = _("Text"), spacing = _("Spacing"), info = _("Info row and repeats") }
+    local right_items
+    if self.page == "text" or self.page == "spacing" then
+        local keys = self.page == "text" and { "font_size" } or { "margins", "section_margin" }
+        right_items = { TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = Screen:scaleBySize(90), h = TOPBAR_HEIGHT },
+                (function()
+                    local tw = TextWidget:new{ text = _("Reset"), face = Font:getFace("cfont", 14) }
+                    return VerticalGroup:new{ tw, LineWidget:new{ dimen = Geom:new{ w = tw:getSize().w, h = Size.line.medium },
+                        background = BlitBuffer.COLOR_BLACK } }
+                end)() },
+            callback = function()
+                for _i, key in ipairs(keys) do
+                    for _j, st in ipairs(SPIN_MENUS[key].settings) do setSetting(st.key, st.default) end
+                end
+                if self.page == "text" then
+                    setSetting("title_font", nil); setSetting("info_font", nil); setSetting("content_font", nil)
+                    setSetting("truncate_lines", DEFAULT_TRUNCATE_LINES); setSetting("justify", false)
+                end
+                self:changed()
+            end } }
+    end
+    local header = Page.header(self, titles[self.page] or _("Settings"), function() self:onClose() end, right_items)
+    local top_group = VerticalGroup:new{ align = "left", header }
+    if self.page == "text" or self.page == "spacing" then
+        table.insert(top_group, Page.preview(self.list, math.floor(H * 0.26)))
+    end
+    local avail = H - top_group:getSize().h
     self.scroller = Page.scrollable(W, avail, self, body)
     self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0,
         background = BlitBuffer.COLOR_WHITE,
-        VerticalGroup:new{ align = "left", header, self.scroller } }
+        VerticalGroup:new{ align = "left", top_group, self.scroller } }
 end
 end
 
