@@ -4466,13 +4466,13 @@ end
 function Page.preview(list, h)
     local W = Screen:getWidth()
     local samples = {
-        { book_title = "Arrow of God", book_authors = "Chinua Achebe", chapter = "Chapter Two",
+        { book_title = "Lorem Ipsum", book_authors = "Dolor Sit", chapter = "Chapter One",
           datetime = "2026-01-09 10:12:00", drawer = "lighten", color = "yellow",
-          highlighted_text = "pots in all the surrounding country. Everyone carried a towering load of five or six or even more big water pots held together with a net of ropes on a long basket.",
-          user_note = "Lovely image of the water carriers." },
-        { book_title = "Arrow of God", book_authors = "Chinua Achebe", chapter = "Chapter Two",
+          highlighted_text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
+          user_note = "Duis aute irure dolor in reprehenderit in voluptate velit esse." },
+        { book_title = "Lorem Ipsum", book_authors = "Dolor Sit", chapter = "Chapter One",
           datetime = "2026-01-09 10:20:00", drawer = "lighten", color = "blue",
-          highlighted_text = "A man who has just come in from the farm and is still wearing his working clothes." },
+          highlighted_text = "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum." },
     }
     local g = VerticalGroup:new{ align = "left" }
     local top = getTopPadding()
