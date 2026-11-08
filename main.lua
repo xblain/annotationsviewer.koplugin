@@ -238,6 +238,7 @@ local SPIN_MENUS = {
         settings = {
             { label = _("Top padding: "), key = "top_padding", default = DEFAULT_TOP_PADDING, min = 0, max = 100, step = 5, getter = function() return getSetting("top_padding", DEFAULT_TOP_PADDING) end },
             { label = _("Horizontal margin: "), key = "h_margin", default = DEFAULT_H_MARGIN, min = 5, max = 60, step = 5, getter = function() return getSetting("h_margin", DEFAULT_H_MARGIN) end },
+            { label = _("Landscape width (%): "), key = "landscape_width_pct", default = 80, min = 40, max = 100, step = 5, getter = function() return getSetting("landscape_width_pct", 80) end },
             { label = _("Note spacing: "), key = "note_spacing", default = DEFAULT_NOTE_SPACING, min = 5, max = 100, step = 2, getter = function() return getSetting("note_spacing", DEFAULT_NOTE_SPACING) end },
             { label = _("Text margin: "), key = "text_margin", default = DEFAULT_TEXT_MARGIN, min = 0, max = 30, step = 2, getter = function() return getSetting("text_margin", DEFAULT_TEXT_MARGIN) end },
         }
@@ -699,6 +700,13 @@ local NOTE_ICON_CHAR = "\u{F040}"
 
 -- Height NoteItemWidget:init() would produce for these params, computed without building
 -- any widgets. Must mirror the layout in NoteItemWidget:init().
+-- Width of the annotation column: portrait uses all the room the scrollbar leaves (the side
+-- margin does the rest); landscape uses the "Landscape width" share of the screen, centred.
+function NoteItemWidget.columnWidth(avail, W, H)
+    if W <= H then return avail end
+    local pct = tonumber(getSetting("landscape_width_pct", 80)) or 80
+    return math.min(avail, math.floor(W * math.max(pct, 30) / 100))
+end
 function NoteItemWidget.showHeadings() return getSetting("chapter_headings", true) ~= false end
 function NoteItemWidget.repeatChapter() return getSetting("repeat_chapter_on_page", true) ~= false end
 -- Chapter heading of the one-book list: drawn exactly like a book header (same font, line, margin).
@@ -1297,10 +1305,7 @@ function NotesListWidget:computeLayout()
     self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
     -- width given to each annotation, and how far it is pushed right (landscape column)
     local avail = isScrollbarStyle(pag_style) and self.sb_track_center or self.width
-    self.note_width = avail
-    if self.width > self.height then
-        self.note_width = math.min(avail, math.floor(self.height * 1.1))
-    end
+    self.note_width = NoteItemWidget.columnWidth(avail, self.width, self.height)
     self.note_x_offset = math.floor((avail - self.note_width) / 2)
 end
 function NotesListWidget:init()
@@ -4326,8 +4331,7 @@ function Page.preview(list, h)
     if top > 0 then table.insert(g, VerticalSpan:new{ width = top }) end
     -- same width and centring as the real list
     local avail = isScrollbarStyle() and (W - SB_STRIP_WIDTH - SB_MARGIN_RIGHT + math.floor(SB_STRIP_WIDTH / 2)) or W
-    local nw = avail
-    if W > Screen:getHeight() then nw = math.min(avail, math.floor(Screen:getHeight() * 1.1)) end
+    local nw = NoteItemWidget.columnWidth(avail, W, Screen:getHeight())
     local x_off = math.floor((avail - nw) / 2)
     for i, n in ipairs(samples) do
         if i > 1 then table.insert(g, VerticalSpan:new{ width = getNoteSpacing() }) end
