@@ -4301,6 +4301,14 @@ function Page.PreviewClip:paintTo(bb, x, y)
     self[1]:paintTo(buf, 0, 0)
     bb:blitFrom(buf, x, y, 0, 0, self.w, self.h)
     buf:free()
+    if isScrollbarStyle() then -- the list's scrollbar: thin track and an outlined thumb, as a sample
+        local cx = self.w - SB_STRIP_WIDTH - SB_MARGIN_RIGHT + math.floor(SB_STRIP_WIDTH / 2)
+        local top, bot = Screen:scaleBySize(10), self.h - Screen:scaleBySize(10)
+        bb:paintRect(x + cx, y + top, Size.line.thin, bot - top, BlitBuffer.COLOR_BLACK)
+        local tw, th = SB_THUMB_WIDTH, math.floor((bot - top) / 3)
+        bb:paintRect(x + cx - math.floor(tw / 2), y + top, tw, th, BlitBuffer.COLOR_WHITE)
+        bb:paintBorder(x + cx - math.floor(tw / 2), y + top, tw, th, Size.border.default, BlitBuffer.COLOR_BLACK, math.floor(tw / 2))
+    end
 end
 function Page.preview(list, h)
     local W = Screen:getWidth()
