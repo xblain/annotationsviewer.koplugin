@@ -3150,6 +3150,19 @@ end
 -- Rotation doesn't always reach this widget as an event, so also check the size whenever
 -- we're painted and re-layout (outside the paint) if the screen changed.
 function NotesListWidget:paintTo(bb, x, y)
+    -- night mode switched while open: colours are drawn pre-inverted, so draw them again
+    local night = Screen.night_mode and true or false
+    if self._night == nil then self._night = night end
+    if self._night ~= night and not self._resize_pending then
+        self._night = night
+        self._resize_pending = true
+        UIManager:nextTick(function()
+            self._resize_pending = nil
+            self:calculatePages()
+            self:updatePage()
+            UIManager:setDirty(self, "full")
+        end)
+    end
     if (self.width ~= Screen:getWidth() or self.height ~= Screen:getHeight()) and not self._resize_pending then
         self._resize_pending = true
         UIManager:nextTick(function()
@@ -4345,11 +4358,31 @@ function Page.forwardGestures(cls)
     end
 end
 Page.forwardGestures(AnnotationSheet)
+do -- redraw the open sheet when night mode is switched (its colours are drawn pre-inverted)
+    local base_paint = AnnotationSheet.paintTo
+    function AnnotationSheet:paintTo(bb, x, y)
+        local night = Screen.night_mode and true or false
+        if self._night == nil then self._night = night end
+        if self._night ~= night and not self._night_pending then
+            self._night, self._night_pending = night, true
+            UIManager:nextTick(function()
+                self._night_pending = nil
+                self:rebuild()
+                UIManager:setDirty("all", "full")
+            end)
+        end
+        return base_paint(self, bb, x, y)
+    end
+end
 -- Full-screen pages: rebuild for the new size when the screen was rotated.
 function Page.watchResize(cls)
     function cls:paintTo(bb, x, y)
         local W, H = Screen:getWidth(), Screen:getHeight()
-        if self.dimen and (self.dimen.w ~= W or self.dimen.h ~= H) and not self._resize_pending then
+        local night = Screen.night_mode and true or false
+        if self._night == nil then self._night = night end
+        local night_changed = self._night ~= night
+        self._night = night
+        if self.dimen and (night_changed or self.dimen.w ~= W or self.dimen.h ~= H) and not self._resize_pending then
             self._resize_pending = true
             UIManager:nextTick(function()
                 self._resize_pending = nil
