@@ -625,38 +625,53 @@ function NoteItemWidget.chapterLabel(chapter)
     local num = chapter:match("^%s*(%d+)[%.%s]*$")
     return num and (_("Chapter") .. " " .. num) or chapter
 end
--- Chapter heading shown in the one-book list when the chapter changes (and at the top of a page).
-function NoteItemWidget.headingHeight()
-    return Screen:scaleBySize(30)
-end
-function NoteItemWidget.chapterHeading(chapter, width)
-    local h_margin = getHMargin()
-    local pad = Size.padding.default
-    local tw = TextWidget:new{ text = NoteItemWidget.chapterLabel(chapter),
-        face = getFaceOr(SERIF_FONT, 15, "cfont"), bold = true, fgcolor = COLORS.ink,
-        max_width = width - h_margin * 2 - pad * 2 }
-    return HorizontalGroup:new{ HorizontalSpan:new{ width = h_margin + pad },
-        BottomContainer:new{ dimen = Geom:new{ w = tw:getSize().w, h = NoteItemWidget.headingHeight() },
-            VerticalGroup:new{ tw, VerticalSpan:new{ width = Screen:scaleBySize(6) } } } }
-end
--- Search words found in one line of text: list of { x, w } (pixels) to underline.
-function NoteItemWidget.searchMarks(line, query, case_sensitive, face)
+-- Search words in a drawn line get a thick black line underneath. `widget` is a TextWidget, or a
+-- justified line (HorizontalGroup of word widgets and gaps); `text` is the line's text.
+function NoteItemWidget.markLine(widget, text, query, case_sensitive, face)
+    if not query or query == "" or not text or text == "" then return widget end
+    local function words_in(str)
+        local found = {}
+        local hay = case_sensitive and str or str:lower()
+        local q = case_sensitive and query or query:lower()
+        for word in q:gmatch("%S+") do
+            local from = 1
+            while true do
+                local a, b = hay:find(word, from, true)
+                if not a then break end
+                local pre = TextWidget:new{ text = str:sub(1, a - 1), face = face }
+                local mid = TextWidget:new{ text = str:sub(a, b), face = face }
+                table.insert(found, { x = pre:getSize().w, w = mid:getSize().w })
+                pre:free(); mid:free()
+                from = b + 1
+            end
+        end
+        return found
+    end
     local marks = {}
-    local text = case_sensitive and line or line:lower()
-    local q = case_sensitive and query or query:lower()
-    for word in q:gmatch("%S+") do
-        local from = 1
-        while true do
-            local a, b = text:find(word, from, true)
-            if not a then break end
-            local pre = TextWidget:new{ text = line:sub(1, a - 1), face = face }
-            local mid = TextWidget:new{ text = line:sub(a, b), face = face }
-            table.insert(marks, { x = pre:getSize().w, w = mid:getSize().w })
-            pre:free(); mid:free()
-            from = b + 1
+    if widget.text ~= nil then -- single TextWidget
+        marks = words_in(text)
+    else -- justified: word widgets with their own gaps
+        local x = 0
+        for _i, ch in ipairs(widget) do
+            local cw = ch:getSize().w
+            if ch.text ~= nil then
+                for _j, m in ipairs(words_in(ch.text)) do table.insert(marks, { x = x + m.x, w = m.w }) end
+            end
+            x = x + cw
         end
     end
-    return marks
+    if #marks == 0 then return widget end
+    local size = widget:getSize()
+    local thick = math.max(2, Screen:scaleBySize(2))
+    local og = OverlapGroup:new{ dimen = Geom:new{ w = size.w, h = size.h }, widget }
+    for _i, mk in ipairs(marks) do
+        if mk.x < size.w then
+            local mark = LineWidget:new{ dimen = Geom:new{ w = math.max(1, math.min(mk.w, size.w - mk.x)), h = thick }, background = BlitBuffer.COLOR_BLACK }
+            mark.overlap_offset = { mk.x, size.h - thick }
+            table.insert(og, mark)
+        end
+    end
+    return og
 end
 -- Author shown on the right of the book header, in capitals; nil when off.
 local function getHeaderAuthor(note_wrapper)
@@ -684,6 +699,29 @@ local NOTE_ICON_CHAR = "\u{F040}"
 
 -- Height NoteItemWidget:init() would produce for these params, computed without building
 -- any widgets. Must mirror the layout in NoteItemWidget:init().
+-- Chapter heading of the one-book list: drawn exactly like a book header (same font, line, margin).
+function NoteItemWidget.headingHeight(chapter, width)
+    local content_width = width - getHMargin() * 2 - Size.padding.default * 2
+    local title_face, info_face = getNoteFaces()
+    local _tw, _aw, header_h = getHeaderLayout(NoteItemWidget.chapterLabel(chapter), nil, title_face, info_face, content_width)
+    return header_h + getTitleMargin()
+end
+function NoteItemWidget.chapterHeading(chapter, width)
+    local h_margin = getHMargin()
+    local h_padding = Size.padding.default
+    local inner_width = width - h_margin * 2
+    local content_width = inner_width - h_padding * 2
+    local title_face, info_face = getNoteFaces()
+    local text = NoteItemWidget.chapterLabel(chapter)
+    local title_w, _aw, header_h = getHeaderLayout(text, nil, title_face, info_face, content_width)
+    local widget = VerticalGroup:new{ align = "left",
+        TextBoxWidget:new{ text = text, face = title_face, width = title_w, alignment = "left", bold = true },
+        VerticalSpan:new{ width = HEADER_LINE_GAP },
+        LineWidget:new{ dimen = Geom:new{ w = content_width, h = Size.line.thin }, background = COLORS.line_light } }
+    widget = CenterContainer:new{ dimen = Geom:new{ w = content_width, h = header_h }, widget }
+    return HorizontalGroup:new{ HorizontalSpan:new{ width = h_margin + h_padding },
+        VerticalGroup:new{ widget, VerticalSpan:new{ width = getTitleMargin() } } }
+end
 local function measureNoteHeight(note, width, skip_title, skip_info)
     local h_margin = getHMargin()
     local text_margin = getTextMargin()
@@ -845,6 +883,12 @@ function NoteItemWidget:init()
 
     local text_content_width = content_width - text_margin * 2
     local line_width = text_content_width - Size.padding.small * 2
+    -- underline the search words (not in the faded preview of the next annotation)
+    local search_af = self.show_parent and self.show_parent.active_filter
+    local function markw(widget, text)
+        if self.is_preview or not search_af or not search_af.search_any then return widget end
+        return NoteItemWidget.markLine(widget, text, search_af.search_any, search_af.search_any_case == true, content_face)
+    end
 
     local note_content = VerticalGroup:new{ align = "left" }
     if header_widget then
@@ -903,39 +947,20 @@ function NoteItemWidget:init()
                     local ell_w = ell_meas:getSize().w
                     ell_meas:free()
                     if last_line_no_ell and #last_line_no_ell > 0 then
-                        local justified_part = createJustifiedLine(last_line_no_ell, content_face, math.max(0, line_width - ell_w), text_fgcolor)
+                        local justified_part = markw(createJustifiedLine(last_line_no_ell, content_face, math.max(0, line_width - ell_w), text_fgcolor), last_line_no_ell)
                         local ell_widget = TextWidget:new{ text = ell, face = content_face, fgcolor = text_fgcolor }
                         line_widget = HorizontalGroup:new{ justified_part, ell_widget }
                     else
                         line_widget = TextWidget:new{ text = ell, face = content_face, fgcolor = text_fgcolor }
                     end
                 else
-                    line_widget = TextWidget:new{ text = (last_line_no_ell or line) .. ell, face = content_face, fgcolor = text_fgcolor }
+                    line_widget = markw(TextWidget:new{ text = (last_line_no_ell or line) .. ell, face = content_face, fgcolor = text_fgcolor }, (last_line_no_ell or line) .. ell)
                 end
             else
                 if justify == true and i < #lines and #lines > 1 and not para_end[i] then
-                    line_widget = createJustifiedLine(line, content_face, line_width, text_fgcolor)
+                    line_widget = markw(createJustifiedLine(line, content_face, line_width, text_fgcolor), line)
                 else
-                    line_widget = TextWidget:new{ text = line, face = content_face, fgcolor = text_fgcolor }
-                end
-            end
-            -- search words get a thick line underneath (not on stretched justified lines)
-            local af = self.show_parent and self.show_parent.active_filter
-            local stretched = justify == true and i < #lines and #lines > 1 and not para_end[i]
-            if af and af.search_any and af.search_any ~= "" and not self.is_preview and not stretched then
-                local marks = NoteItemWidget.searchMarks(line, af.search_any, af.search_any_case == true, content_face)
-                if #marks > 0 then
-                    local lw = line_widget:getSize()
-                    local thick = math.max(2, Screen:scaleBySize(2))
-                    local og = OverlapGroup:new{ dimen = Geom:new{ w = lw.w, h = lw.h }, line_widget }
-                    for _m, mk in ipairs(marks) do
-                        if mk.x < lw.w then
-                            local mark = LineWidget:new{ dimen = Geom:new{ w = math.min(mk.w, lw.w - mk.x), h = thick }, background = BlitBuffer.COLOR_BLACK }
-                            mark.overlap_offset = { mk.x, lw.h - thick }
-                            table.insert(og, mark)
-                        end
-                    end
-                    line_widget = og
+                    line_widget = markw(TextWidget:new{ text = line, face = content_face, fgcolor = text_fgcolor }, line)
                 end
             end
             local line_size = line_widget:getSize()
@@ -993,9 +1018,9 @@ function NoteItemWidget:init()
         local note_lines = wrapText(self.note.user_note, content_face, note_text_width)
         local note_text_group = VerticalGroup:new{ align = "left" }
         for _, line in ipairs(note_lines) do
-            local line_widget = TextWidget:new{
+            local line_widget = markw(TextWidget:new{
                 text = line, face = content_face, fgcolor = BlitBuffer.COLOR_BLACK,
-            }
+            }, line)
             table.insert(note_text_group, line_widget)
         end
 
@@ -1430,7 +1455,6 @@ function NotesListWidget:calculatePages()
     self.book_start_pages = {}
     NoteItemWidget.measure_hide_chapter = self.single_book and true or false
     local layout_sig = getLayoutSignature(note_width)
-    local head_h = NoteItemWidget.headingHeight()
     local prev_chapter = nil
     for i, note in ipairs(self.filtered_notes) do
         local is_first_on_page = (#current_page_notes == 0)
@@ -1438,7 +1462,7 @@ function NotesListWidget:calculatePages()
         if self.single_book then skip_title = true end
         local item_height = getNoteHeight(note, note_width, skip_title, skip_info, layout_sig)
         local has_ch = self.single_book and note.chapter and note.chapter ~= ""
-        if has_ch and (is_first_on_page or note.chapter ~= prev_chapter) then item_height = item_height + head_h end
+        if has_ch and (is_first_on_page or note.chapter ~= prev_chapter) then item_height = item_height + NoteItemWidget.headingHeight(note.chapter, note_width) end
         local spacing = 0
         if not is_first_on_page then
             spacing = note_spacing + (skip_title and 0 or BOOK_GAP)
@@ -1453,7 +1477,7 @@ function NotesListWidget:calculatePages()
             current_page_notes = {i}
             local st, si = getHeaderSkips(note, true, dedup_prev_title, dedup_prev_info_key, dedup_fields)
             if self.single_book then st = true end
-            current_height = getNoteHeight(note, note_width, st, si, layout_sig) + (has_ch and head_h or 0)
+            current_height = getNoteHeight(note, note_width, st, si, layout_sig) + (has_ch and NoteItemWidget.headingHeight(note.chapter, note_width) or 0)
         end
         prev_chapter = note.chapter
         if note.book_title ~= dedup_prev_title then
@@ -2015,7 +2039,7 @@ function NotesListWidget:updatePage()
             end
             if self.single_book and note.chapter and note.chapter ~= "" and (is_first_on_page or note.chapter ~= prev_chapter) then
                 table.insert(notes_group, place(NoteItemWidget.chapterHeading(note.chapter, note_width)))
-                row_y = row_y + NoteItemWidget.headingHeight()
+                row_y = row_y + NoteItemWidget.headingHeight(note.chapter, note_width)
             end
             prev_chapter = note.chapter
             local note_widget = NoteItemWidget:new{ width = note_width, note = note, show_parent = self, skip_title = skip_title, skip_info = skip_info }
