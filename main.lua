@@ -2209,118 +2209,13 @@ function NotesListWidget:sortNotesList(notes_list, sort_mode)
     return notes_list
 end
 function NotesListWidget:showSettingsMenu()
-    local function makeToggleSetting(key, getter)
-        return function()
-            UIManager:close(self.settings_dialog)
-            setSetting(key, not (getter() == true))
-            self:refresh()
-            self:showSettingsMenu()
-        end
+    -- the sub-dialogs (spin settings, typefaces) come back here: rebuild the page if it is open
+    if self.settings_screen then
+        self.settings_screen:rebuild()
+        return
     end
-    local function sub(fn)
-        return function()
-            UIManager:close(self.settings_dialog)
-            fn()
-        end
-    end
-
-    local function onoff(v) return v and "On" or "Off" end
-    local function check(v) return v and "\u{2713}" or "○" end
-
-    -- Info fields helpers (inline toggles, no submenu)
-    local info_active = {}
-    for f in getInfoFields():gmatch("[^,]+") do info_active[f] = true end
-    local function toggleInfoField(f)
-        UIManager:close(self.settings_dialog)
-        if info_active[f] then info_active[f] = nil else info_active[f] = true end
-        local parts = {}
-        for _, k in ipairs({"date","author","chapter"}) do if info_active[k] then table.insert(parts, k) end end
-        setSetting("info_fields", #parts > 0 and table.concat(parts,",") or "date")
-        self:refresh(); self:showSettingsMenu()
-    end
-    local dedup_active = {}
-    for f in getDedupInfoFields():gmatch("[^,]+") do dedup_active[f] = true end
-    local function toggleDedupField(f)
-        UIManager:close(self.settings_dialog)
-        if dedup_active[f] then dedup_active[f] = nil else dedup_active[f] = true end
-        local parts = {}
-        for _, k in ipairs({"date","author","chapter"}) do if dedup_active[k] then table.insert(parts, k) end end
-        setSetting("dedup_info_fields", #parts > 0 and table.concat(parts,",") or "date")
-        self:refresh(); self:showSettingsMenu()
-    end
-
-    local buttons = {
-        -- Section: Appearance
-        {},
-        {{ text = _("Appearance"), enabled = false }},
-        {
-            { text = _("Font Sizes..."),     callback = sub(function() self:showSpinMenu("font_size",      function() self:showSettingsMenu() end) end) },
-            { text = _("Typefaces..."),      callback = sub(function() self:showFontsMenu() end) },
-        },
-        {
-            { text = _("Page Margins..."),   callback = sub(function() self:showSpinMenu("margins",        function() self:showSettingsMenu() end) end) },
-            { text = _("Space Between Notes..."),  callback = sub(function() self:showSpinMenu("section_margin", function() self:showSettingsMenu() end) end) },
-        },
-        {
-            { text = _("Max Lines Per Highlight: ") .. getTruncateLines(), callback = sub(function()
-                self:showSpinSetting(_("Max Lines per Highlight"), "truncate_lines", DEFAULT_TRUNCATE_LINES, 1, 20, 1, function() self:showSettingsMenu() end)
-            end) },
-            { text = _("Justify Text: ") .. onoff(getJustify()), callback = makeToggleSetting("justify", getJustify) },
-        },
-        -- Section: Content
-        {},
-        {{ text = _("Content"), enabled = false }},
-        {
-            { text = _("Counts on Tabs: ") .. onoff(getShowTotalNotes()),  callback = makeToggleSetting("show_total",           getShowTotalNotes) },
-            { text = _("Filter Button: ")        .. onoff(getFilterTitlebarBtn()),callback = makeToggleSetting("filter_titlebar_btn", getFilterTitlebarBtn) },
-        },
-        {
-            { text = _("Show Book / Info Row: ") .. onoff(getShowInfo()),              callback = makeToggleSetting("show_info",                  getShowInfo) },
-        },
-        {
-            { text = _("Title on Each Page: ") .. onoff(getRepeatTitleOnPage()), callback = makeToggleSetting("repeat_title_on_page", getRepeatTitleOnPage) },
-            { text = _("Chapter/Date on Each Page: ") .. onoff(getRepeatInfoOnPage()), callback = makeToggleSetting("repeat_info_on_page", getRepeatInfoOnPage) },
-        },
-        {
-            { text = _("Hide Duplicate Book Header: ") .. onoff(getHideDupTitle()), callback = makeToggleSetting("hide_dup_title", getHideDupTitle) },
-            { text = _("Hide Duplicate Info Header: ") .. onoff(getHideDupInfo()),  callback = makeToggleSetting("hide_dup_info",  getHideDupInfo) },
-        },
-        -- Info header fields row (what shows in the book/info row)
-        {},
-        {{ text = _("Info Row Fields"), enabled = false }},
-        {
-            { text = check(info_active["date"])    .. " " .. _("Date"),    callback = function() toggleInfoField("date")    end },
-            { text = check(info_active["author"])  .. " " .. _("Author"),  callback = function() toggleInfoField("author")  end },
-            { text = check(info_active["chapter"]) .. " " .. _("Chapter"), callback = function() toggleInfoField("chapter") end },
-        },
-        -- Dedup match fields row (which fields count as "duplicate info")
-        {},
-        {{ text = _("Duplicate Info Check Fields"), enabled = false }},
-        {
-            { text = check(dedup_active["date"])    .. " " .. _("Date"),    callback = function() toggleDedupField("date")    end },
-            { text = check(dedup_active["author"])  .. " " .. _("Author"),  callback = function() toggleDedupField("author")  end },
-            { text = check(dedup_active["chapter"]) .. " " .. _("Chapter"), callback = function() toggleDedupField("chapter") end },
-        },
-        -- Section: Navigation
-        {},
-        {{ text = _("Navigation"), enabled = false }},
-        {
-            { text = _("Pagination Style..."), callback = sub(function() self:showPaginationStyleMenu() end) },
-            { text = _("Swipe Gestures..."),  callback = sub(function() self:showSwipeSettingMenu() end) },
-        },
-        {
-            { text = _("Book Marks on Scrollbar: ") .. onoff(getScrollbarBookMarks()), callback = makeToggleSetting("sb_book_marks", getScrollbarBookMarks) },
-        },
-        {
-            { text = _("Filter: Only Used Colours/Styles: ") .. onoff(getSetting("hide_unused_cs", false) == true), callback = makeToggleSetting("hide_unused_cs", function() return getSetting("hide_unused_cs", false) == true end) },
-        },
-        {{ text = _("Back"), callback = function()
-            UIManager:close(self.settings_dialog)
-            self:showMainMenu()
-        end }},
-    }
-    self.settings_dialog = ButtonDialogTitle:new{ title = _("Settings"), buttons = buttons }
-    UIManager:show(self.settings_dialog)
+    self.settings_screen = NotesListWidget.SettingsScreen:new{ list = self }
+    UIManager:show(self.settings_screen, "flashui")
 end
 function NotesListWidget:showPaginationStyleMenu()
     local current = getPaginationStyle()
@@ -4885,6 +4780,208 @@ function NotesListWidget:showFilterScreen(helpers)
     if self.filter_screen then UIManager:close(self.filter_screen) end
     self.filter_screen = FilterScreen:new{ list = self, helpers = helpers }
     UIManager:show(self.filter_screen, "flashui")
+end
+
+-- Settings: one full-screen page (Text / List / Pages / Filter) instead of the chain of button
+-- dialogs. Every setting is still here; changes apply straight away. The list-of-numbers
+-- settings (font sizes, margins, spacing) and the typeface picker keep their own dialogs.
+do -- own scope: keeps the main chunk under Lua's 200-locals limit
+local SS = InputContainer:extend{ list = nil, covers_fullscreen = true }
+NotesListWidget.SettingsScreen = SS
+function SS:init()
+    self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
+    if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
+    self:build()
+end
+function SS:rebuild()
+    local offset = self.scroller and self.scroller:getScrolledOffset()
+    self:build()
+    if offset and self.scroller then self.scroller:setScrolledOffset(offset) end
+    UIManager:setDirty(self, "ui")
+end
+-- a changed setting: redraw the list behind, then this page
+function SS:changed()
+    self.list:refresh()
+    self:rebuild()
+end
+function SS:onClose()
+    UIManager:close(self, "flashui")
+    return true
+end
+function SS:onCloseWidget()
+    if self.list.settings_screen == self then self.list.settings_screen = nil end
+end
+function SS:build()
+    local W, H = Screen:getWidth(), Screen:getHeight()
+    local P = Screen:scaleBySize(24)
+    local inner = W - P * 2
+    local thin = Size.border.button
+    local MUTED = COLORS.muted
+    local face15, face13 = Font:getFace("cfont", 15), Font:getFace("cfont", 13)
+    local face12 = Font:getFace("cfont", 12)
+    local function rowLine() return LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line_light } end
+    local function sectionBar(text)
+        local tw = TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.section_fg }
+        return FrameContainer:new{ background = COLORS.section_bg, bordersize = 0, margin = 0,
+            padding = Screen:scaleBySize(7), padding_left = P, width = W, tw }
+    end
+    local function padded(widget, top, bottom)
+        return VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top or 0 },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget }, VerticalSpan:new{ width = bottom or 0 } }
+    end
+    -- label (with an optional grey line under it) on the left, a control on the right
+    local function row(label, sub, control, callback)
+        local ctl_w = control and control:getSize().w or 0
+        local left = TextWidget:new{ text = label, face = face15, max_width = inner - ctl_w - Screen:scaleBySize(12) }
+        if sub then
+            left = VerticalGroup:new{ align = "left", left, VerticalSpan:new{ width = Screen:scaleBySize(2) },
+                TextWidget:new{ text = sub, face = face12, fgcolor = MUTED, max_width = inner - ctl_w - Screen:scaleBySize(12) } }
+        end
+        local d = Geom:new{ w = inner, h = Screen:scaleBySize(sub and 58 or 50) }
+        local line = HorizontalGroup:new{ HorizontalSpan:new{ width = P },
+            OverlapGroup:new{ dimen = d, allow_mirroring = false,
+                LeftContainer:new{ dimen = d, left },
+                control and RightContainer:new{ dimen = d, control } or nil },
+            HorizontalSpan:new{ width = P } }
+        return VerticalGroup:new{ callback and TapBox:new{ line, callback = callback } or line, rowLine() }
+    end
+    local function navRow(label, value, callback)
+        local right = HorizontalGroup:new{ align = "center" }
+        if value and value ~= "" then
+            table.insert(right, TextWidget:new{ text = value, face = face15, fgcolor = MUTED, max_width = math.floor(inner * 0.5) })
+            table.insert(right, HorizontalSpan:new{ width = Screen:scaleBySize(6) })
+        end
+        table.insert(right, IconWidget:new{ icon = "chevron.right", width = Screen:scaleBySize(16), height = Screen:scaleBySize(16) })
+        return row(label, nil, right, callback)
+    end
+    -- on/off switch: black track with a white knob on the right when on
+    local function toggle(label, sub, key, getter)
+        local on = getter() == true
+        local sw_w, sw_h, knob, m = Screen:scaleBySize(50), Screen:scaleBySize(28), Screen:scaleBySize(20), Screen:scaleBySize(4)
+        local track = Pill:new{ width = sw_w, height = sw_h, fill = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
+            border = on and 0 or thin, border_color = BlitBuffer.COLOR_BLACK }
+        local k = Pill:new{ width = knob, height = knob, border = 0, fill = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK }
+        k.overlap_offset = { on and (sw_w - knob - m) or m, math.floor((sw_h - knob) / 2) }
+        local sw = OverlapGroup:new{ dimen = Geom:new{ w = sw_w, h = sw_h }, allow_mirroring = false, track, k }
+        return row(label, sub, sw, function() setSetting(key, not on); self:changed() end)
+    end
+    local function outlineCells(cells, cell_h)
+        local seg = HorizontalGroup:new{}
+        for i, c in ipairs(cells) do
+            if i > 1 then table.insert(seg, LineWidget:new{ dimen = Geom:new{ w = thin, h = cell_h }, background = BlitBuffer.COLOR_BLACK }) end
+            table.insert(seg, c)
+        end
+        return RoundedOutline:new{ radius = Screen:scaleBySize(8), border = thin, seg }
+    end
+    local function stepper(label, sub, key, value, min, max)
+        local h = Screen:scaleBySize(36)
+        local function cell(text, w, cb, bold)
+            return TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = w, h = h },
+                TextWidget:new{ text = text, face = face15, bold = bold } }, callback = cb }
+        end
+        local function set(v) v = math.max(min, math.min(max, v)); if v ~= value then setSetting(key, v); self:changed() end end
+        local ctl = outlineCells({ cell("−", Screen:scaleBySize(44), function() set(value - 1) end),
+            cell(tostring(value), Screen:scaleBySize(40), nil, true),
+            cell("+", Screen:scaleBySize(44), function() set(value + 1) end) }, h)
+        return row(label, sub, ctl)
+    end
+    -- options side by side in one rounded outline, the chosen one black
+    local function segment(label, options, current, pick)
+        local n = #options
+        local cell_h = Screen:scaleBySize(40)
+        local cell_w = math.floor((inner - thin * 2 - thin * (n - 1)) / n)
+        local cells = {}
+        for _i, opt in ipairs(options) do
+            local on = (current == opt[1])
+            table.insert(cells, TapBox:new{
+                FrameContainer:new{ bordersize = 0, padding = 0, margin = 0,
+                    background = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
+                    CenterContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
+                        TextWidget:new{ text = opt[2] .. (on and " ✓" or ""), face = face13, bold = on,
+                            max_width = cell_w - Screen:scaleBySize(8),
+                            fgcolor = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK } } },
+                callback = function() if not on then pick(opt[1]) end end })
+        end
+        return VerticalGroup:new{
+            padded(VerticalGroup:new{ align = "left", TextWidget:new{ text = label, face = face15 },
+                VerticalSpan:new{ width = Screen:scaleBySize(8) }, outlineCells(cells, cell_h) },
+                Screen:scaleBySize(12), Screen:scaleBySize(14)),
+            rowLine() }
+    end
+    -- which of date / author / chapter are on: chips that are black with a ✓ when on
+    local function fieldChips(label, getter, key)
+        local active = {}
+        for f in getter():gmatch("[^,]+") do active[f] = true end
+        local chips = HorizontalGroup:new{}
+        for i, f in ipairs({ { "date", _("Date") }, { "author", _("Author") }, { "chapter", _("Chapter") } }) do
+            local on = active[f[1]]
+            local text = f[2] .. (on and " ✓" or "")
+            local widest = TextWidget:new{ text = f[2] .. " ✓", face = face13, bold = true }:getSize().w
+            local w = widest + Screen:scaleBySize(28)
+            local color = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK
+            if i > 1 then table.insert(chips, HorizontalSpan:new{ width = Screen:scaleBySize(8) }) end
+            table.insert(chips, TapBox:new{
+                Pill:new{ width = w, height = Screen:scaleBySize(34), fill = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
+                    border = on and 0 or thin, border_color = BlitBuffer.COLOR_BLACK,
+                    TextWidget:new{ text = text, face = face13, bold = on, fgcolor = color } },
+                callback = function()
+                    if on then active[f[1]] = nil else active[f[1]] = true end
+                    local parts = {}
+                    for _j, k in ipairs({ "date", "author", "chapter" }) do if active[k] then table.insert(parts, k) end end
+                    setSetting(key, #parts > 0 and table.concat(parts, ",") or "date")
+                    self:changed()
+                end })
+        end
+        return VerticalGroup:new{ padded(VerticalGroup:new{ align = "left", TextWidget:new{ text = label, face = face15 },
+            VerticalSpan:new{ width = Screen:scaleBySize(8) }, chips }, Screen:scaleBySize(12), Screen:scaleBySize(14)), rowLine() }
+    end
+    local list = self.list
+    local function back() self:rebuild() end
+
+    local body = VerticalGroup:new{ align = "left" }
+    local function add(w) table.insert(body, w) end
+
+    add(sectionBar(_("TEXT")))
+    add(navRow(_("Font sizes"), string.format("%d · %d · %d", getTitleFontSize(), getInfoFontSize(), getContentFontSize()),
+        function() list:showSpinMenu("font_size", back) end))
+    add(navRow(_("Typefaces"), nil, function() list:showFontsMenu() end))
+    add(navRow(_("Page margins"), nil, function() list:showSpinMenu("margins", back) end))
+    add(navRow(_("Space between notes"), nil, function() list:showSpinMenu("section_margin", back) end))
+    add(stepper(_("Lines per highlight"), _("Longer ones end with “…”; tap to read all"), "truncate_lines", getTruncateLines(), 1, 20))
+    add(toggle(_("Justify text"), nil, "justify", getJustify))
+
+    add(sectionBar(_("LIST")))
+    add(toggle(_("Counts on tabs"), nil, "show_total", getShowTotalNotes))
+    add(toggle(_("Filter button in title bar"), nil, "filter_titlebar_btn", getFilterTitlebarBtn))
+    add(toggle(_("Show book / info row"), nil, "show_info", getShowInfo))
+    add(fieldChips(_("Info row shows"), getInfoFields, "info_fields"))
+    add(toggle(_("Title on each page"), nil, "repeat_title_on_page", getRepeatTitleOnPage))
+    add(toggle(_("Chapter / date on each page"), nil, "repeat_info_on_page", getRepeatInfoOnPage))
+    add(toggle(_("Hide duplicate book header"), nil, "hide_dup_title", getHideDupTitle))
+    add(toggle(_("Hide duplicate info header"), nil, "hide_dup_info", getHideDupInfo))
+    add(fieldChips(_("Info counts as duplicate when these match"), getDedupInfoFields, "dedup_info_fields"))
+
+    add(sectionBar(_("PAGES")))
+    add(segment(_("Page controls"), { { "default", _("Prev / Next") }, { "scrollbar", _("Scrollbar") },
+        { "scrollbar_chevrons", _("Scrollbar + buttons") } }, getPaginationStyle(),
+        function(v) setSetting("pagination_style", v); self:changed() end))
+    add(toggle(_("Mark where books start on the scrollbar"), nil, "sb_book_marks", getScrollbarBookMarks))
+    add(segment(_("Swipe to turn pages"), { { "both", _("Both") }, { "horizontal", _("Horizontal") },
+        { "vertical", _("Vertical") }, { "disabled", _("Off") } }, getSwipeSetting(),
+        function(v) setSetting("swipe_direction", v); self:changed() end))
+
+    add(sectionBar(_("FILTER")))
+    add(toggle(_("Only offer used colours and styles"), nil, "hide_unused_cs",
+        function() return getSetting("hide_unused_cs", false) == true end))
+
+    local header = Page.header(self, _("Settings"), function() self:onClose() end)
+    local avail = H - header:getSize().h
+    local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
+    self.scroller = ScrollableContainer:new{ dimen = Geom:new{ w = W, h = avail }, show_parent = self, body }
+    self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0,
+        background = BlitBuffer.COLOR_WHITE,
+        VerticalGroup:new{ align = "left", header, self.scroller } }
+end
 end
 
 -- Full-screen picker for Books, Chapters and Tags (BookFilter / ChapterFilter boards).
