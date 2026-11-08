@@ -4518,15 +4518,24 @@ function FilterScreen:build()
         return VerticalGroup:new{ tw, LineWidget:new{ dimen = Geom:new{ w = tw:getSize().w, h = Size.line.medium },
             background = BlitBuffer.COLOR_BLACK } }
     end
-    local function rowLine() return LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = LIGHT } end
+    local function rowLine()
+        return HorizontalGroup:new{ HorizontalSpan:new{ width = P },
+            LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light } }
+    end
     local function padded(widget, top, bottom)
         return VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top or 0 },
             HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget }, VerticalSpan:new{ width = bottom or 0 } }
     end
+    -- section title as in the mockup: small caps-style grey label with a black line under it
+    local first_section = true
     local function sectionBar(text)
-        local tw = TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.section_fg }
-        return FrameContainer:new{ background = COLORS.section_bg, bordersize = 0, margin = 0,
-            padding = Screen:scaleBySize(7), padding_left = P, width = W, tw }
+        local top = Screen:scaleBySize(first_section and 10 or 20)
+        first_section = false
+        return VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = P }, VerticalGroup:new{ align = "left",
+                TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted },
+                VerticalSpan:new{ width = Screen:scaleBySize(6) },
+                LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.medium }, background = COLORS.ink } } } }
     end
     local function labelRow(left, right)
         local d = Geom:new{ w = inner, h = math.max(left:getSize().h, right and right:getSize().h or 0) }
@@ -4859,11 +4868,20 @@ function SS:build()
     local MUTED = COLORS.muted
     local face15, face13 = Font:getFace("cfont", 15), Font:getFace("cfont", 13)
     local face12 = Font:getFace("cfont", 12)
-    local function rowLine() return LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line_light } end
+    local function rowLine()
+        return HorizontalGroup:new{ HorizontalSpan:new{ width = P },
+            LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light } }
+    end
+    -- section title as in the mockup: small caps-style grey label with a black line under it
+    local first_section = true
     local function sectionBar(text)
-        local tw = TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.section_fg }
-        return FrameContainer:new{ background = COLORS.section_bg, bordersize = 0, margin = 0,
-            padding = Screen:scaleBySize(7), padding_left = P, width = W, tw }
+        local top = Screen:scaleBySize(first_section and 10 or 20)
+        first_section = false
+        return VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = P }, VerticalGroup:new{ align = "left",
+                TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted },
+                VerticalSpan:new{ width = Screen:scaleBySize(6) },
+                LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.medium }, background = COLORS.ink } } } }
     end
     local function padded(widget, top, bottom)
         return VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top or 0 },
