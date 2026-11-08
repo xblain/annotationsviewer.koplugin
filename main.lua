@@ -40,7 +40,7 @@ local Size = require("ui/size")
 local Geom = require("ui/geometry")
 local _ = require("gettext")
 local BD = require("ui/bidi")
-local DEFAULT_CONTENT_FONT_SIZE = 20
+local DEFAULT_CONTENT_FONT_SIZE = 16
 local DEFAULT_TITLE_FONT_SIZE = 22
 local DEFAULT_INFO_FONT_SIZE = 15
 local DEFAULT_H_MARGIN = 50
@@ -2237,53 +2237,8 @@ function NotesListWidget:exportToMarkdown()
 end
 
 -- back_to_menu == false: opened from the sort button in the tab row, so don't reopen the ☰ menu.
-function NotesListWidget:showSortMenu(back_to_menu, on_done)
-    local sort_mode = getSetting("sort_mode", "date_newest")
-    local function check(mode) return sort_mode == mode and "\u{2713} " or "  " end
-    local function apply(mode)
-        setSetting("sort_mode", mode)
-        self:applySort()
-        self:refresh()
-        UIManager:close(self.sort_dialog)
-        if back_to_menu ~= false then self:showMainMenu() end
-        if on_done then on_done() end
-    end
-
-    local categories = {
-        { key = "date",     label = _("Date") },
-        { key = "author",   label = _("Author") },
-        { key = "book",     label = _("Book") },
-        { key = "filename", label = _("Filename") },
-    }
-
-    local buttons = {}
-    for _, cat in ipairs(categories) do
-        table.insert(buttons, {})
-        table.insert(buttons, {{ text = cat.label, enabled = false }})
-        local modes = SORT_CATEGORIES[cat.key] or {}
-        local i = 1
-        while i <= #modes do
-            local row = {}
-            local m1 = modes[i]
-            if m1 and SORT_MODES[m1] then
-                table.insert(row, { text = check(m1) .. SORT_MODES[m1].label, callback = function() apply(m1) end })
-            end
-            local m2 = modes[i + 1]
-            if m2 and SORT_MODES[m2] then
-                table.insert(row, { text = check(m2) .. SORT_MODES[m2].label, callback = function() apply(m2) end })
-            end
-            if #row > 0 then table.insert(buttons, row) end
-            i = i + 2
-        end
-    end
-
-    table.insert(buttons, {{ text = back_to_menu == false and _("Close") or _("Back"), callback = function()
-        UIManager:close(self.sort_dialog)
-        if back_to_menu ~= false then self:showMainMenu() end
-    end }})
-
-    self.sort_dialog = ButtonDialogTitle:new{ title = _("Sort By"), buttons = buttons }
-    UIManager:show(self.sort_dialog)
+function NotesListWidget:showSortMenu(_back_to_menu, on_done)
+    NotesListWidget.States.sortMenu(self, on_done)
 end
 function NotesListWidget:showSpinMenu(_menu_key, _parent_callback)
     self:showSettingsMenu() -- the numbers are rows on the Settings page now
@@ -4620,6 +4575,65 @@ function States.menu(list)
         end }:show()
 end
 
+-- Sort order as a dropdown card under the sort label: one block per field (Date / Author / Book /
+-- Filename), two columns (ascending | descending), ✓ on the current order.
+function States.sortMenu(list, on_done)
+    local W = Screen:getWidth()
+    local current = getSetting("sort_mode", "date_newest")
+    local short = {
+        date_newest = _("Newest first"), date_oldest = _("Oldest first"),
+        asc = _("A to Z · by date"), desc = _("Z to A · by date"),
+        loc_asc = _("Begin to end"), loc_desc = _("End to begin"),
+    }
+    local blocks = {
+        { _("Date"), { { "date_newest", short.date_newest }, { "date_oldest", short.date_oldest } } },
+    }
+    for _i, f in ipairs({ { "author", _("Author") }, { "book", _("Book") }, { "filename", _("Filename") } }) do
+        table.insert(blocks, { f[2], {
+            { f[1] .. "_asc", short.asc }, { f[1] .. "_desc", short.desc },
+            { f[1] .. "_location_asc", short.loc_asc }, { f[1] .. "_location_desc", short.loc_desc } } })
+    end
+    local bw = Size.border.window
+    States.Card:new{ modal = true, width = math.min(Screen:scaleBySize(340), W - Screen:scaleBySize(20)),
+        left = W - math.min(Screen:scaleBySize(340), W - Screen:scaleBySize(20)) - Screen:scaleBySize(10),
+        top = list.topbar_height + Screen:scaleBySize(4),
+        pad_h = bw, pad_v = bw + Screen:scaleBySize(4),
+        build = function(w, card)
+            local g = VerticalGroup:new{ align = "left" }
+            local side = Screen:scaleBySize(16)
+            local cell_w = math.floor((w - side * 2) / 2)
+            local cell_h = Screen:scaleBySize(40)
+            for bi, blk in ipairs(blocks) do
+                table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(bi == 1 and 6 or 10) })
+                table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
+                    TextWidget:new{ text = blk[1]:upper(), face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted } })
+                table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(2) })
+                local modes = blk[2]
+                for i = 1, #modes, 2 do
+                    local rowg = HorizontalGroup:new{ HorizontalSpan:new{ width = side } }
+                    for k = i, math.min(i + 1, #modes) do
+                        local mode, label = modes[k][1], modes[k][2]
+                        local on = mode == current
+                        table.insert(rowg, TapBox:new{
+                            LeftContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
+                                TextWidget:new{ text = (on and "✓ " or "") .. label, face = Font:getFace("cfont", 14),
+                                    bold = on, max_width = cell_w - Screen:scaleBySize(6) } },
+                            callback = function()
+                                card:onClose()
+                                setSetting("sort_mode", mode)
+                                list:applySort()
+                                list:refresh()
+                                if on_done then on_done() end
+                            end })
+                    end
+                    table.insert(g, rowg)
+                end
+            end
+            table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(4) })
+            return g
+        end }:show()
+end
+
 -- Centre of the list when filters (or the tab) leave nothing: what happened, and one tap to undo.
 function States.noMatch(list, width, height)
     local filtered = #list:getFilterChips() > 0
@@ -4790,7 +4804,7 @@ function FilterScreen:build()
             HorizontalSpan:new{ width = Screen:scaleBySize(6) },
             IconWidget:new{ icon = "chevron.right", width = Screen:scaleBySize(16), height = Screen:scaleBySize(16) } }
         local d = Geom:new{ w = inner, h = h }
-        return VerticalGroup:new{
+        return VerticalGroup:new{ align = "left",
             TapBox:new{ HorizontalGroup:new{ HorizontalSpan:new{ width = P },
                 OverlapGroup:new{ dimen = d, allow_mirroring = false,
                     LeftContainer:new{ dimen = d, TextWidget:new{ text = label, face = face15 } },
@@ -5094,7 +5108,7 @@ function SS:build()
                 LeftContainer:new{ dimen = d, left },
                 control and RightContainer:new{ dimen = d, control } or nil },
             HorizontalSpan:new{ width = P } }
-        return VerticalGroup:new{ callback and TapBox:new{ line, callback = callback } or line, rowLine() }
+        return VerticalGroup:new{ align = "left", callback and TapBox:new{ line, callback = callback } or line, rowLine() }
     end
     local function navRow(label, value, callback)
         local right = HorizontalGroup:new{ align = "center" }
@@ -5157,7 +5171,7 @@ function SS:build()
                             fgcolor = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK } } },
                 callback = function() if not on then pick(opt[1]) end end })
         end
-        return VerticalGroup:new{
+        return VerticalGroup:new{ align = "left",
             padded(VerticalGroup:new{ align = "left", TextWidget:new{ text = label, face = face15 },
                 VerticalSpan:new{ width = Screen:scaleBySize(8) }, outlineCells(cells, cell_h) },
                 Screen:scaleBySize(12), Screen:scaleBySize(14)),
@@ -5362,7 +5376,7 @@ function NotesListWidget.SubPage:build()
                 LeftContainer:new{ dimen = d, TextWidget:new{ text = f.name, face = face15, bold = on, max_width = inner - Screen:scaleBySize(40) } },
                 mark and RightContainer:new{ dimen = d, mark } or nil },
             HorizontalSpan:new{ width = P } }
-        table.insert(body, VerticalGroup:new{ TapBox:new{ line, callback = function()
+        table.insert(body, VerticalGroup:new{ align = "left", TapBox:new{ line, callback = function()
             setSetting(self.font_key, f.path)
             list:refresh(); self:rebuild()
         end }, rowLine() })
@@ -5550,9 +5564,9 @@ function ListPicker:build()
         elseif st then
             mark = RoundedBox:new{ width = box, radius = Screen:scaleBySize(5), fill = COLORS.ink, pad_x = 0, pad_y = 0,
                 CenterContainer:new{ dimen = Geom:new{ w = box, h = box },
-                    TextWidget:new{ text = "✓", face = Font:getFace("cfont", 15), bold = true, fgcolor = BlitBuffer.COLOR_WHITE } } }
+                    IconWidget:new{ icon = "check", width = Screen:scaleBySize(18), height = Screen:scaleBySize(18), invert = true } } }
         else
-            mark = RoundedBox:new{ width = box, radius = Screen:scaleBySize(5), border = Size.border.thick, border_color = COLORS.ink,
+            mark = RoundedBox:new{ width = box, radius = Screen:scaleBySize(5), border = Size.border.button, border_color = COLORS.ink,
                 fill = BlitBuffer.COLOR_WHITE, pad_x = 0, pad_y = 0, VerticalSpan:new{ width = box } }
         end
         local count = TextWidget:new{ text = tostring(it.count or ""), face = face13, fgcolor = COLORS.muted }
