@@ -277,15 +277,6 @@ normalizeBookTitleUncached = function(title)
     return normalized
 end
 
--- Sorting state set by sortNotesList: how highlights are ordered inside a book, and when each
--- book was last opened (path -> time).
-local SortState = { oldest_first = false, opened = {} }
-function SortState.compareInBook(a, b)
-    local da, db = a.datetime or "", b.datetime or ""
-    if SortState.oldest_first then return da < db end
-    return da > db
-end
-
 -- Where a note sits in its book: page first, then the exact spot. EPUB-like books
 -- keep an xpointer text ("/body/DocFragment[3]/body/p[12]/text().5") in pos0, PDFs a
 -- table with x/y; neither is a number, so compare their digit runs one by one.
@@ -317,115 +308,103 @@ local function compareByPosition(a, b, reverse)
     return false
 end
 
-local SORT_COMPARATORS = {
-    date_newest = function(a, b) return (a.datetime or "") > (b.datetime or "") end,
-    date_oldest = function(a, b) return (a.datetime or "") < (b.datetime or "") end,
-    
-    author_asc = function(a, b)
-        local au_a, au_b = lowerCached(a.book_authors), lowerCached(b.book_authors)
-        if au_a ~= au_b then return au_a < au_b end
-        local title_a = normalizeBookTitle(a.book_title)
-        local title_b = normalizeBookTitle(b.book_title)
-        if title_a ~= title_b then return title_a < title_b end
-        return SortState.compareInBook(a, b)
-    end,
-    author_desc = function(a, b)
-        local au_a, au_b = lowerCached(a.book_authors), lowerCached(b.book_authors)
-        if au_a ~= au_b then return au_a > au_b end
-        local title_a = normalizeBookTitle(a.book_title)
-        local title_b = normalizeBookTitle(b.book_title)
-        if title_a ~= title_b then return title_a < title_b end
-        return SortState.compareInBook(a, b)
-    end,
-    
-    book_asc = function(a, b)
-        local title_a = normalizeBookTitle(a.book_title)
-        local title_b = normalizeBookTitle(b.book_title)
-        if title_a ~= title_b then return title_a < title_b end
-        return SortState.compareInBook(a, b)
-    end,
-    book_desc = function(a, b)
-        local title_a = normalizeBookTitle(a.book_title)
-        local title_b = normalizeBookTitle(b.book_title)
-        if title_a ~= title_b then return title_a > title_b end
-        return SortState.compareInBook(a, b)
-    end,
-    
-    author_location_asc = function(a, b)
-        local au_a, au_b = lowerCached(a.book_authors), lowerCached(b.book_authors)
-        if au_a ~= au_b then return au_a < au_b end
-        local title_a = normalizeBookTitle(a.book_title)
-        local title_b = normalizeBookTitle(b.book_title)
-        if title_a ~= title_b then return title_a < title_b end
-        return compareByPosition(a, b)
-    end,
-    author_location_desc = function(a, b)
-        local au_a, au_b = lowerCached(a.book_authors), lowerCached(b.book_authors)
-        if au_a ~= au_b then return au_a < au_b end
-        local title_a = normalizeBookTitle(a.book_title)
-        local title_b = normalizeBookTitle(b.book_title)
-        if title_a ~= title_b then return title_a < title_b end
-        return compareByPosition(a, b, true)
-    end,
-    
-    book_location_asc = function(a, b)
-        local title_a = normalizeBookTitle(a.book_title)
-        local title_b = normalizeBookTitle(b.book_title)
-        if title_a ~= title_b then return title_a < title_b end
-        return compareByPosition(a, b)
-    end,
-    book_location_desc = function(a, b)
-        local title_a = normalizeBookTitle(a.book_title)
-        local title_b = normalizeBookTitle(b.book_title)
-        if title_a ~= title_b then return title_a < title_b end
-        return compareByPosition(a, b, true)
-    end,
-    
-    filename_location_asc = function(a, b)
-        local filename_a = lowerCached(a.book_filename)
-        local filename_b = lowerCached(b.book_filename)
-        if filename_a ~= filename_b then return filename_a < filename_b end
-        local title_a = normalizeBookTitle(a.book_title)
-        local title_b = normalizeBookTitle(b.book_title)
-        if title_a ~= title_b then return title_a < title_b end
-        return compareByPosition(a, b)
-    end,
-    filename_location_desc = function(a, b)
-        local filename_a = lowerCached(a.book_filename)
-        local filename_b = lowerCached(b.book_filename)
-        if filename_a ~= filename_b then return filename_a < filename_b end
-        local title_a = normalizeBookTitle(a.book_title)
-        local title_b = normalizeBookTitle(b.book_title)
-        if title_a ~= title_b then return title_a < title_b end
-        return compareByPosition(a, b, true)
-    end,
-    
-    opened_recent = function(a, b)
-        local ta, tb = SortState.opened[a.book_path or ""] or 0, SortState.opened[b.book_path or ""] or 0
-        if ta ~= tb then return ta > tb end
-        if a.book_path ~= b.book_path then return (a.book_path or "") < (b.book_path or "") end
-        return SortState.compareInBook(a, b)
-    end,
-    opened_oldest = function(a, b)
-        local ta, tb = SortState.opened[a.book_path or ""] or 0, SortState.opened[b.book_path or ""] or 0
-        if ta ~= tb then return ta < tb end
-        if a.book_path ~= b.book_path then return (a.book_path or "") < (b.book_path or "") end
-        return SortState.compareInBook(a, b)
-    end,
-
-    filename_asc = function(a, b)
-        local filename_a = lowerCached(a.book_filename)
-        local filename_b = lowerCached(b.book_filename)
-        if filename_a ~= filename_b then return filename_a < filename_b end
-        return SortState.compareInBook(a, b)
-    end,
-    filename_desc = function(a, b)
-        local filename_a = lowerCached(a.book_filename)
-        local filename_b = lowerCached(b.book_filename)
-        if filename_a ~= filename_b then return filename_a > filename_b end
-        return SortState.compareInBook(a, b)
-    end,
+-- A sort order is a rule: up to three levels "key:direction" joined by commas, for example
+-- "author:asc,book:asc,pos:asc". The old fixed names (author_location_asc, ...) still work and are
+-- translated to rules. Whatever the levels leave tied is settled by: book A-Z, newest first, position.
+local SortState = { opened = {}, cache = {} }
+SortState.LEGACY = {
+    date_newest = "date:desc", date_oldest = "date:asc",
+    author_asc = "author:asc", author_desc = "author:desc",
+    author_location_asc = "author:asc,book:asc,pos:asc", author_location_desc = "author:asc,book:asc,pos:desc",
+    book_asc = "book:asc", book_desc = "book:desc",
+    book_location_asc = "book:asc,pos:asc", book_location_desc = "book:asc,pos:desc",
+    filename_asc = "file:asc", filename_desc = "file:desc",
+    filename_location_asc = "file:asc,pos:asc", filename_location_desc = "file:asc,pos:desc",
+    opened_recent = "opened:desc", opened_oldest = "opened:asc",
 }
+SortState.KEYS = { date = true, opened = true, author = true, book = true, file = true, pos = true }
+-- Parse a rule (or an old name) into { {key=, dir=}, ... }; nil when it is not valid.
+function SortState.parse(mode)
+    if type(mode) ~= "string" then return nil end
+    mode = SortState.LEGACY[mode] or mode
+    local levels = {}
+    for tok in mode:gmatch("[^,]+") do
+        local key, dir = tok:match("^(%a+):(%a+)$")
+        if not (key and SortState.KEYS[key] and (dir == "asc" or dir == "desc")) then return nil end
+        levels[#levels + 1] = { key = key, dir = dir }
+    end
+    if #levels == 0 or #levels > 3 then return nil end
+    return levels
+end
+-- The all-annotations list and the one-book list each remember their own order. A book list that
+-- never had its own order set starts in reading order (first highlight in the book first).
+function SortState.get(single)
+    if single then return getSetting("sort_mode_book", nil) or "book:asc,pos:asc" end
+    return getSetting("sort_mode", "date_newest")
+end
+function SortState.set(single, mode)
+    setSetting(single and "sort_mode_book" or "sort_mode", mode)
+end
+-- The same order can be written as an old name or as a rule: compare them through this.
+function SortState.norm(mode)
+    local levels = SortState.parse(mode)
+    return levels and SortState.encode(levels) or tostring(mode)
+end
+function SortState.encode(levels)
+    local parts = {}
+    for _, l in ipairs(levels) do parts[#parts + 1] = l.key .. ":" .. l.dir end
+    return table.concat(parts, ",")
+end
+-- Keys that still do something after the levels chosen so far.
+function SortState.allowedAfter(prev)
+    if not prev then return { "date", "opened", "author", "book", "file", "pos" } end
+    if prev.key == "date" or prev.key == "pos" then return {} end
+    if prev.key == "author" then return { "opened", "book", "file", "date", "pos" } end
+    return { "date", "pos" } -- book, file name and last opened already single out a book
+end
+function SortState.cmp3(x, y) if x < y then return -1 elseif x > y then return 1 end return 0 end
+function SortState.keyCmp(key, a, b)
+    if key == "date" then return SortState.cmp3(a.datetime or "", b.datetime or "")
+    elseif key == "opened" then return SortState.cmp3(SortState.opened[a.book_path or ""] or 0, SortState.opened[b.book_path or ""] or 0)
+    elseif key == "author" then return SortState.cmp3(lowerCached(a.book_authors), lowerCached(b.book_authors))
+    elseif key == "book" then return SortState.cmp3(normalizeBookTitle(a.book_title), normalizeBookTitle(b.book_title))
+    elseif key == "file" then return SortState.cmp3(lowerCached(a.book_filename), lowerCached(b.book_filename)) end
+    return 0
+end
+function SortState.posCmp(a, b, dir)
+    local c = SortState.keyCmp("book", a, b)
+    if c == 0 then c = SortState.cmp3(a.book_path or "", b.book_path or "") end
+    if c ~= 0 then return c end
+    local pc = 0
+    if compareByPosition(a, b) then pc = -1 elseif compareByPosition(b, a) then pc = 1 end
+    return dir == "desc" and -pc or pc
+end
+function SortState.build(mode)
+    local levels = SortState.parse(mode)
+    if not levels then return nil end
+    local id = SortState.encode(levels)
+    if SortState.cache[id] then return SortState.cache[id] end
+    local f = function(a, b)
+        for _, l in ipairs(levels) do
+            local c
+            if l.key == "pos" then c = SortState.posCmp(a, b, l.dir)
+            else
+                c = SortState.keyCmp(l.key, a, b)
+                if l.dir == "desc" then c = -c end
+            end
+            if c ~= 0 then return c < 0 end
+        end
+        local c = SortState.keyCmp("book", a, b)
+        if c == 0 then c = SortState.cmp3(a.book_path or "", b.book_path or "") end
+        if c ~= 0 then return c < 0 end
+        c = -SortState.keyCmp("date", a, b)
+        if c ~= 0 then return c < 0 end
+        return SortState.posCmp(a, b, "asc") < 0
+    end
+    SortState.cache[id] = f
+    return f
+end
+local SORT_COMPARATORS = setmetatable({}, { __index = function(_, mode) return SortState.build(mode) end })
 
 local function getHighlightColor(color)
         local val = HIGHLIGHT_COLORS[color and color:lower() or ""]
@@ -1663,10 +1642,12 @@ end
 -- Scrollbar marks follow the sort order: a mark where the group changes. Books (or authors) when
 -- sorted by book / author / file, months when sorted by date, chapters in one book sorted by location.
 function NotesListWidget.markKey(note, single)
-    local mode = getSetting("sort_mode", "date_newest")
-    local by = mode:match("^(%a+)_") or "date"
+    local levels = SortState.parse(SortState.get(single)) or { { key = "date" } }
+    local by = levels[1].key
     if single then
-        if mode:find("location", 1, true) then return note.chapter or "" end
+        for _, l in ipairs(levels) do
+            if l.key == "pos" then return note.chapter or "" end
+        end
         return (note.datetime or ""):sub(1, 7)
     end
     if by == "date" then return (note.datetime or ""):sub(1, 7) end
@@ -1897,8 +1878,95 @@ local SORT_SHORT_LABELS = {
     location_asc = _("start to end"), location_desc = _("end to start"),
     opened_recent = _("Last opened first"), opened_oldest = _("Longest unopened first"),
 }
+-- Names and direction words of the rule levels (shared by the tab row label and the sort dropdown)
+SortState.KEY_NAMES = { date = _("Date"), opened = _("Last opened book"), author = _("Author"), book = _("Book"),
+    file = _("Filename"), pos = _("Place in book") }
+SortState.DIR_NAMES = {
+    date = { asc = _("Oldest first"), desc = _("Newest first") },
+    opened = { asc = _("Longest ago first"), desc = _("Most recent first") },
+    author = { asc = _("Author A to Z"), desc = _("Author Z to A") },
+    book = { asc = _("Title A to Z"), desc = _("Title Z to A") },
+    file = { asc = _("Filename A to Z"), desc = _("Filename Z to A") },
+    pos = { asc = _("Start of book first"), desc = _("End of book first") },
+}
+SortState.SHORT = {
+    date = { asc = _("Oldest"), desc = _("Newest") },
+    opened = { asc = _("Opened long ago"), desc = _("Opened recently") },
+    author = { asc = _("Authors A–Z"), desc = _("Authors Z–A") },
+    book = { asc = _("Titles A–Z"), desc = _("Titles Z–A") },
+    file = { asc = _("Filenames A–Z"), desc = _("Filenames Z–A") },
+    pos = { asc = _("Start to end"), desc = _("End to start") },
+}
+-- Keep the levels that still make sense in a row: a level goes when its key was already used or
+-- does nothing after the level before it, and everything after it goes too.
+function SortState.revalidate(levels)
+    local out, used = {}, {}
+    for n, l in ipairs(levels) do
+        local ok = false
+        for _, k in ipairs(SortState.allowedAfter(out[n - 1])) do if k == l.key then ok = true end end
+        if not ok or used[l.key] or n > 3 then break end
+        used[l.key] = true
+        out[n] = l
+    end
+    return out
+end
+-- One plain sentence per level: what the order is, in words.
+function SortState.describe(levels)
+    local eff = {}
+    for _, l in ipairs(levels) do eff[#eff + 1] = l end
+    local function has(set)
+        for _, l in ipairs(eff) do if set[l.key] then return true end end
+        return false
+    end
+    -- position is always inside a book; a book comes first when the level before is not one
+    for n, l in ipairs(eff) do
+        if l.key == "pos" then
+            local prev = eff[n - 1]
+            if not prev or prev.key == "author" then table.insert(eff, n, { key = "book", dir = "asc" }) end
+            break
+        end
+    end
+    if not has({ book = true, file = true, opened = true, pos = true, date = true }) then
+        eff[#eff + 1] = { key = "book", dir = "asc" }
+    end
+    local last = eff[#eff]
+    if last.key ~= "date" and last.key ~= "pos" then eff[#eff + 1] = { key = "date", dir = "desc" } end
+    local out = {}
+    for n, l in ipairs(eff) do
+        local prev = eff[n - 1]
+        local lead = ""
+        if prev then lead = prev.key == "author" and _("Within an author, ") or _("Within a book, ") end
+        local d, text = l.dir, nil
+        if l.key == "date" then
+            if prev then text = d == "desc" and _("newest highlights first") or _("oldest highlights first")
+            else text = d == "desc" and _("Newest highlights first, across all books") or _("Oldest highlights first, across all books") end
+        elseif l.key == "pos" then
+            text = d == "asc" and _("from the start to the end") or _("from the end to the start")
+        else
+            local what = ({
+                author = d == "asc" and _("authors A to Z") or _("authors Z to A"),
+                opened = d == "desc" and _("books opened most recently first") or _("books opened longest ago first"),
+                book = d == "asc" and _("books by title A to Z") or _("books by title Z to A"),
+                file = d == "asc" and _("books by filename A to Z") or _("books by filename Z to A"),
+            })[l.key]
+            text = prev and what or (what:sub(1, 1):upper() .. what:sub(2))
+        end
+        if prev then text = lead .. text elseif l.key == "pos" then text = _("Books by title A to Z. Within a book, ") .. text end
+        out[#out + 1] = text:sub(1, 1):upper() .. text:sub(2) .. "."
+    end
+    return table.concat(out, " ")
+end
 local function sortModeLabel(mode)
-    if not SORT_MODES[mode] then mode = "date_newest" end
+    if not SORT_MODES[mode] then
+        local levels = SortState.parse(mode)
+        if not levels then mode = "date_newest" else
+            local parts = {}
+            for _, l in ipairs(levels) do
+                parts[#parts + 1] = SortState.SHORT[l.key][l.dir]
+            end
+            return table.concat(parts, " › ")
+        end
+    end
     if SORT_SHORT_LABELS[mode] then return SORT_SHORT_LABELS[mode] end
     local cat, rest = mode:match("^(%a+)_(.+)$")
     return (SORT_CATEGORY_LABELS[cat] or cat) .. " · " .. (SORT_SHORT_LABELS[rest] or SORT_MODES[mode].label)
@@ -2157,7 +2225,7 @@ function NotesListWidget:buildHeader()
         table.insert(tabs, TapBox:new{ box, callback = function() self:setNotesPresence(tab.key) end })
     end
     local sort_text = TextWidget:new{
-        text = sortModeLabel(getSetting("sort_mode", "date_newest")),
+        text = sortModeLabel(SortState.get(self.single_book)),
         face = Font:getFace("cfont", 13), fgcolor = COLORS.muted,
         max_width = math.floor(w * 0.4),
     }
@@ -2473,14 +2541,15 @@ function NotesListWidget:showSpinMenu(_menu_key, _parent_callback)
     self:showSettingsMenu() -- the numbers are rows on the Settings page now
 end
 function NotesListWidget:applySort()
-    local sort_mode = getSetting("sort_mode", "date_newest")
-    self:sortNotesList(self.notes_list, sort_mode)
+    self:sortNotesList(self.notes_list, SortState.get(self.single_book), self.single_book)
 end
-function NotesListWidget:sortNotesList(notes_list, sort_mode)
-    sort_mode = sort_mode or getSetting("sort_mode", "date_newest")
+function NotesListWidget:sortNotesList(notes_list, sort_mode, single)
+    sort_mode = sort_mode or SortState.get(single)
     local comparator = SORT_COMPARATORS[sort_mode]
-    SortState.oldest_first = getSetting("sort_in_book_oldest", false) == true
-    if sort_mode:find("^opened_") then
+    local levels = SortState.parse(sort_mode)
+    local uses_opened = false
+    for _, l in ipairs(levels or {}) do if l.key == "opened" then uses_opened = true end end
+    if uses_opened then
         SortState.opened = {}
         for _, item in ipairs(ReadHistory.hist or {}) do
             if item.file then SortState.opened[item.file] = tonumber(item.time) or 0 end
@@ -3901,8 +3970,7 @@ function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations)
             tags = all_tags,
         })
     end
-    local sort_mode = getSetting("sort_mode", "date_newest")
-    NotesListWidget:sortNotesList(notes_list, sort_mode)
+    NotesListWidget:sortNotesList(notes_list, SortState.get(true), true)
     UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self, single_book = true, book_title = book_title })
 end
 function AllNotesViewer:showAllNotes()
@@ -3949,8 +4017,7 @@ function AllNotesViewer:showAllNotes()
             })
         end
     end
-    local sort_mode = getSetting("sort_mode", "date_newest")
-    NotesListWidget:sortNotesList(notes_list, sort_mode)
+    NotesListWidget:sortNotesList(notes_list, SortState.get(false), false)
     local widget = NotesListWidget:new{ notes_list = notes_list, viewer = self }
     if loading then UIManager:close(loading) end
     UIManager:show(widget)
@@ -5071,72 +5138,297 @@ function States.menu(list)
         end }:show()
 end
 
--- Sort order as a dropdown card under the sort label: one block per field (Date / Author / Book /
--- Filename), two columns (ascending | descending), ✓ on the current order.
+-- Sort order as a dropdown card under the sort label: up to three levels (sort by, then by, then by).
+-- Each level is a row of chips for the keys that still make sense plus a two-part bar for the
+-- direction, and a sentence at the bottom says in words what the order is.
 function States.sortMenu(list, on_done)
     local W = Screen:getWidth()
-    local current = getSetting("sort_mode", "date_newest")
-    local short = {
-        date_newest = _("Newest first"), date_oldest = _("Oldest first"),
-        asc = _("A to Z"), desc = _("Z to A"),
-        loc_asc = _("A to Z, book order"), loc_desc = _("A to Z, back to front"),
-    }
-    local blocks = {
-        { _("Date"), { { "date_newest", short.date_newest }, { "date_oldest", short.date_oldest } } },
-    }
-    for _i, f in ipairs({ { "author", _("Author") }, { "book", _("Book") }, { "filename", _("Filename") } }) do
-        table.insert(blocks, { f[2], {
-            { f[1] .. "_asc", short.asc }, { f[1] .. "_desc", short.desc },
-            { f[1] .. "_location_asc", short.loc_asc }, { f[1] .. "_location_desc", short.loc_desc } } })
+    local current = SortState.get(list.single_book)
+    local levels = SortState.parse(current) or SortState.parse("date:desc")
+    local function apply(new_levels, card)
+        card:onClose()
+        SortState.set(list.single_book, SortState.encode(SortState.revalidate(new_levels)))
+        list:applySort()
+        list:refresh()
+        if on_done then on_done() end
+        States.sortMenu(list, on_done)
     end
-    table.insert(blocks, 2, { _("Last opened book"), {
-        { "opened_recent", _("Most recent first") }, { "opened_oldest", _("Longest ago first") } } })
-    local oldest = getSetting("sort_in_book_oldest", false) == true
-    table.insert(blocks, { _("Within each book"), {
-        { "in_book_newest", _("Newest first") }, { "in_book_oldest", _("Oldest first") } } })
+    local quick = {
+        { _("Newest"), "date:desc" }, { _("Oldest"), "date:asc" }, { _("Book A–Z"), "book:asc" },
+        { _("Author A–Z"), "author:asc" }, { _("Last opened book"), "opened:desc" },
+        { _("In book order"), "book:asc,pos:asc" },
+    }
+    local card_w = math.min(Screen:scaleBySize(360), W - Screen:scaleBySize(20))
     local bw = Size.border.window
-    States.Card:new{ modal = true, width = math.min(Screen:scaleBySize(340), W - Screen:scaleBySize(20)),
-        left = W - math.min(Screen:scaleBySize(340), W - Screen:scaleBySize(20)) - Screen:scaleBySize(10),
+    local too_tall = false
+    local sort_card = States.Card:new{ modal = true, width = card_w,
+        left = W - card_w - Screen:scaleBySize(10),
         top = list.topbar_height + Screen:scaleBySize(4),
+        pad_h = bw, pad_v = bw + Screen:scaleBySize(4),
+        build = function(w, card)
+            -- tier 0: everything; 1: without the quick picks; 2: also without the sentence.
+            -- (The chips themselves never change size.)
+            -- The first tier that fits the screen is used.
+            local function make(tier, lvls)
+            local levels = lvls or levels
+            local g = VerticalGroup:new{ align = "left" }
+            local side = Screen:scaleBySize(16)
+            local inner = w - side * 2
+            local thin = Size.border.button
+            local thick = Size.border.thick -- same as the chosen colour in the annotation sheet
+            local gap = Screen:scaleBySize(8)
+            local chip_h = Screen:scaleBySize(36)
+            local bar_h = Screen:scaleBySize(38)
+            local face = Font:getFace("cfont", 13)
+            local function heading(text)
+                table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(10) })
+                table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
+                    TextWidget:new{ text = text:upper(), face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted } })
+                table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(4) })
+            end
+            -- chips as wide as their text; each row is filled to the edge by sharing out what is left
+            local function chipRows(items)
+                local widths = {}
+                for i, it in ipairs(items) do
+                    widths[i] = TextWidget:new{ text = it.label, face = face, bold = true }:getSize().w + Screen:scaleBySize(26)
+                end
+                local rows, row, row_w = {}, {}, 0
+                for i in ipairs(items) do
+                    if #row > 0 and row_w + gap + widths[i] > inner then
+                        rows[#rows + 1] = row; row, row_w = {}, 0
+                    end
+                    row_w = row_w + (#row > 0 and gap or 0) + widths[i]
+                    row[#row + 1] = i
+                end
+                if #row > 0 then rows[#rows + 1] = row end
+                for _, r in ipairs(rows) do
+                    local used = (#r - 1) * gap
+                    for _, i in ipairs(r) do used = used + widths[i] end
+                    local extra, rg = inner - used, HorizontalGroup:new{ HorizontalSpan:new{ width = side } }
+                    for k, i in ipairs(r) do
+                        local it = items[i]
+                        local cw = widths[i] + math.floor(extra / #r) + (k == #r and extra % #r or 0)
+                        local color = BlitBuffer.COLOR_BLACK
+                        if k > 1 then table.insert(rg, HorizontalSpan:new{ width = gap }) end
+                        table.insert(rg, TapBox:new{
+                            Pill:new{ width = cw, height = chip_h, fill = BlitBuffer.COLOR_WHITE,
+                                border = it.on and thick or thin, border_color = it.on and COLORS.ink or COLORS.line,
+                                TextWidget:new{ text = it.label, face = face, bold = it.on, fgcolor = color,
+                                    max_width = cw - Screen:scaleBySize(8) } },
+                            callback = it.callback })
+                    end
+                    table.insert(g, rg)
+                    table.insert(g, VerticalSpan:new{ width = gap })
+                end
+            end
+            -- two joined halves in one outline, the chosen one black
+            local function directionBar(lv, on_flip)
+                local cell_h = bar_h
+                local cell_w = math.floor((inner - thin * 2 - thin) / 2)
+                local cells = {}
+                for _, dir in ipairs({ "asc", "desc" }) do
+                    local on = lv.dir == dir
+                    if lv.key == "date" or lv.key == "opened" then dir = dir == "asc" and "desc" or "asc"; on = lv.dir == dir end
+                    table.insert(cells, TapBox:new{
+                        FrameContainer:new{ bordersize = 0, padding = 0, margin = 0,
+                            background = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
+                            CenterContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
+                                TextWidget:new{ text = SortState.DIR_NAMES[lv.key][dir], face = face, bold = on,
+                                    max_width = cell_w - Screen:scaleBySize(8),
+                                    fgcolor = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK } } },
+                        callback = function() if not on then on_flip() end end })
+                end
+                local seg = HorizontalGroup:new{}
+                for i, c in ipairs(cells) do
+                    if i > 1 then table.insert(seg, LineWidget:new{ dimen = Geom:new{ w = thin, h = cell_h }, background = BlitBuffer.COLOR_BLACK }) end
+                    table.insert(seg, c)
+                end
+                table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
+                    RoundedOutline:new{ radius = Screen:scaleBySize(8), border = thin, seg } })
+            end
+            local encoded = SortState.encode(levels)
+            if tier < 1 then
+                heading(_("Quick picks"))
+                local items = {}
+                for _, q in ipairs(quick) do
+                    items[#items + 1] = { label = q[1], on = SortState.encode(SortState.parse(q[2])) == encoded,
+                        callback = function() apply(SortState.parse(q[2]), card) end }
+                end
+                chipRows(items)
+                -- a line between the usual orders and building your own
+                table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(4) })
+                table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
+                    LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.medium }, background = COLORS.line } })
+                table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(2) })
+            end
+            local titles = { _("Sort by"), _("Then by"), _("And then by") }
+            for n = 1, 3 do
+                local prev = levels[n - 1]
+                local allowed = SortState.allowedAfter(prev)
+                if (n == 1 or prev) and #allowed > 0 then
+                    heading(titles[n])
+                    local lv = levels[n]
+                    local function upto(k)
+                        local c = {}
+                        for x = 1, k do c[x] = levels[x] end
+                        return c
+                    end
+                    local keys = {}
+                    if n > 1 then keys[1] = { label = _("None"), on = lv == nil, callback = function() if lv then apply(upto(n - 1), card) end end } end
+                    for _, k in ipairs(allowed) do
+                        keys[#keys + 1] = { label = SortState.KEY_NAMES[k], on = lv ~= nil and lv.key == k,
+                            callback = function()
+                                if lv and lv.key == k then return end
+                                local c = upto(n - 1)
+                                c[n] = { key = k, dir = (k == "date" or k == "opened") and "desc" or "asc" }
+                                for x = n + 1, #levels do c[x] = levels[x] end
+                                apply(c, card)
+                            end }
+                    end
+                    chipRows(keys)
+                    if lv then
+                        directionBar(lv, function()
+                            local c = upto(#levels)
+                            c[n] = { key = lv.key, dir = lv.dir == "asc" and "desc" or "asc" }
+                            apply(c, card)
+                        end)
+                    end
+                end
+            end
+            if tier < 2 then
+                table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(12) })
+                table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
+                    FrameContainer:new{ bordersize = thin, color = COLORS.line, radius = Screen:scaleBySize(8),
+                        padding = Screen:scaleBySize(8), margin = 0,
+                        TextBoxWidget:new{ text = SortState.describe(levels), face = Font:getFace("cfont", 13),
+                            width = inner - Screen:scaleBySize(16) - thin * 2 } } })
+            end
+            table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(6) })
+            return g
+            end
+            local avail = Screen:getHeight() - list.topbar_height - Screen:scaleBySize(20) - (bw + Screen:scaleBySize(4)) * 2
+            -- Which version to use is decided on the fullest card there can be (three levels, all
+            -- with a direction), so picking a different order never swaps the card for the menu or back.
+            local fullest = SortState.parse("author:asc,book:asc,pos:asc")
+            local use = 2
+            for tier = 0, 2 do
+                if make(tier, fullest):getSize().h <= avail then use = tier; break end
+            end
+            local g = make(use)
+            if make(use, fullest):getSize().h > avail then too_tall = true end
+            return g
+        end }
+    -- still too tall for this screen: a plain menu instead (one row per level)
+    if too_tall then States.sortList(list, on_done) else sort_card:show() end
+end
+
+-- The sort order as a menu, for screens too small for the chip card: a row per level that opens a
+-- list of keys, and a row under it that flips the direction.
+function States.chooseCard(list, title, options)
+    local W = Screen:getWidth()
+    local card_w = math.min(Screen:scaleBySize(360), W - Screen:scaleBySize(20))
+    local bw = Size.border.window
+    States.Card:new{ modal = true, width = card_w,
+        left = W - card_w - Screen:scaleBySize(10), top = list.topbar_height + Screen:scaleBySize(4),
         pad_h = bw, pad_v = bw + Screen:scaleBySize(4),
         build = function(w, card)
             local g = VerticalGroup:new{ align = "left" }
             local side = Screen:scaleBySize(16)
-            local cell_w = math.floor((w - side * 2) / 2)
-            local cell_h = Screen:scaleBySize(40)
-            for bi, blk in ipairs(blocks) do
-                table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(bi == 1 and 6 or 10) })
+            table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
+                TextWidget:new{ text = title:upper(), face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted } })
+            table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(4) })
+            for _, o in ipairs(options) do
+                local d = Geom:new{ w = w - side * 2, h = Screen:scaleBySize(46) }
+                table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side }, TapBox:new{
+                    LeftContainer:new{ dimen = d, TextWidget:new{ text = (o.on and "✓ " or "") .. o.label,
+                        face = Font:getFace("cfont", 15), bold = o.on, max_width = d.w } },
+                    callback = function() card:onClose(); o.callback() end } })
+            end
+            return g
+        end }:show()
+end
+function States.sortList(list, on_done)
+    local W = Screen:getWidth()
+    local levels = SortState.parse(SortState.get(list.single_book)) or SortState.parse("date:desc")
+    local function apply(new_levels)
+        SortState.set(list.single_book, SortState.encode(SortState.revalidate(new_levels)))
+        list:applySort()
+        list:refresh()
+        if on_done then on_done() end
+        States.sortList(list, on_done)
+    end
+    local function upto(k)
+        local c = {}
+        for x = 1, k do c[x] = levels[x] end
+        return c
+    end
+    local card_w = math.min(Screen:scaleBySize(360), W - Screen:scaleBySize(20))
+    local bw = Size.border.window
+    local quick = {
+        { _("Newest"), "date:desc" }, { _("Oldest"), "date:asc" }, { _("Book A–Z"), "book:asc" },
+        { _("Author A–Z"), "author:asc" }, { _("Last opened book"), "opened:desc" },
+        { _("In book order"), "book:asc,pos:asc" },
+    }
+    States.Card:new{ modal = true, width = card_w,
+        left = W - card_w - Screen:scaleBySize(10), top = list.topbar_height + Screen:scaleBySize(4),
+        pad_h = bw, pad_v = bw + Screen:scaleBySize(4),
+        build = function(w, card)
+            local g = VerticalGroup:new{ align = "left" }
+            local side = Screen:scaleBySize(16)
+            local inner = w - side * 2
+            local function row(label, value, callback)
+                local d = Geom:new{ w = inner, h = Screen:scaleBySize(46) }
+                table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side }, TapBox:new{
+                    OverlapGroup:new{ dimen = d, allow_mirroring = false,
+                        LeftContainer:new{ dimen = d, TextWidget:new{ text = label, face = Font:getFace("cfont", 15),
+                            max_width = math.floor(inner * 0.4) } },
+                        RightContainer:new{ dimen = d, TextWidget:new{ text = value, face = Font:getFace("cfont", 14), bold = true,
+                            max_width = math.floor(inner * 0.58) } } },
+                    callback = function() card:onClose(); callback() end } })
                 table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
-                    TextWidget:new{ text = blk[1]:upper(), face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted } })
-                table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(2) })
-                local modes = blk[2]
-                for i = 1, #modes, 2 do
-                    local rowg = HorizontalGroup:new{ HorizontalSpan:new{ width = side } }
-                    for k = i, math.min(i + 1, #modes) do
-                        local mode, label = modes[k][1], modes[k][2]
-                        local on = mode == current
-                        if mode == "in_book_newest" then on = not oldest
-                        elseif mode == "in_book_oldest" then on = oldest end
-                        table.insert(rowg, TapBox:new{
-                            LeftContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
-                                TextWidget:new{ text = (on and "✓ " or "") .. label, face = Font:getFace("cfont", 14),
-                                    bold = on, max_width = cell_w - Screen:scaleBySize(6) } },
-                            callback = function()
-                                card:onClose()
-                                if mode == "in_book_newest" or mode == "in_book_oldest" then
-                                    setSetting("sort_in_book_oldest", mode == "in_book_oldest")
-                                else
-                                    setSetting("sort_mode", mode)
-                                end
-                                list:applySort()
-                                list:refresh()
-                                if on_done then on_done() end
-                            end })
+                    LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light } })
+            end
+            row(_("Quick picks"), sortModeLabel(SortState.get(list.single_book)) .. " ›", function()
+                local opts, now = {}, SortState.encode(levels)
+                for _, q in ipairs(quick) do
+                    opts[#opts + 1] = { label = q[1], on = SortState.encode(SortState.parse(q[2])) == now,
+                        callback = function() apply(SortState.parse(q[2])) end }
+                end
+                States.chooseCard(list, _("Quick picks"), opts)
+            end)
+            local titles = { _("Sort by"), _("Then by"), _("And then by") }
+            for n = 1, 3 do
+                local prev = levels[n - 1]
+                local allowed = SortState.allowedAfter(prev)
+                if (n == 1 or prev) and #allowed > 0 then
+                    local lv = levels[n]
+                    row(titles[n], (lv and SortState.KEY_NAMES[lv.key] or _("None")) .. " ›", function()
+                        local opts = {}
+                        if n > 1 then
+                            opts[1] = { label = _("None"), on = lv == nil, callback = function() apply(upto(n - 1)) end }
+                        end
+                        for _, k in ipairs(allowed) do
+                            opts[#opts + 1] = { label = SortState.KEY_NAMES[k], on = lv ~= nil and lv.key == k,
+                                callback = function()
+                                    if lv and lv.key == k then return States.sortList(list, on_done) end
+                                    local c = upto(n - 1)
+                                    c[n] = { key = k, dir = (k == "date" or k == "opened") and "desc" or "asc" }
+                                    for x = n + 1, #levels do c[x] = levels[x] end
+                                    apply(c)
+                                end }
+                        end
+                        States.chooseCard(list, titles[n], opts)
+                    end)
+                    if lv then
+                        row("", SortState.DIR_NAMES[lv.key][lv.dir] .. " ⇅", function()
+                            local c = upto(#levels)
+                            c[n] = { key = lv.key, dir = lv.dir == "asc" and "desc" or "asc" }
+                            apply(c)
+                        end)
                     end
-                    table.insert(g, rowg)
                 end
             end
-            table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(4) })
+            table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(6) })
             return g
         end }:show()
 end
@@ -5195,7 +5487,7 @@ Page.forwardGestures(FilterScreen)
 function FilterScreen:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
     self.saved_filter = deepCopy(self.list.active_filter or {})
-    self.saved_sort = getSetting("sort_mode", "date_newest")
+    self.saved_sort = SortState.get(self.list.single_book)
     if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
     self:build()
 end
@@ -5455,16 +5747,17 @@ function FilterScreen:build()
     -- sort
     table.insert(body, sectionBar(_("SORT")))
     do
-        local cur = getSetting("sort_mode", "date_newest")
+        local cur = SortState.norm(SortState.get(list.single_book))
         local items, known = {}, false
         local function apply(mode)
-            setSetting("sort_mode", mode)
+            SortState.set(list.single_book, mode)
             list:applySort()
             self:changed()
         end
         for _i, sc in ipairs(SORT_CHOICES) do
-            if sc[1] == cur then known = true end
-            table.insert(items, chip(sc[2], sc[1] == cur, function() if sc[1] ~= cur then apply(sc[1]) end end, { h = Screen:scaleBySize(36) }))
+            local is_cur = SortState.norm(sc[1]) == cur
+            if is_cur then known = true end
+            table.insert(items, chip(sc[2], is_cur, function() if not is_cur then apply(sc[1]) end end, { h = Screen:scaleBySize(36) }))
         end
         -- all other orders (by author/file name, reversed, …) stay in the full sort list
         table.insert(items, chip(known and _("More…") or sortModeLabel(cur), not known,
@@ -5485,13 +5778,13 @@ function FilterScreen:build()
         end
         local chips = {}
         for i, p in ipairs(presets) do
-            local on = same(p.filter or {}, list.active_filter or {}) and (p.sort or "") == getSetting("sort_mode", "date_newest")
+            local on = same(p.filter or {}, list.active_filter or {}) and SortState.norm(p.sort or "") == SortState.norm(SortState.get(list.single_book))
             table.insert(chips, chip(p.name, on, function()
                 local presence = list.active_filter and list.active_filter.notes_presence
                 list.active_filter = deepCopy(p.filter) or {}
                 list.active_filter.notes_presence = presence
-                if p.sort and p.sort ~= getSetting("sort_mode", "date_newest") then
-                    setSetting("sort_mode", p.sort)
+                if p.sort and SortState.norm(p.sort) ~= SortState.norm(SortState.get(list.single_book)) then
+                    SortState.set(list.single_book, p.sort)
                     list:applySort()
                 end
                 self:changed()
@@ -5526,7 +5819,7 @@ function FilterScreen:build()
                     if name == "" then name = string.format(_("Filter %d"), #presets + 1) end
                     local copy = deepCopy(list.active_filter) or {}
                     copy.notes_presence = nil
-                    table.insert(presets, { name = name, filter = copy, sort = getSetting("sort_mode", "date_newest") })
+                    table.insert(presets, { name = name, filter = copy, sort = SortState.get(list.single_book) })
                     setSetting("filter_presets", presets)
                     UIManager:close(dlg)
                     self:rebuild()
@@ -5595,8 +5888,8 @@ end
 function FilterScreen:onClose()
     -- Cancel: put filters and sort back as they were
     self.list.active_filter = self.saved_filter
-    if getSetting("sort_mode", "date_newest") ~= self.saved_sort then
-        setSetting("sort_mode", self.saved_sort)
+    if SortState.get(self.list.single_book) ~= self.saved_sort then
+        SortState.set(self.list.single_book, self.saved_sort)
         self.list:applySort()
     end
     self.list:refresh()
