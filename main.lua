@@ -204,6 +204,8 @@ local SORT_MODES = {
     filename_desc = { label = _("Z to A (by Date)") },
     filename_location_asc = { label = _("Location: Begin to End") },
     filename_location_desc = { label = _("Location: End to Begin") },
+    opened_recent = { label = _("Last opened book first") },
+    opened_oldest = { label = _("Longest unopened book first") },
 }
 
 local SORT_CATEGORIES = {
@@ -211,6 +213,7 @@ local SORT_CATEGORIES = {
     author = { "author_asc", "author_desc", "author_location_asc", "author_location_desc" },
     book = { "book_asc", "book_desc", "book_location_asc", "book_location_desc" },
     filename = { "filename_asc", "filename_desc", "filename_location_asc", "filename_location_desc" },
+    opened = { "opened_recent", "opened_oldest" },
 }
 
 local SPIN_MENUS = {
@@ -274,15 +277,44 @@ normalizeBookTitleUncached = function(title)
     return normalized
 end
 
-local function compareByDatetime(a, b, reverse)
-    local cmp = (a.datetime or "") > (b.datetime or "") and 1 or ((a.datetime or "") < (b.datetime or "") and -1 or 0)
-    return reverse and cmp < 0 or cmp > 0
+-- Sorting state set by sortNotesList: how highlights are ordered inside a book, and when each
+-- book was last opened (path -> time).
+local SortState = { oldest_first = false, opened = {} }
+function SortState.compareInBook(a, b)
+    local da, db = a.datetime or "", b.datetime or ""
+    if SortState.oldest_first then return da < db end
+    return da > db
 end
 
+-- Where a note sits in its book: page first, then the exact spot. EPUB-like books
+-- keep an xpointer text ("/body/DocFragment[3]/body/p[12]/text().5") in pos0, PDFs a
+-- table with x/y; neither is a number, so compare their digit runs one by one.
+local function positionKey(n)
+    local key = { tonumber(n.page) or 0 }
+    local p = n.pos0
+    if type(p) == "string" then
+        for d in p:gmatch("%d+") do key[#key + 1] = tonumber(d) or 0 end
+    elseif type(p) == "table" then
+        key[#key + 1] = tonumber(p.y) or 0
+        key[#key + 1] = tonumber(p.x) or 0
+    end
+    return key
+end
 local function compareByPosition(a, b, reverse)
-    local pos_a = tonumber(a.pos0) or 0
-    local pos_b = tonumber(b.pos0) or 0
-    if reverse then return pos_a > pos_b else return pos_a < pos_b end
+    -- KOReader keeps a book's annotations in reading order, so the place in that list
+    -- is the most reliable position (an xpointer alone can't tell h2[1] from p[2])
+    local oa, ob = tonumber(a.order), tonumber(b.order)
+    if oa and ob and oa ~= ob then
+        if reverse then return oa > ob else return oa < ob end
+    end
+    local ka, kb = positionKey(a), positionKey(b)
+    for i = 1, math.max(#ka, #kb) do
+        local x, y = ka[i] or -1, kb[i] or -1
+        if x ~= y then
+            if reverse then return x > y else return x < y end
+        end
+    end
+    return false
 end
 
 local SORT_COMPARATORS = {
@@ -290,36 +322,46 @@ local SORT_COMPARATORS = {
     date_oldest = function(a, b) return (a.datetime or "") < (b.datetime or "") end,
     
     author_asc = function(a, b)
-        if a.book_authors ~= b.book_authors then return a.book_authors < b.book_authors end
-        return compareByDatetime(a, b)
+        local au_a, au_b = lowerCached(a.book_authors), lowerCached(b.book_authors)
+        if au_a ~= au_b then return au_a < au_b end
+        local title_a = normalizeBookTitle(a.book_title)
+        local title_b = normalizeBookTitle(b.book_title)
+        if title_a ~= title_b then return title_a < title_b end
+        return SortState.compareInBook(a, b)
     end,
     author_desc = function(a, b)
-        if a.book_authors ~= b.book_authors then return a.book_authors > b.book_authors end
-        return compareByDatetime(a, b)
+        local au_a, au_b = lowerCached(a.book_authors), lowerCached(b.book_authors)
+        if au_a ~= au_b then return au_a > au_b end
+        local title_a = normalizeBookTitle(a.book_title)
+        local title_b = normalizeBookTitle(b.book_title)
+        if title_a ~= title_b then return title_a < title_b end
+        return SortState.compareInBook(a, b)
     end,
     
     book_asc = function(a, b)
         local title_a = normalizeBookTitle(a.book_title)
         local title_b = normalizeBookTitle(b.book_title)
         if title_a ~= title_b then return title_a < title_b end
-        return compareByDatetime(a, b)
+        return SortState.compareInBook(a, b)
     end,
     book_desc = function(a, b)
         local title_a = normalizeBookTitle(a.book_title)
         local title_b = normalizeBookTitle(b.book_title)
         if title_a ~= title_b then return title_a > title_b end
-        return compareByDatetime(a, b)
+        return SortState.compareInBook(a, b)
     end,
     
     author_location_asc = function(a, b)
-        if a.book_authors ~= b.book_authors then return a.book_authors < b.book_authors end
+        local au_a, au_b = lowerCached(a.book_authors), lowerCached(b.book_authors)
+        if au_a ~= au_b then return au_a < au_b end
         local title_a = normalizeBookTitle(a.book_title)
         local title_b = normalizeBookTitle(b.book_title)
         if title_a ~= title_b then return title_a < title_b end
         return compareByPosition(a, b)
     end,
     author_location_desc = function(a, b)
-        if a.book_authors ~= b.book_authors then return a.book_authors < b.book_authors end
+        local au_a, au_b = lowerCached(a.book_authors), lowerCached(b.book_authors)
+        if au_a ~= au_b then return au_a < au_b end
         local title_a = normalizeBookTitle(a.book_title)
         local title_b = normalizeBookTitle(b.book_title)
         if title_a ~= title_b then return title_a < title_b end
@@ -351,24 +393,37 @@ local SORT_COMPARATORS = {
     filename_location_desc = function(a, b)
         local filename_a = lowerCached(a.book_filename)
         local filename_b = lowerCached(b.book_filename)
-        if filename_a ~= filename_b then return filename_a > filename_b end
+        if filename_a ~= filename_b then return filename_a < filename_b end
         local title_a = normalizeBookTitle(a.book_title)
         local title_b = normalizeBookTitle(b.book_title)
         if title_a ~= title_b then return title_a < title_b end
         return compareByPosition(a, b, true)
     end,
     
+    opened_recent = function(a, b)
+        local ta, tb = SortState.opened[a.book_path or ""] or 0, SortState.opened[b.book_path or ""] or 0
+        if ta ~= tb then return ta > tb end
+        if a.book_path ~= b.book_path then return (a.book_path or "") < (b.book_path or "") end
+        return SortState.compareInBook(a, b)
+    end,
+    opened_oldest = function(a, b)
+        local ta, tb = SortState.opened[a.book_path or ""] or 0, SortState.opened[b.book_path or ""] or 0
+        if ta ~= tb then return ta < tb end
+        if a.book_path ~= b.book_path then return (a.book_path or "") < (b.book_path or "") end
+        return SortState.compareInBook(a, b)
+    end,
+
     filename_asc = function(a, b)
         local filename_a = lowerCached(a.book_filename)
         local filename_b = lowerCached(b.book_filename)
         if filename_a ~= filename_b then return filename_a < filename_b end
-        return compareByDatetime(a, b)
+        return SortState.compareInBook(a, b)
     end,
     filename_desc = function(a, b)
         local filename_a = lowerCached(a.book_filename)
         local filename_b = lowerCached(b.book_filename)
         if filename_a ~= filename_b then return filename_a > filename_b end
-        return compareByDatetime(a, b)
+        return SortState.compareInBook(a, b)
     end,
 }
 
@@ -1840,6 +1895,7 @@ local SORT_SHORT_LABELS = {
     date_newest = _("Newest first"), date_oldest = _("Oldest first"),
     asc = _("A–Z"), desc = _("Z–A"),
     location_asc = _("start to end"), location_desc = _("end to start"),
+    opened_recent = _("Last opened first"), opened_oldest = _("Longest unopened first"),
 }
 local function sortModeLabel(mode)
     if not SORT_MODES[mode] then mode = "date_newest" end
@@ -2423,6 +2479,13 @@ end
 function NotesListWidget:sortNotesList(notes_list, sort_mode)
     sort_mode = sort_mode or getSetting("sort_mode", "date_newest")
     local comparator = SORT_COMPARATORS[sort_mode]
+    SortState.oldest_first = getSetting("sort_in_book_oldest", false) == true
+    if sort_mode:find("^opened_") then
+        SortState.opened = {}
+        for _, item in ipairs(ReadHistory.hist or {}) do
+            if item.file then SortState.opened[item.file] = tonumber(item.time) or 0 end
+        end
+    end
     if comparator then
         table.sort(notes_list, comparator)
     end
@@ -3365,7 +3428,7 @@ end
 
 -- On-disk copy of the caches above, so a KOReader restart doesn't mean parsing every
 -- book's sidecar again. Bump CACHE_VERSION whenever the cached data's shape changes.
-local CACHE_VERSION = 1
+local CACHE_VERSION = 2
 local _persist = nil        -- LuaSettings object, loaded on the first scan
 local _persist_dirty = false
 local _persist_count = 0
@@ -3604,13 +3667,13 @@ function AllNotesViewer:clearBookCache(book_path)
 end
 function AllNotesViewer:convertLiveAnnotations(live)
     local annotations = {}
-    for _, item in ipairs(live) do
+    for idx, item in ipairs(live) do
         if item.drawer then
             local has_highlight = item.text and item.text ~= ""
             local has_note = item.note and item.note ~= ""
             if has_highlight or has_note then
                 table.insert(annotations, {
-                    page = item.page or item.pageno or 0,
+                    page = item.page or item.pageno or 0, order = idx,
                     pos0 = item.pos0, pos1 = item.pos1,
                     chapter = item.chapter or "",
                     text = item.text or "",
@@ -3642,13 +3705,13 @@ function AllNotesViewer:loadBookAnnotations(book_path, key, sidecar)
     
     local items = data.annotations
     if items and #items > 0 then
-        for _, item in ipairs(items) do
+        for idx, item in ipairs(items) do
             if item.drawer then
                 local has_highlight = item.text and item.text ~= ""
                 local has_note = item.note and item.note ~= ""
                 if has_highlight or has_note then
                     table.insert(annotations, {
-                        page = item.page or item.pageno or 0, pos0 = item.pos0, pos1 = item.pos1,
+                        page = item.page or item.pageno or 0, order = idx, pos0 = item.pos0, pos1 = item.pos1,
                         chapter = item.chapter or "", text = item.text or "", notes = item.note or "",
                         datetime = item.datetime or "", drawer = item.drawer, color = item.color or "yellow",
                         tags = item.tags, keywords = item.keywords
@@ -3831,7 +3894,7 @@ function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations)
             book_authors = book_info and book_info.authors or nil,
             book_filename = book_path:match("([^/\\]+)$") or book_path,
             book_path = book_path,
-            page = note.page, chapter = note.chapter,
+            page = note.page, chapter = note.chapter, order = note.order,
             pos0 = note.pos0, pos1 = note.pos1,
             highlighted_text = note.text, user_note = note.notes,
             datetime = note.datetime, drawer = note.drawer, color = note.color,
@@ -3878,7 +3941,7 @@ function AllNotesViewer:showAllNotes()
             table.insert(notes_list, {
                 book_title = book_data.title, book_authors = book_data.authors,
                 book_filename = book_data.filename,
-                book_path = book_data.path, page = note.page, chapter = note.chapter,
+                book_path = book_data.path, page = note.page, chapter = note.chapter, order = note.order,
                 pos0 = note.pos0, pos1 = note.pos1,
                 highlighted_text = note.text, user_note = note.notes,
                 datetime = note.datetime, drawer = note.drawer, color = note.color,
@@ -5015,8 +5078,8 @@ function States.sortMenu(list, on_done)
     local current = getSetting("sort_mode", "date_newest")
     local short = {
         date_newest = _("Newest first"), date_oldest = _("Oldest first"),
-        asc = _("A to Z · by date"), desc = _("Z to A · by date"),
-        loc_asc = _("Begin to end"), loc_desc = _("End to begin"),
+        asc = _("A to Z"), desc = _("Z to A"),
+        loc_asc = _("A to Z, book order"), loc_desc = _("A to Z, back to front"),
     }
     local blocks = {
         { _("Date"), { { "date_newest", short.date_newest }, { "date_oldest", short.date_oldest } } },
@@ -5026,6 +5089,11 @@ function States.sortMenu(list, on_done)
             { f[1] .. "_asc", short.asc }, { f[1] .. "_desc", short.desc },
             { f[1] .. "_location_asc", short.loc_asc }, { f[1] .. "_location_desc", short.loc_desc } } })
     end
+    table.insert(blocks, 2, { _("Last opened book"), {
+        { "opened_recent", _("Most recent first") }, { "opened_oldest", _("Longest ago first") } } })
+    local oldest = getSetting("sort_in_book_oldest", false) == true
+    table.insert(blocks, { _("Within each book"), {
+        { "in_book_newest", _("Newest first") }, { "in_book_oldest", _("Oldest first") } } })
     local bw = Size.border.window
     States.Card:new{ modal = true, width = math.min(Screen:scaleBySize(340), W - Screen:scaleBySize(20)),
         left = W - math.min(Screen:scaleBySize(340), W - Screen:scaleBySize(20)) - Screen:scaleBySize(10),
@@ -5047,13 +5115,19 @@ function States.sortMenu(list, on_done)
                     for k = i, math.min(i + 1, #modes) do
                         local mode, label = modes[k][1], modes[k][2]
                         local on = mode == current
+                        if mode == "in_book_newest" then on = not oldest
+                        elseif mode == "in_book_oldest" then on = oldest end
                         table.insert(rowg, TapBox:new{
                             LeftContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
                                 TextWidget:new{ text = (on and "✓ " or "") .. label, face = Font:getFace("cfont", 14),
                                     bold = on, max_width = cell_w - Screen:scaleBySize(6) } },
                             callback = function()
                                 card:onClose()
-                                setSetting("sort_mode", mode)
+                                if mode == "in_book_newest" or mode == "in_book_oldest" then
+                                    setSetting("sort_in_book_oldest", mode == "in_book_oldest")
+                                else
+                                    setSetting("sort_mode", mode)
+                                end
                                 list:applySort()
                                 list:refresh()
                                 if on_done then on_done() end
@@ -6543,8 +6617,10 @@ AllNotesViewer._test = {
     wrapText = wrapText,
     normalizeBookTitle = normalizeBookTitle,
     SORT_COMPARATORS = SORT_COMPARATORS,
+    SortState = SortState,
     filterToString = filterToString,
     sortModeLabel = sortModeLabel,
+    compareByPosition = compareByPosition,
     itemMatchesNote = itemMatchesNote,
     notesToMarkdown = notesToMarkdown,
     NotesListWidget = NotesListWidget,
