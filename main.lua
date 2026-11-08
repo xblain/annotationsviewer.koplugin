@@ -5393,12 +5393,13 @@ end
 end
 
 -- Full-screen picker for Books, Chapters and Tags (BookFilter / ChapterFilter boards).
--- Books and Chapters: "Only these" / "Hide these" switch and checkboxes. Tags: each tag can be
--- shown-only (✓) or hidden (✕), tap cycles through, because "has tag A but not tag B" is useful.
+-- Books, Chapters and Tags: the same "Only these" / "Hide these" switch and checkboxes. A tap marks
+-- an item with the switch's side (✓ only, ✕ hide) or clears it; holding marks it with the other
+-- side, so "has tag A but not tag B" stays possible.
 -- Changes count live ("Show N annotations"); Cancel / ‹ / ✕ put the filter back.
 local ListPicker = InputContainer:extend{
     list = nil, title = "", items = nil, inc_key = nil, exc_key = nil,
-    mode_labels = nil, tri_state = false, search_hint = nil, on_done = nil,
+    mode_labels = nil, search_hint = nil, on_done = nil,
     covers_fullscreen = true,
 }
 Page.watchResize(ListPicker)
@@ -5409,11 +5410,9 @@ function ListPicker:init()
     self.saved_inc = deepCopy(af[self.inc_key])
     self.saved_exc = deepCopy(af[self.exc_key])
     self.query = ""
-    if not self.tri_state then
-        -- one side at a time; legacy filters with both keep the "only" side
-        self.mode = (af[self.inc_key] and next(af[self.inc_key])) and "inc"
-            or ((af[self.exc_key] and next(af[self.exc_key])) and "exc" or "inc")
-    end
+    -- the side a tap marks: the one already in use ("only" when both are)
+    self.mode = (af[self.inc_key] and next(af[self.inc_key])) and "inc"
+        or ((af[self.exc_key] and next(af[self.exc_key])) and "exc" or "inc")
     if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
     self:build()
 end
@@ -5469,7 +5468,7 @@ function ListPicker:build()
 
     -- controls: mode switch, search, "N of M selected", Select all / Clear
     local controls = VerticalGroup:new{ align = "left" }
-    if not self.tri_state then
+    do
         local seg = HorizontalGroup:new{}
         local cell_h = Screen:scaleBySize(40)
         local cell_w = math.floor((inner - thin * 3) / 2)
@@ -5483,11 +5482,15 @@ function ListPicker:build()
                             fgcolor = on and BlitBuffer.COLOR_WHITE or COLORS.ink } } },
                 callback = function()
                     if self.mode == m[1] then return end
-                    -- move the current choice to the other side
-                    local chosen = {}
-                    for _i, it in ipairs(self.items) do if self:state(it.key) then table.insert(chosen, it.key) end end
+                    -- everything chosen moves to the other side, unless both sides are in use
+                    -- (then only what a tap marks changes)
+                    local chosen, mixed = {}, false
+                    for _i, it in ipairs(self.items) do
+                        local st = self:state(it.key)
+                        if st then table.insert(chosen, it.key); if st ~= self.mode then mixed = true end end
+                    end
                     self.mode = m[1]
-                    for _i, key in ipairs(chosen) do self:set(key, m[1]) end
+                    if not mixed then for _i, key in ipairs(chosen) do self:set(key, m[1]) end end
                     self:changed()
                 end,
             })
@@ -5514,13 +5517,11 @@ function ListPicker:build()
     for _i, it in ipairs(self.items) do if self:state(it.key) then n_sel = n_sel + 1 end end
     local d = Geom:new{ w = inner, h = Screen:scaleBySize(32) }
     local links = HorizontalGroup:new{ align = "center" }
-    if not self.tri_state then
-        table.insert(links, TapBox:new{ underlined(_("Select all")), callback = function()
-            for _i, it in ipairs(visible) do self:set(it.key, self.mode) end
-            self:changed()
-        end })
-        table.insert(links, HorizontalSpan:new{ width = Screen:scaleBySize(18) })
-    end
+    table.insert(links, TapBox:new{ underlined(_("Select all")), callback = function()
+        for _i, it in ipairs(visible) do self:set(it.key, self.mode) end
+        self:changed()
+    end })
+    table.insert(links, HorizontalSpan:new{ width = Screen:scaleBySize(18) })
     table.insert(links, TapBox:new{ underlined(_("Clear")), callback = function()
         for _i, it in ipairs(self.items) do self:set(it.key, nil) end
         self:changed()
@@ -5557,7 +5558,7 @@ function ListPicker:build()
         end
         local st = self:state(it.key)
         local mark
-        if st == "exc" and self.tri_state then
+        if st == "exc" then
             mark = RoundedBox:new{ width = box, radius = Screen:scaleBySize(5), fill = COLORS.ink, pad_x = 0, pad_y = 0,
                 CenterContainer:new{ dimen = Geom:new{ w = box, h = box },
                     IconWidget:new{ icon = "close", width = Screen:scaleBySize(16), height = Screen:scaleBySize(16), invert = true } } }
@@ -5585,12 +5586,13 @@ function ListPicker:build()
             LeftContainer:new{ dimen = rd, HorizontalGroup:new{ align = "center", mark, HorizontalSpan:new{ width = Screen:scaleBySize(14) }, texts } },
             RightContainer:new{ dimen = rd, count } },
             callback = function()
-                local cur = self:state(key)
-                if self.tri_state then
-                    self:set(key, (cur == nil and "inc") or (cur == "inc" and "exc") or nil)
-                else
-                    self:set(key, (cur == nil) and self.mode or nil)
-                end
+                -- tap: this side, or clear it; hold: the other side
+                self:set(key, (self:state(key) == self.mode) and nil or self.mode)
+                self:changed()
+            end,
+            hold_callback = function()
+                local other = self.mode == "inc" and "exc" or "inc"
+                self:set(key, (self:state(key) == other) and nil or other)
                 self:changed()
             end })
         table.insert(rows, LineWidget:new{ dimen = Geom:new{ w = rinner, h = Size.line.thin }, background = COLORS.line_light })
@@ -5709,7 +5711,7 @@ function NotesListWidget:showTagPicker(on_done)
     end
     table.sort(items, function(a, b) return a.title:lower() < b.title:lower() end)
     UIManager:show(ListPicker:new{ list = self, title = _("Tags"), items = items, inc_key = "tags", exc_key = "tags_exclude",
-        tri_state = true, on_done = on_done })
+        mode_labels = { _("Only these tags"), _("Hide these tags") }, on_done = on_done })
 end
 
 function AllNotesViewer:showNoteDetails(note, parent_widget)
