@@ -4338,6 +4338,90 @@ function Page.exitAll(w)
         w = w.parent_screen or w.parent
     end
 end
+-- Full-screen pages are paged like the list, with the same Prev / Next bar instead of a scrollbar:
+-- `rows` (a VerticalGroup) is cut into pages of whole rows that fit `avail` high; the first
+-- `opts.fixed` rows stay on every page; `opts.left` pads the rows on the left. The page number is
+-- kept in owner.page_idx, so rebuilding after a change stays on the same page.
+function Page.paged(owner, W, avail, rows, opts)
+    opts = opts or {}
+    local fixed_n = opts.fixed or 0
+    local n = #rows
+    local fixed_h = 0
+    for i = 1, math.min(fixed_n, n) do fixed_h = fixed_h + rows[i]:getSize().h end
+    local total = 0
+    for i = 1, n do total = total + rows[i]:getSize().h end
+    local bar_h = FOOTER_BAR_HEIGHT + Size.line.medium
+    local function wrap(g)
+        if opts.left then return HorizontalGroup:new{ HorizontalSpan:new{ width = opts.left }, g } end
+        return g
+    end
+    local pages = {}
+    if total <= avail then
+        pages[1] = { first = 1, last = n }
+    else
+        local cap = avail - bar_h - fixed_h
+        local cur, h = nil, 0
+        for i = fixed_n + 1, n do
+            local rh = rows[i]:getSize().h
+            if not cur or (h + rh > cap and h > 0) then
+                cur = { first = i, last = i }; h = 0
+                table.insert(pages, cur)
+            end
+            cur.last = i
+            h = h + rh
+        end
+        if #pages == 0 then pages[1] = { first = n + 1, last = n } end
+    end
+    local count = #pages
+    owner.page_idx = math.max(1, math.min(owner.page_idx or 1, count))
+    local pg = pages[owner.page_idx]
+    local g = VerticalGroup:new{ align = "left" }
+    for i = 1, math.min(fixed_n, n) do table.insert(g, rows[i]) end
+    for i = pg.first, pg.last do table.insert(g, rows[i]) end
+    local content = wrap(g)
+    if count == 1 then return content end
+
+    local function go(p)
+        owner.page_idx = p
+        if owner.rebuild then owner:rebuild() else owner:build(); UIManager:setDirty(owner, "ui") end
+    end
+    local cur = owner.page_idx
+    local has_prev, has_next = cur > 1, cur < count
+    local face = Font:getFace("cfont", 13)
+    local icon = Screen:scaleBySize(20)
+    local cl, cr, cf, clast = "chevron.left", "chevron.right", "chevron.first", "chevron.last"
+    if BD.mirroredUILayout() then cl, cr, cf, clast = cr, cl, clast, cf end
+    local function pageButton(text, icon_name, icon_first, enabled, cb, hold_cb)
+        local tw = TextWidget:new{ text = text, face = face, bold = enabled, fgcolor = enabled and COLORS.ink or COLORS.disabled }
+        local iw = IconWidget:new{ icon = icon_name, width = icon, height = icon, dim = not enabled }
+        local row = icon_first and HorizontalGroup:new{ align = "center", iw, HorizontalSpan:new{ width = Screen:scaleBySize(4) }, tw }
+            or HorizontalGroup:new{ align = "center", tw, HorizontalSpan:new{ width = Screen:scaleBySize(4) }, iw }
+        return TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = row:getSize().w + Screen:scaleBySize(20), h = FOOTER_BAR_HEIGHT }, row },
+            callback = function() if enabled then cb() end end,
+            hold_callback = function() if enabled then hold_cb() end end }
+    end
+    local function jumpButton(icon_name, enabled, cb)
+        local iw = IconWidget:new{ icon = icon_name, width = icon, height = icon, dim = not enabled }
+        return TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = icon + Screen:scaleBySize(20), h = FOOTER_BAR_HEIGHT }, iw },
+            callback = function() if enabled then cb() end end }
+    end
+    local bd = Geom:new{ w = W, h = FOOTER_BAR_HEIGHT }
+    local side = Screen:scaleBySize(2)
+    local bar = OverlapGroup:new{ dimen = bd, allow_mirroring = false,
+        LeftContainer:new{ dimen = bd, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
+            jumpButton(cf, has_prev, function() go(1) end),
+            pageButton(_("Prev"), cl, true, has_prev, function() go(cur - 1) end, function() go(1) end) } },
+        CenterContainer:new{ dimen = bd, TextWidget:new{ text = string.format("%d / %d", cur, count), face = face, bold = true } },
+        RightContainer:new{ dimen = bd, HorizontalGroup:new{
+            pageButton(_("Next"), cr, false, has_next, function() go(cur + 1) end, function() go(count) end),
+            jumpButton(clast, has_next, function() go(count) end),
+            HorizontalSpan:new{ width = side } } } }
+    local used = content:getSize().h
+    return VerticalGroup:new{ align = "left", content,
+        VerticalSpan:new{ width = math.max(0, avail - bar_h - used) },
+        LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.medium }, background = COLORS.line },
+        bar }
+end
 function Page.countText(n)
     return n == 1 and _("Show 1 annotation") or string.format(_("Show %d annotations"), n)
 end
@@ -4974,14 +5058,7 @@ function FilterScreen:build()
 
     -- body scrolls when it doesn't fit (landscape, small screens)
     local avail = H - header:getSize().h - footer:getSize().h
-    local body_widget = body
-    self.scroller = nil
-    if body:getSize().h > avail then
-        -- rows get narrower to leave room for the scrollbar strip: lay the page out again
-        if not self.narrow then self.narrow = true; return self:build() end
-        body_widget = Page.scrollable(W, avail, self, body)
-        self.scroller = body_widget
-    end
+    local body_widget = Page.paged(self, W, avail, body)
     self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0,
         background = BlitBuffer.COLOR_WHITE,
         OverlapGroup:new{ dimen = Geom:new{ w = W, h = H }, allow_mirroring = false,
@@ -5305,10 +5382,10 @@ function SS:build()
         table.insert(top_group, Page.preview(self.list, math.floor(H * 0.26)))
     end
     local avail = H - top_group:getSize().h
-    self.scroller = Page.scrollable(W, avail, self, body)
+    local body_widget = Page.paged(self, W, avail, body)
     self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0,
         background = BlitBuffer.COLOR_WHITE,
-        VerticalGroup:new{ align = "left", top_group, self.scroller } }
+        VerticalGroup:new{ align = "left", top_group, body_widget } }
 end
 end
 
@@ -5385,17 +5462,16 @@ function NotesListWidget.SubPage:build()
         Page.exitAll(self); self.list:refresh()
     end)
     local avail = H - header:getSize().h
-    self.scroller = Page.scrollable(W, avail, self, body)
+    local body_widget = Page.paged(self, W, avail, body, { fixed = 4 })
     self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0,
         background = BlitBuffer.COLOR_WHITE,
-        VerticalGroup:new{ align = "left", header, self.scroller } }
+        VerticalGroup:new{ align = "left", header, body_widget } }
 end
 end
 
 -- Full-screen picker for Books, Chapters and Tags (BookFilter / ChapterFilter boards).
 -- Books, Chapters and Tags: the same "Only these" / "Hide these" switch and checkboxes. A tap marks
--- an item with the switch's side (✓ only, ✕ hide) or clears it; holding marks it with the other
--- side, so "has tag A but not tag B" stays possible.
+-- an item with the switch's side (✓ only, ✕ hide) or clears it.
 -- Changes count live ("Show N annotations"); Cancel / ‹ / ✕ put the filter back.
 local ListPicker = InputContainer:extend{
     list = nil, title = "", items = nil, inc_key = nil, exc_key = nil,
@@ -5589,11 +5665,6 @@ function ListPicker:build()
                 -- tap: this side, or clear it; hold: the other side
                 self:set(key, (self:state(key) == self.mode) and nil or self.mode)
                 self:changed()
-            end,
-            hold_callback = function()
-                local other = self.mode == "inc" and "exc" or "inc"
-                self:set(key, (self:state(key) == other) and nil or other)
-                self:changed()
             end })
         table.insert(rows, LineWidget:new{ dimen = Geom:new{ w = rinner, h = Size.line.thin }, background = COLORS.line_light })
     end
@@ -5601,19 +5672,12 @@ function ListPicker:build()
         table.insert(rows, VerticalSpan:new{ width = Screen:scaleBySize(24) })
         table.insert(rows, TextWidget:new{ text = _("Nothing found."), face = face14, fgcolor = COLORS.muted })
     end
-    local list_body = HorizontalGroup:new{ HorizontalSpan:new{ width = P }, rows }
 
     local footer = Page.footer(function() self:onClose() end, Page.countText(#(self.list.filtered_notes or {})),
         function() self:onDone() end)
 
     local avail = H - top:getSize().h - footer:getSize().h
-    self.scroller = nil
-    local body = list_body
-    if list_body:getSize().h > avail then
-        if not self.narrow then self.narrow = true; return self:build() end
-        self.scroller = Page.scrollable(W, avail, self, list_body)
-        body = self.scroller
-    end
+    local body = Page.paged(self, W, avail, rows, { left = P })
     self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0, background = BlitBuffer.COLOR_WHITE,
         OverlapGroup:new{ dimen = Geom:new{ w = W, h = H }, allow_mirroring = false,
             VerticalGroup:new{ align = "left", top, body },
@@ -5626,9 +5690,9 @@ function ListPicker:askQuery()
         title = self.search_hint, input = self.query,
         buttons = {{
             { text = _("Cancel"), id = "close", callback = function() UIManager:close(dialog) end },
-            { text = _("Clear"), callback = function() UIManager:close(dialog); self.query = ""; self:changed() end },
+            { text = _("Clear"), callback = function() UIManager:close(dialog); self.query = ""; self.page_idx = 1; self:changed() end },
             { text = _("Search"), is_enter_default = true, callback = function()
-                self.query = dialog:getInputText() or ""
+                self.query = dialog:getInputText() or ""; self.page_idx = 1
                 UIManager:close(dialog)
                 self:changed()
             end },
