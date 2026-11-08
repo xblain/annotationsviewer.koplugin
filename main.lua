@@ -217,29 +217,29 @@ local SORT_CATEGORIES = {
 local SPIN_MENUS = {
     font_size = {
         dialog_name = "font_size_dialog",
-        title = _("Font Sizes"),
+        title = _("Font sizes"),
         settings = {
-            { label = _("Title Size: "), key = "title_font_size", default = DEFAULT_TITLE_FONT_SIZE, min = 8, max = 48, step = 1, getter = getTitleFontSize },
-            { label = _("Info Size: "), key = "info_font_size", default = DEFAULT_INFO_FONT_SIZE, min = 8, max = 48, step = 1, getter = getInfoFontSize },
-            { label = _("Content Size: "), key = "content_font_size", default = DEFAULT_CONTENT_FONT_SIZE, min = 8, max = 48, step = 1, getter = getContentFontSize },
+            { label = _("Title size: "), key = "title_font_size", default = DEFAULT_TITLE_FONT_SIZE, min = 8, max = 48, step = 1, getter = getTitleFontSize },
+            { label = _("Info size: "), key = "info_font_size", default = DEFAULT_INFO_FONT_SIZE, min = 8, max = 48, step = 1, getter = getInfoFontSize },
+            { label = _("Content size: "), key = "content_font_size", default = DEFAULT_CONTENT_FONT_SIZE, min = 8, max = 48, step = 1, getter = getContentFontSize },
         }
     },
     section_margin = {
         dialog_name = "section_margin_dialog",
-        title = _("Space Between Notes"),
+        title = _("Space between notes"),
         settings = {
-            { label = _("After Title: "), key = "title_margin", default = DEFAULT_TITLE_MARGIN, min = 0, max = 30, step = 1, getter = function() return getSetting("title_margin", DEFAULT_TITLE_MARGIN) end },
-            { label = _("After Info: "), key = "info_margin", default = DEFAULT_INFO_MARGIN, min = 0, max = 30, step = 1, getter = function() return getSetting("info_margin", DEFAULT_INFO_MARGIN) end },
+            { label = _("After title: "), key = "title_margin", default = DEFAULT_TITLE_MARGIN, min = 0, max = 30, step = 1, getter = function() return getSetting("title_margin", DEFAULT_TITLE_MARGIN) end },
+            { label = _("After info: "), key = "info_margin", default = DEFAULT_INFO_MARGIN, min = 0, max = 30, step = 1, getter = function() return getSetting("info_margin", DEFAULT_INFO_MARGIN) end },
         }
     },
     margins = {
         dialog_name = "margin_dialog",
-        title = _("Page Margins"),
+        title = _("Page margins"),
         settings = {
-            { label = _("Top Padding: "), key = "top_padding", default = DEFAULT_TOP_PADDING, min = 0, max = 100, step = 5, getter = function() return getSetting("top_padding", DEFAULT_TOP_PADDING) end },
-            { label = _("Horizontal Margin: "), key = "h_margin", default = DEFAULT_H_MARGIN, min = 5, max = 60, step = 5, getter = function() return getSetting("h_margin", DEFAULT_H_MARGIN) end },
-            { label = _("Note Spacing: "), key = "note_spacing", default = DEFAULT_NOTE_SPACING, min = 5, max = 100, step = 2, getter = function() return getSetting("note_spacing", DEFAULT_NOTE_SPACING) end },
-            { label = _("Text Margin: "), key = "text_margin", default = DEFAULT_TEXT_MARGIN, min = 0, max = 30, step = 2, getter = function() return getSetting("text_margin", DEFAULT_TEXT_MARGIN) end },
+            { label = _("Top padding: "), key = "top_padding", default = DEFAULT_TOP_PADDING, min = 0, max = 100, step = 5, getter = function() return getSetting("top_padding", DEFAULT_TOP_PADDING) end },
+            { label = _("Horizontal margin: "), key = "h_margin", default = DEFAULT_H_MARGIN, min = 5, max = 60, step = 5, getter = function() return getSetting("h_margin", DEFAULT_H_MARGIN) end },
+            { label = _("Note spacing: "), key = "note_spacing", default = DEFAULT_NOTE_SPACING, min = 5, max = 100, step = 2, getter = function() return getSetting("note_spacing", DEFAULT_NOTE_SPACING) end },
+            { label = _("Text margin: "), key = "text_margin", default = DEFAULT_TEXT_MARGIN, min = 0, max = 30, step = 2, getter = function() return getSetting("text_margin", DEFAULT_TEXT_MARGIN) end },
         }
     }
 }
@@ -2152,30 +2152,9 @@ function NotesListWidget:showSortMenu(back_to_menu, on_done)
     self.sort_dialog = ButtonDialogTitle:new{ title = _("Sort By"), buttons = buttons }
     UIManager:show(self.sort_dialog)
 end
-function NotesListWidget:showSpinMenu(menu_key, parent_callback)
-    local menu_config = SPIN_MENUS[menu_key]
-    if not menu_config then return end
-    
-    local buttons = {}
-    for _, setting in ipairs(menu_config.settings) do
-        table.insert(buttons, {{
-            text = setting.label .. setting.getter(),
-            callback = function()
-                UIManager:close(self[menu_config.dialog_name])
-                self:showSpinSetting(setting.label:gsub(": $", ""), setting.key, setting.default, setting.min, setting.max, setting.step, parent_callback)
-            end
-        }})
-    end
-    
-    table.insert(buttons, {{ text = _("Back"), callback = function()
-        UIManager:close(self[menu_config.dialog_name])
-        parent_callback()
-    end }})
-    
-    self[menu_config.dialog_name] = ButtonDialogTitle:new{ title = menu_config.title, buttons = buttons }
-    UIManager:show(self[menu_config.dialog_name])
+function NotesListWidget:showSpinMenu(_menu_key, _parent_callback)
+    self:showSettingsMenu() -- the numbers are rows on the Settings page now
 end
-
 function NotesListWidget:applySort()
     local sort_mode = getSetting("sort_mode", "date_newest")
     self:sortNotesList(self.notes_list, sort_mode)
@@ -2312,83 +2291,7 @@ function NotesListWidget:showFontSizeMenu()
     self:showSpinMenu("font_size", function() self:showSettingsMenu() end)
 end
 function NotesListWidget:showFontsMenu()
-    local function getAvailableFonts()
-        local fonts = {}
-        local seen = {}
-        local font_list = FontList:getFontList()
-        for _, font_path in ipairs(font_list) do
-            local font_name = font_path:match("([^/\\]+)$") or font_path
-            if not seen[font_name] then
-                seen[font_name] = true
-                table.insert(fonts, { name = font_name, path = font_path })
-            end
-        end
-        table.sort(fonts, function(a, b) return a.name:lower() < b.name:lower() end)
-        return fonts
-    end
-    local function getFontDisplayName(font_path)
-        if not font_path or font_path == "" then return "Default" end
-        return font_path:match("([^/\\]+)$") or font_path
-    end
-    local function showFontPicker(title, setting_key, current_value, back_callback)
-        local Menu = require("ui/widget/menu")
-        local available_fonts = getAvailableFonts()
-        local menu_items = {}
-        table.insert(menu_items, {
-            text = (current_value == nil or current_value == "") and "✓ Default" or "   Default",
-            callback = function()
-                setSetting(setting_key, nil)
-                self:refresh()
-                UIManager:close(self.font_picker_menu)
-                if back_callback then back_callback() end
-            end,
-        })
-        for _, font in ipairs(available_fonts) do
-            local is_selected = current_value == font.path
-            local check = is_selected and "✓ " or "   "
-            table.insert(menu_items, {
-                text = check .. font.name,
-                callback = function()
-                    setSetting(setting_key, font.path)
-                    self:refresh()
-                    UIManager:close(self.font_picker_menu)
-                    if back_callback then back_callback() end
-                end,
-            })
-        end
-        self.font_picker_menu = Menu:new{
-            title = title,
-            item_table = menu_items,
-            width = Screen:getWidth() - Screen:scaleBySize(20),
-            height = Screen:getHeight(),
-            single_line = true,
-            items_per_page = 14,
-            close_callback = function()
-                UIManager:close(self.font_picker_menu)
-            end,
-        }
-        UIManager:show(self.font_picker_menu)
-    end
-    local buttons = {
-        {{ text = _("Title Font: ") .. getFontDisplayName(getTitleFont()), callback = function()
-            UIManager:close(self.fonts_dialog)
-            showFontPicker(_("Select Title Font"), "title_font", getTitleFont(), function() self:showFontsMenu() end)
-        end }},
-        {{ text = _("Info Font: ") .. getFontDisplayName(getInfoFont()), callback = function()
-            UIManager:close(self.fonts_dialog)
-            showFontPicker(_("Select Info Font"), "info_font", getInfoFont(), function() self:showFontsMenu() end)
-        end }},
-        {{ text = _("Content Font: ") .. getFontDisplayName(getContentFont()), callback = function()
-            UIManager:close(self.fonts_dialog)
-            showFontPicker(_("Select Content Font"), "content_font", getContentFont(), function() self:showFontsMenu() end)
-        end }},
-        {{ text = _("Back"), callback = function()
-            UIManager:close(self.fonts_dialog)
-            self:showSettingsMenu()
-        end }},
-    }
-    self.fonts_dialog = ButtonDialogTitle:new{ title = _("Fonts"), buttons = buttons }
-    UIManager:show(self.fonts_dialog)
+    self:showSettingsMenu() -- the fonts are rows on the Settings page now
 end
 function NotesListWidget:showSectionMarginMenu()
     self:showSpinMenu("section_margin", function() self:showSettingsMenu() end)
@@ -4906,7 +4809,7 @@ end
 -- dialogs. Every setting is still here; changes apply straight away. The list-of-numbers
 -- settings (font sizes, margins, spacing) and the typeface picker keep their own dialogs.
 do -- own scope: keeps the main chunk under Lua's 200-locals limit
-local SS = InputContainer:extend{ list = nil, covers_fullscreen = true }
+local SS = InputContainer:extend{ list = nil, page = nil, covers_fullscreen = true }
 NotesListWidget.SettingsScreen = SS
 function SS:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
@@ -4926,6 +4829,8 @@ function SS:changed()
 end
 function SS:onClose()
     UIManager:close(self, "flashui")
+    -- a sub page: the Settings page under it redraws with the new values
+    if self.page and self.list.settings_screen then self.list.settings_screen:rebuild() end
     return true
 end
 function SS:onCloseWidget()
@@ -5002,16 +4907,20 @@ function SS:build()
         end
         return RoundedOutline:new{ radius = Screen:scaleBySize(8), border = thin, seg }
     end
-    local function stepper(label, sub, key, value, min, max)
+    -- step/default given: the number can be tapped to open the number dialog (type a value)
+    local function stepper(label, sub, key, value, min, max, step, default)
+        step = step or 1
         local h = Screen:scaleBySize(36)
         local function cell(text, w, cb, bold)
             return TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = w, h = h },
                 TextWidget:new{ text = text, face = face15, bold = bold } }, callback = cb }
         end
         local function set(v) v = math.max(min, math.min(max, v)); if v ~= value then setSetting(key, v); self:changed() end end
-        local ctl = outlineCells({ cell("−", Screen:scaleBySize(44), function() set(value - 1) end),
-            cell(tostring(value), Screen:scaleBySize(40), nil, true),
-            cell("+", Screen:scaleBySize(44), function() set(value + 1) end) }, h)
+        local ctl = outlineCells({ cell("−", Screen:scaleBySize(44), function() set(value - step) end),
+            cell(tostring(value), Screen:scaleBySize(48), default and function()
+                self.list:showSpinSetting(label, key, default, min, max, step, function() self:rebuild() end)
+            end or nil, true),
+            cell("+", Screen:scaleBySize(44), function() set(value + step) end) }, h)
         return row(label, sub, ctl)
     end
     -- options side by side in one rounded outline, the chosen one black
@@ -5069,42 +4978,159 @@ function SS:build()
     local body = VerticalGroup:new{ align = "left" }
     local function add(w) table.insert(body, w) end
 
-    add(sectionBar(_("TEXT")))
-    add(navRow(_("Font sizes"), string.format("%d · %d · %d", getTitleFontSize(), getInfoFontSize(), getContentFontSize()),
-        function() list:showSpinMenu("font_size", back) end))
-    add(navRow(_("Typefaces"), nil, function() list:showFontsMenu() end))
-    add(navRow(_("Page margins"), nil, function() list:showSpinMenu("margins", back) end))
-    add(navRow(_("Space between notes"), nil, function() list:showSpinMenu("section_margin", back) end))
-    add(stepper(_("Lines per highlight"), _("Longer ones end with “…”; tap to read all"), "truncate_lines", getTruncateLines(), 1, 20))
-    add(toggle(_("Justify text"), nil, "justify", getJustify))
+    local function fontRow(label, key, getter)
+        return navRow(label, NotesListWidget.SubPage.fontName(getter()), function()
+            UIManager:show(NotesListWidget.SubPage:new{ list = list, parent = self, font_key = key, title = label })
+        end)
+    end
+    local function numberRows(menu_key)
+        for _i, st in ipairs(SPIN_MENUS[menu_key].settings) do
+            add(stepper((st.label:gsub(":%s*$", "")), nil, st.key, st.getter(), st.min, st.max, st.step, st.default))
+        end
+    end
+    if self.page == "text" then
+        add(sectionBar(_("TEXT")))
+        add(fontRow(_("Title font"), "title_font", getTitleFont))
+        add(fontRow(_("Info font"), "info_font", getInfoFont))
+        add(fontRow(_("Content font"), "content_font", getContentFont))
+        numberRows("font_size")
+        add(stepper(_("Lines per highlight"), _("Longer ones end with “…”; tap to read all"), "truncate_lines", getTruncateLines(), 1, 20))
+        add(toggle(_("Justify text"), nil, "justify", getJustify))
 
-    add(sectionBar(_("LIST")))
-    add(toggle(_("Counts on tabs"), nil, "show_total", getShowTotalNotes))
-    add(toggle(_("Filter button in title bar"), nil, "filter_titlebar_btn", getFilterTitlebarBtn))
-    add(toggle(_("Show book / info row"), nil, "show_info", getShowInfo))
-    add(fieldChips(_("Info row shows"), nil, getInfoFields, "info_fields"))
-    add(toggle(_("Title on each page"), nil, "repeat_title_on_page", getRepeatTitleOnPage))
-    add(toggle(_("Chapter / date on each page"), nil, "repeat_info_on_page", getRepeatInfoOnPage))
-    add(toggle(_("Hide duplicate book header"), nil, "hide_dup_title", getHideDupTitle))
-    add(toggle(_("Hide duplicate info header"), nil, "hide_dup_info", getHideDupInfo))
-    add(fieldChips(_("Duplicate check"), _("Repeated info is hidden when these match"), getDedupInfoFields, "dedup_info_fields"))
+        add(sectionBar(_("SPACING")))
+        numberRows("margins")
+        numberRows("section_margin")
+        do -- back to the defaults for all sizes and spacing
+            local tw = TextWidget:new{ text = _("Reset text and spacing"), face = face13 }
+            add(padded(TapBox:new{ VerticalGroup:new{ tw, LineWidget:new{ dimen = Geom:new{ w = tw:getSize().w, h = Size.line.medium },
+                background = BlitBuffer.COLOR_BLACK } }, callback = function()
+                    for _i, key in ipairs({ "font_size", "margins", "section_margin" }) do
+                        for _j, st in ipairs(SPIN_MENUS[key].settings) do setSetting(st.key, st.default) end
+                    end
+                    self:changed()
+                end }, Screen:scaleBySize(14), Screen:scaleBySize(14)))
+        end
+    elseif self.page == "info" then
+        add(sectionBar(_("INFO ROW")))
+        add(toggle(_("Show book / info row"), nil, "show_info", getShowInfo))
+        add(fieldChips(_("Info row shows"), nil, getInfoFields, "info_fields"))
+        add(toggle(_("Title on each page"), nil, "repeat_title_on_page", getRepeatTitleOnPage))
+        add(toggle(_("Chapter / date on each page"), nil, "repeat_info_on_page", getRepeatInfoOnPage))
+        add(toggle(_("Hide duplicate book header"), nil, "hide_dup_title", getHideDupTitle))
+        add(toggle(_("Hide duplicate info header"), nil, "hide_dup_info", getHideDupInfo))
+        add(fieldChips(_("Duplicate check"), _("Repeated info is hidden when these match"), getDedupInfoFields, "dedup_info_fields"))
+    else
+        add(sectionBar(_("LIST")))
+        add(navRow(_("Text and spacing"), string.format("%d · %d · %d", getTitleFontSize(), getInfoFontSize(), getContentFontSize()),
+            function() UIManager:show(SS:new{ list = list, page = "text" }, "flashui") end))
+        do
+            local names = {}
+            local active = {}
+            for f in getInfoFields():gmatch("[^,]+") do active[f] = true end
+            for _i, f in ipairs({ { "date", _("Date") }, { "author", _("Author") }, { "chapter", _("Chapter") } }) do
+                if active[f[1]] then table.insert(names, f[2]) end
+            end
+            add(navRow(_("Info row and repeats"), getShowInfo() and table.concat(names, " · ") or _("Off"),
+                function() UIManager:show(SS:new{ list = list, page = "info" }, "flashui") end))
+        end
+        add(toggle(_("Counts on tabs"), nil, "show_total", getShowTotalNotes))
+        add(toggle(_("Filter button in title bar"), nil, "filter_titlebar_btn", getFilterTitlebarBtn))
 
-    add(sectionBar(_("PAGES")))
-    add(segment(_("Page controls"), { { "default", _("Prev / Next") }, { "scrollbar", _("Scrollbar") },
-        { "scrollbar_chevrons", _("Scrollbar + buttons") } }, getPaginationStyle(),
-        function(v) setSetting("pagination_style", v); self:changed() end))
-    add(toggle(_("Mark where books start on the scrollbar"), nil, "sb_book_marks", getScrollbarBookMarks))
-    add(segment(_("Swipe to turn pages"), { { "both", _("Both") }, { "horizontal", _("Horizontal") },
-        { "vertical", _("Vertical") }, { "disabled", _("Off") } }, getSwipeSetting(),
-        function(v) setSetting("swipe_direction", v); self:changed() end))
+        add(sectionBar(_("PAGES")))
+        add(segment(_("Page controls"), { { "default", _("Prev / Next") }, { "scrollbar", _("Scrollbar") },
+            { "scrollbar_chevrons", _("Scrollbar + buttons") } }, getPaginationStyle(),
+            function(v) setSetting("pagination_style", v); self:changed() end))
+        add(toggle(_("Mark where books start on the scrollbar"), nil, "sb_book_marks", getScrollbarBookMarks))
+        add(segment(_("Swipe to turn pages"), { { "both", _("Both") }, { "horizontal", _("Horizontal") },
+            { "vertical", _("Vertical") }, { "disabled", _("Off") } }, getSwipeSetting(),
+            function(v) setSetting("swipe_direction", v); self:changed() end))
 
-    add(sectionBar(_("FILTER")))
-    add(toggle(_("Only offer used colours and styles"), nil, "hide_unused_cs",
-        function() return getSetting("hide_unused_cs", false) == true end))
+        add(sectionBar(_("FILTER")))
+        add(toggle(_("Only offer used colours and styles"), nil, "hide_unused_cs",
+            function() return getSetting("hide_unused_cs", false) == true end))
+    end
 
-    local header = Page.header(self, _("Settings"), function() self:onClose() end)
+    local titles = { text = _("Text and spacing"), info = _("Info row and repeats") }
+    local header = Page.header(self, titles[self.page] or _("Settings"), function() self:onClose() end)
     local avail = H - header:getSize().h
     if not self.narrow and body:getSize().h > avail then self.narrow = true; return self:build() end
+    self.scroller = Page.scrollable(W, avail, self, body)
+    self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0,
+        background = BlitBuffer.COLOR_WHITE,
+        VerticalGroup:new{ align = "left", header, self.scroller } }
+end
+end
+
+-- Font list behind the three font rows of Settings: a sample line in the chosen font on top
+-- (fixed height, so the page does not jump between fonts), then every font to tap.
+do -- own scope: keeps the main chunk under Lua's 200-locals limit
+NotesListWidget.SubPage = InputContainer:extend{ list = nil, parent = nil, font_key = nil, title = "", covers_fullscreen = true }
+function NotesListWidget.SubPage:init()
+    self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
+    if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
+    self:build()
+end
+function NotesListWidget.SubPage:rebuild()
+    local offset = self.scroller and self.scroller:getScrolledOffset()
+    self:build()
+    if offset and self.scroller then self.scroller:setScrolledOffset(offset) end
+    UIManager:setDirty(self, "ui")
+end
+function NotesListWidget.SubPage:onClose()
+    UIManager:close(self, "flashui")
+    if self.parent then self.parent:rebuild() end -- the page with the font rows shows the new name
+    self.list:showSettingsMenu()
+    return true
+end
+function NotesListWidget.SubPage.fontName(path)
+    if not path or path == "" then return _("Default") end
+    return path:match("([^/\\]+)$") or path
+end
+function NotesListWidget.SubPage:build()
+    local list = self.list
+    local W, H = Screen:getWidth(), Screen:getHeight()
+    local P = Screen:scaleBySize(24)
+    local inner = W - P * 2
+    local face15 = Font:getFace("cfont", 15)
+    local function rowLine()
+        return HorizontalGroup:new{ HorizontalSpan:new{ width = P },
+            LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light } }
+    end
+    local current = getSetting(self.font_key, nil)
+    local body = VerticalGroup:new{ align = "left" }
+    local box_h = Screen:scaleBySize(64)
+    local sample = TextWidget:new{ text = _("The quick brown fox jumps over the lazy dog."),
+        face = getFaceOr(current, 20, "cfont"), max_width = inner - Screen:scaleBySize(28) }
+    table.insert(body, VerticalSpan:new{ width = Screen:scaleBySize(14) })
+    table.insert(body, HorizontalGroup:new{ HorizontalSpan:new{ width = P },
+        RoundedBox:new{ width = inner, radius = Screen:scaleBySize(8), border = Size.border.button, border_color = COLORS.line,
+            fill = BlitBuffer.COLOR_WHITE, pad_x = 0, pad_y = 0,
+            CenterContainer:new{ dimen = Geom:new{ w = inner, h = box_h }, sample } } })
+    table.insert(body, VerticalSpan:new{ width = Screen:scaleBySize(14) })
+    table.insert(body, rowLine())
+    local fonts, seen = {}, {}
+    for _i, font_path in ipairs(FontList:getFontList()) do
+        local name = font_path:match("([^/\\]+)$") or font_path
+        if not seen[name] then seen[name] = true; table.insert(fonts, { name = name, path = font_path }) end
+    end
+    table.sort(fonts, function(a, b) return a.name:lower() < b.name:lower() end)
+    table.insert(fonts, 1, { name = _("Default"), path = nil })
+    for _i, f in ipairs(fonts) do
+        local on = (f.path == nil and (current == nil or current == "")) or (f.path ~= nil and current == f.path)
+        local d = Geom:new{ w = inner, h = Screen:scaleBySize(46) }
+        local mark = on and TextWidget:new{ text = "✓", face = Font:getFace("cfont", 17), bold = true } or nil
+        local line = HorizontalGroup:new{ HorizontalSpan:new{ width = P },
+            OverlapGroup:new{ dimen = d, allow_mirroring = false,
+                LeftContainer:new{ dimen = d, TextWidget:new{ text = f.name, face = face15, bold = on, max_width = inner - Screen:scaleBySize(40) } },
+                mark and RightContainer:new{ dimen = d, mark } or nil },
+            HorizontalSpan:new{ width = P } }
+        table.insert(body, VerticalGroup:new{ TapBox:new{ line, callback = function()
+            setSetting(self.font_key, f.path)
+            list:refresh(); self:rebuild()
+        end }, rowLine() })
+    end
+    local header = Page.header(self, self.title, function() self:onClose() end)
+    local avail = H - header:getSize().h
     self.scroller = Page.scrollable(W, avail, self, body)
     self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0,
         background = BlitBuffer.COLOR_WHITE,
