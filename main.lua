@@ -5364,32 +5364,54 @@ function AllNotesViewer:deleteAnnotation(note, parent_widget)
         updateListedNote(parent_widget, note, function(_, i) table.remove(parent_widget.notes_list, i) end)
     end
 end
+-- First lines of the highlight, for the edit-note dialog (about three lines' worth).
+local function cleanHighlightTextForDialog(text)
+    local t = trimParagraph(((text or ""):gsub("%s+", " ")))
+    if #t > 180 then
+        local cut = t:sub(1, 180):gsub("[\128-\191]+$", "")
+        -- do not leave half a UTF-8 character at the end
+        while #cut > 0 and cut:byte(#cut) >= 0xC0 do cut = cut:sub(1, -2) end
+        t = cut:gsub("%s+%S*$", "") .. "…"
+    end
+    return t
+end
 function AllNotesViewer:editNote(note, parent_widget, on_done)
     local InputDialog = require("ui/widget/inputdialog")
     local input_dialog
+    local has_note = note.user_note and note.user_note:find("%S") ~= nil
+    -- what the note is about: "Book · Chapter · date", then the start of the highlight
+    local about = {}
+    if note.book_title and note.book_title ~= "" then table.insert(about, note.book_title) end
+    local info = buildInfoText(note, NoteWrapper:new(note))
+    if info ~= "" then table.insert(about, info) end
+    local quote = cleanHighlightTextForDialog(note.highlighted_text)
+    local description = table.concat(about, " · ")
+    if quote ~= "" then description = description .. (description ~= "" and "\n\n" or "") .. quote end
+    local function save(text)
+        UIManager:close(input_dialog)
+        self:saveNoteEdit(note, text, parent_widget)
+        if on_done then on_done() end
+    end
+    local row = {}
+    if has_note then
+        -- blank input deletes the note too; this just says so
+        table.insert(row, { text = _("Remove note"), callback = function() save("") end })
+    end
+    table.insert(row, { text = _("Cancel"), id = "close", callback = function() UIManager:close(input_dialog) end })
     input_dialog = InputDialog:new{
-        title = _("Edit Note"),
+        title = has_note and _("Edit note") or _("Add note"),
+        description = description ~= "" and description or nil,
         input = note.user_note or "",
+        input_hint = _("Your note on this passage"),
         input_type = "text",
-        text_height = Screen:scaleBySize(150),
+        text_height = Screen:scaleBySize(120),
         buttons = {
             {
-                {
-                    text = _("Cancel"),
-                    id = "close",
-                    callback = function()
-                        UIManager:close(input_dialog)
-                    end,
-                },
+                unpack(row),
                 {
                     text = _("Save"),
                     is_enter_default = true,
-                    callback = function()
-                        local new_note_text = input_dialog:getInputText()
-                        UIManager:close(input_dialog)
-                        self:saveNoteEdit(note, new_note_text, parent_widget)
-                        if on_done then on_done() end
-                    end,
+                    callback = function() save(input_dialog:getInputText()) end,
                 },
             },
         },
