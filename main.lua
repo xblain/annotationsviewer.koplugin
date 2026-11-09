@@ -322,7 +322,7 @@ SortState.LEGACY = {
     filename_location_asc = "file:asc,pos:asc", filename_location_desc = "file:asc,pos:desc",
     opened_recent = "opened:desc", opened_oldest = "opened:asc",
 }
-SortState.KEYS = { date = true, opened = true, author = true, book = true, file = true, pos = true }
+SortState.KEYS = { date = true, opened = true, author = true, book = true, file = true, pos = true, chapter = true }
 -- Parse a rule (or an old name) into { {key=, dir=}, ... }; nil when it is not valid.
 function SortState.parse(mode)
     if type(mode) ~= "string" then return nil end
@@ -356,11 +356,45 @@ function SortState.encode(levels)
     return table.concat(parts, ",")
 end
 -- Keys that still do something after the levels chosen so far.
-function SortState.allowedAfter(prev)
+function SortState.allowedAfter(prev, single)
+    -- one book: every highlight has the same author, title and file, so only date and place count
+    if single then
+        if not prev then return { "date", "pos", "chapter" } end
+        if prev.key == "chapter" then return { "date", "pos" } end
+        return prev.key == "date" and { "pos" } or {}
+    end
     if not prev then return { "date", "opened", "author", "book", "file", "pos" } end
-    if prev.key == "date" or prev.key == "pos" then return {} end
+    if prev.key == "pos" then return {} end
+    if prev.key == "date" then return { "author", "book", "file" } end -- a day, then the books of that day
     if prev.key == "author" then return { "opened", "book", "file", "date", "pos" } end
     return { "date", "pos" } -- book, file name and last opened already single out a book
+end
+-- The rule as it applies to a view: in one book only its date or place part counts.
+function SortState.view(mode, single)
+    local levels = SortState.parse(mode) or SortState.parse("date:desc")
+    if not single then return levels end
+    local first = levels[1].key
+    if first == "date" or first == "chapter" or first == "pos" then
+        local keep = {}
+        for _, l in ipairs(levels) do
+            if l.key == "date" or l.key == "chapter" or l.key == "pos" then keep[#keep + 1] = l end
+        end
+        local out = SortState.revalidate(keep, true)
+        -- a chapter on its own: inside a chapter the highlights follow the book
+        if out[#out].key == "chapter" then out[#out + 1] = { key = "pos", dir = "asc" } end
+        return out
+    end
+    -- older rules (book, author ...): only the place part counts, else the date part
+    for _, l in ipairs(levels) do
+        if l.key == "pos" then return { { key = "pos", dir = l.dir } } end
+    end
+    for _, l in ipairs(levels) do
+        if l.key == "date" then return { { key = "date", dir = l.dir } } end
+    end
+    return SortState.parse("date:desc")
+end
+function SortState.normView(mode, single)
+    return SortState.encode(SortState.view(mode, single))
 end
 function SortState.cmp3(x, y) if x < y then return -1 elseif x > y then return 1 end return 0 end
 function SortState.keyCmp(key, a, b)
@@ -368,7 +402,8 @@ function SortState.keyCmp(key, a, b)
     elseif key == "opened" then return SortState.cmp3(SortState.opened[a.book_path or ""] or 0, SortState.opened[b.book_path or ""] or 0)
     elseif key == "author" then return SortState.cmp3(lowerCached(a.book_authors), lowerCached(b.book_authors))
     elseif key == "book" then return SortState.cmp3(normalizeBookTitle(a.book_title), normalizeBookTitle(b.book_title))
-    elseif key == "file" then return SortState.cmp3(lowerCached(a.book_filename), lowerCached(b.book_filename)) end
+    elseif key == "file" then return SortState.cmp3(lowerCached(a.book_filename), lowerCached(b.book_filename))
+    elseif key == "chapter" then return SortState.cmp3(a.chapter_rank or 0, b.chapter_rank or 0) end
     return 0
 end
 function SortState.posCmp(a, b, dir)
@@ -384,10 +419,17 @@ function SortState.build(mode)
     if not levels then return nil end
     local id = SortState.encode(levels)
     if SortState.cache[id] then return SortState.cache[id] end
+    local day_only = {}
+    for n, l in ipairs(levels) do
+        if l.key == "date" and levels[n + 1] then day_only[n] = true end
+    end
     local f = function(a, b)
-        for _, l in ipairs(levels) do
+        for n, l in ipairs(levels) do
             local c
             if l.key == "pos" then c = SortState.posCmp(a, b, l.dir)
+            elseif day_only[n] then
+                c = SortState.cmp3((a.datetime or ""):sub(1, 10), (b.datetime or ""):sub(1, 10))
+                if l.dir == "desc" then c = -c end
             else
                 c = SortState.keyCmp(l.key, a, b)
                 if l.dir == "desc" then c = -c end
@@ -1646,7 +1688,7 @@ function NotesListWidget.markKey(note, single)
     local by = levels[1].key
     if single then
         for _, l in ipairs(levels) do
-            if l.key == "pos" then return note.chapter or "" end
+            if l.key == "pos" or l.key == "chapter" then return note.chapter or "" end
         end
         return (note.datetime or ""):sub(1, 7)
     end
@@ -1880,7 +1922,7 @@ local SORT_SHORT_LABELS = {
 }
 -- Names and direction words of the rule levels (shared by the tab row label and the sort dropdown)
 SortState.KEY_NAMES = { date = _("Date"), opened = _("Last opened book"), author = _("Author"), book = _("Book"),
-    file = _("Filename"), pos = _("Place in book") }
+    file = _("Filename"), pos = _("Place in book"), chapter = _("Chapter") }
 SortState.DIR_NAMES = {
     date = { asc = _("Oldest first"), desc = _("Newest first") },
     opened = { asc = _("Longest ago first"), desc = _("Most recent first") },
@@ -1888,7 +1930,25 @@ SortState.DIR_NAMES = {
     book = { asc = _("Title A to Z"), desc = _("Title Z to A") },
     file = { asc = _("Filename A to Z"), desc = _("Filename Z to A") },
     pos = { asc = _("Start of book first"), desc = _("End of book first") },
+    chapter = { asc = _("From the start"), desc = _("From the end") },
 }
+SortState.CHOICES_BOOK = {
+    { "date:desc", _("Newest") }, { "date:asc", _("Oldest") },
+    { "pos:asc", _("Position") }, { "pos:desc", _("Reverse position") },
+}
+SortState.QUICK_BOOK = {
+    { _("Newest"), "date:desc" }, { _("Oldest"), "date:asc" },
+    { _("Position"), "pos:asc" }, { _("Reverse position"), "pos:desc" },
+    { _("Chapter, newest first"), "chapter:asc,date:desc" }, { _("Chapter, oldest first"), "chapter:asc,date:asc" },
+}
+function SortState.keyName(key, single)
+    if single and key == "pos" then return _("Position") end
+    return SortState.KEY_NAMES[key]
+end
+function SortState.dirName(key, dir, single)
+    if single and key == "pos" then return dir == "asc" and _("From the start") or _("From the end") end
+    return SortState.DIR_NAMES[key][dir]
+end
 SortState.SHORT = {
     date = { asc = _("Oldest"), desc = _("Newest") },
     opened = { asc = _("Opened long ago"), desc = _("Opened recently") },
@@ -1896,14 +1956,15 @@ SortState.SHORT = {
     book = { asc = _("Titles A–Z"), desc = _("Titles Z–A") },
     file = { asc = _("Filenames A–Z"), desc = _("Filenames Z–A") },
     pos = { asc = _("Start to end"), desc = _("End to start") },
+    chapter = { asc = _("Chapters start to end"), desc = _("Chapters end to start") },
 }
 -- Keep the levels that still make sense in a row: a level goes when its key was already used or
 -- does nothing after the level before it, and everything after it goes too.
-function SortState.revalidate(levels)
+function SortState.revalidate(levels, single)
     local out, used = {}, {}
     for n, l in ipairs(levels) do
         local ok = false
-        for _, k in ipairs(SortState.allowedAfter(out[n - 1])) do if k == l.key then ok = true end end
+        for _, k in ipairs(SortState.allowedAfter(out[n - 1], single)) do if k == l.key then ok = true end end
         if not ok or used[l.key] or n > 3 then break end
         used[l.key] = true
         out[n] = l
@@ -1911,7 +1972,34 @@ function SortState.revalidate(levels)
     return out
 end
 -- One plain sentence per level: what the order is, in words.
-function SortState.describe(levels)
+function SortState.describe(levels, single)
+    if single then
+        local l = levels[1] or { key = "date", dir = "desc" }
+        local function place(x)
+            return x.dir == "asc" and _("in book order") or _("from the end of the book")
+        end
+        if l.key == "chapter" then
+            local d, p = levels[2], levels[3]
+            local head = l.dir == "asc" and _("Chapters from the start of the book")
+                or _("Chapters from the end of the book")
+            if not d then return head .. "." end
+            if d.key == "pos" then
+                return head .. (d.dir == "asc" and _(", highlights in book order within each chapter.")
+                    or _(", highlights from the end of each chapter."))
+            end
+            local out = head .. (d.dir == "desc" and _(", newest days first within each chapter")
+                or _(", oldest days first within each chapter"))
+            if p then out = out .. "; " .. _("the same day ") .. place(p) end
+            return out .. "."
+        end
+        if l.key == "pos" then
+            return l.dir == "asc" and _("Highlights by position in the book, from the start.")
+                or _("Highlights by position in the book, from the end.")
+        end
+        local out = l.dir == "desc" and _("Newest highlights first") or _("Oldest highlights first")
+        if levels[2] then out = out .. "; " .. _("the same day ") .. place(levels[2]) end
+        return out .. "."
+    end
     local eff = {}
     for _, l in ipairs(levels) do eff[#eff + 1] = l end
     local function has(set)
@@ -1922,7 +2010,7 @@ function SortState.describe(levels)
     for n, l in ipairs(eff) do
         if l.key == "pos" then
             local prev = eff[n - 1]
-            if not prev or prev.key == "author" then table.insert(eff, n, { key = "book", dir = "asc" }) end
+            if not prev or prev.key == "author" or prev.key == "date" then table.insert(eff, n, { key = "book", dir = "asc" }) end
             break
         end
     end
@@ -1935,10 +2023,13 @@ function SortState.describe(levels)
     for n, l in ipairs(eff) do
         local prev = eff[n - 1]
         local lead = ""
-        if prev then lead = prev.key == "author" and _("Within an author, ") or _("Within a book, ") end
+        if prev then
+            lead = prev.key == "author" and _("Within an author, ") or prev.key == "date" and _("Within a day, ") or _("Within a book, ")
+        end
         local d, text = l.dir, nil
         if l.key == "date" then
             if prev then text = d == "desc" and _("newest highlights first") or _("oldest highlights first")
+            elseif eff[n + 1] then text = d == "desc" and _("Newest days first") or _("Oldest days first")
             else text = d == "desc" and _("Newest highlights first, across all books") or _("Oldest highlights first, across all books") end
         elseif l.key == "pos" then
             text = d == "asc" and _("from the start to the end") or _("from the end to the start")
@@ -1956,7 +2047,20 @@ function SortState.describe(levels)
     end
     return table.concat(out, " ")
 end
-local function sortModeLabel(mode)
+local function sortModeLabel(mode, single)
+    if single then
+        local v = SortState.view(mode, true)
+        local l = v[1]
+        if l.key == "date" and v[2] then
+            return l.dir == "desc" and _("Newest · position") or _("Oldest · position")
+        end
+        if l.key == "chapter" then
+            if not v[2] or v[2].key == "pos" then return l.dir == "asc" and _("Chapter") or _("Reverse chapter") end
+            return v[2].dir == "desc" and _("Chapter · newest") or _("Chapter · oldest")
+        end
+        if l.key == "pos" then return l.dir == "asc" and _("Position") or _("Reverse position") end
+        return SortState.SHORT.date[l.dir]
+    end
     if not SORT_MODES[mode] then
         local levels = SortState.parse(mode)
         if not levels then mode = "date_newest" else
@@ -2225,7 +2329,7 @@ function NotesListWidget:buildHeader()
         table.insert(tabs, TapBox:new{ box, callback = function() self:setNotesPresence(tab.key) end })
     end
     local sort_text = TextWidget:new{
-        text = sortModeLabel(SortState.get(self.single_book)),
+        text = sortModeLabel(SortState.get(self.single_book), self.single_book),
         face = Font:getFace("cfont", 13), fgcolor = COLORS.muted,
         max_width = math.floor(w * 0.4),
     }
@@ -2545,10 +2649,26 @@ function NotesListWidget:applySort()
 end
 function NotesListWidget:sortNotesList(notes_list, sort_mode, single)
     sort_mode = sort_mode or SortState.get(single)
+    if single then sort_mode = SortState.normView(sort_mode, true) end
     local comparator = SORT_COMPARATORS[sort_mode]
     local levels = SortState.parse(sort_mode)
-    local uses_opened = false
-    for _, l in ipairs(levels or {}) do if l.key == "opened" then uses_opened = true end end
+    local uses_opened, uses_chapter = false, false
+    for _, l in ipairs(levels or {}) do
+        if l.key == "opened" then uses_opened = true end
+        if l.key == "chapter" then uses_chapter = true end
+    end
+    if uses_chapter then
+        -- chapters rank in the order they first show up in the book
+        local tmp = {}
+        for i, n in ipairs(notes_list) do tmp[i] = n end
+        table.sort(tmp, SORT_COMPARATORS["pos:asc"])
+        local rank, nxt = {}, 0
+        for _, n in ipairs(tmp) do
+            local ch = n.chapter or ""
+            if not rank[ch] then nxt = nxt + 1; rank[ch] = nxt end
+            n.chapter_rank = rank[ch]
+        end
+    end
     if uses_opened then
         SortState.opened = {}
         for _, item in ipairs(ReadHistory.hist or {}) do
@@ -5143,17 +5263,18 @@ end
 -- direction, and a sentence at the bottom says in words what the order is.
 function States.sortMenu(list, on_done)
     local W = Screen:getWidth()
-    local current = SortState.get(list.single_book)
-    local levels = SortState.parse(current) or SortState.parse("date:desc")
+    local single = list.single_book
+    local current = SortState.get(single)
+    local levels = SortState.view(current, single)
     local function apply(new_levels, card)
         card:onClose()
-        SortState.set(list.single_book, SortState.encode(SortState.revalidate(new_levels)))
+        SortState.set(single, SortState.encode(SortState.revalidate(new_levels, single)))
         list:applySort()
         list:refresh()
         if on_done then on_done() end
         States.sortMenu(list, on_done)
     end
-    local quick = {
+    local quick = single and SortState.QUICK_BOOK or {
         { _("Newest"), "date:desc" }, { _("Oldest"), "date:asc" }, { _("Book A–Z"), "book:asc" },
         { _("Author A–Z"), "author:asc" }, { _("Last opened book"), "opened:desc" },
         { _("In book order"), "book:asc,pos:asc" },
@@ -5233,7 +5354,7 @@ function States.sortMenu(list, on_done)
                         FrameContainer:new{ bordersize = 0, padding = 0, margin = 0,
                             background = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
                             CenterContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
-                                TextWidget:new{ text = SortState.DIR_NAMES[lv.key][dir], face = face, bold = on,
+                                TextWidget:new{ text = SortState.dirName(lv.key, dir, single), face = face, bold = on,
                                     max_width = cell_w - Screen:scaleBySize(8),
                                     fgcolor = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK } } },
                         callback = function() if not on then on_flip() end end })
@@ -5264,7 +5385,7 @@ function States.sortMenu(list, on_done)
             local titles = { _("Sort by"), _("Then by"), _("And then by") }
             for n = 1, 3 do
                 local prev = levels[n - 1]
-                local allowed = SortState.allowedAfter(prev)
+                local allowed = SortState.allowedAfter(prev, single)
                 if (n == 1 or prev) and #allowed > 0 then
                     heading(titles[n])
                     local lv = levels[n]
@@ -5276,7 +5397,7 @@ function States.sortMenu(list, on_done)
                     local keys = {}
                     if n > 1 then keys[1] = { label = _("None"), on = lv == nil, callback = function() if lv then apply(upto(n - 1), card) end end } end
                     for _, k in ipairs(allowed) do
-                        keys[#keys + 1] = { label = SortState.KEY_NAMES[k], on = lv ~= nil and lv.key == k,
+                        keys[#keys + 1] = { label = SortState.keyName(k, single), on = lv ~= nil and lv.key == k,
                             callback = function()
                                 if lv and lv.key == k then return end
                                 local c = upto(n - 1)
@@ -5300,7 +5421,7 @@ function States.sortMenu(list, on_done)
                 table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
                     FrameContainer:new{ bordersize = thin, color = COLORS.line, radius = Screen:scaleBySize(8),
                         padding = Screen:scaleBySize(8), margin = 0,
-                        TextBoxWidget:new{ text = SortState.describe(levels), face = Font:getFace("cfont", 13),
+                        TextBoxWidget:new{ text = SortState.describe(levels, single), face = Font:getFace("cfont", 13),
                             width = inner - Screen:scaleBySize(16) - thin * 2 } } })
             end
             table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(6) })
@@ -5309,7 +5430,7 @@ function States.sortMenu(list, on_done)
             local avail = Screen:getHeight() - list.topbar_height - Screen:scaleBySize(20) - (bw + Screen:scaleBySize(4)) * 2
             -- Which version to use is decided on the fullest card there can be (three levels, all
             -- with a direction), so picking a different order never swaps the card for the menu or back.
-            local fullest = SortState.parse("author:asc,book:asc,pos:asc")
+            local fullest = SortState.parse(single and "chapter:asc,date:desc,pos:asc" or "author:asc,book:asc,pos:asc")
             local use = 2
             for tier = 0, 2 do
                 if make(tier, fullest):getSize().h <= avail then use = tier; break end
@@ -5349,9 +5470,10 @@ function States.chooseCard(list, title, options)
 end
 function States.sortList(list, on_done)
     local W = Screen:getWidth()
-    local levels = SortState.parse(SortState.get(list.single_book)) or SortState.parse("date:desc")
+    local single = list.single_book
+    local levels = SortState.view(SortState.get(single), single)
     local function apply(new_levels)
-        SortState.set(list.single_book, SortState.encode(SortState.revalidate(new_levels)))
+        SortState.set(single, SortState.encode(SortState.revalidate(new_levels, single)))
         list:applySort()
         list:refresh()
         if on_done then on_done() end
@@ -5364,7 +5486,7 @@ function States.sortList(list, on_done)
     end
     local card_w = math.min(Screen:scaleBySize(360), W - Screen:scaleBySize(20))
     local bw = Size.border.window
-    local quick = {
+    local quick = single and SortState.QUICK_BOOK or {
         { _("Newest"), "date:desc" }, { _("Oldest"), "date:asc" }, { _("Book A–Z"), "book:asc" },
         { _("Author A–Z"), "author:asc" }, { _("Last opened book"), "opened:desc" },
         { _("In book order"), "book:asc,pos:asc" },
@@ -5388,7 +5510,7 @@ function States.sortList(list, on_done)
                 table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
                     LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light } })
             end
-            row(_("Quick picks"), sortModeLabel(SortState.get(list.single_book)) .. " ›", function()
+            row(_("Quick picks"), sortModeLabel(SortState.get(single), single) .. " ›", function()
                 local opts, now = {}, SortState.encode(levels)
                 for _, q in ipairs(quick) do
                     opts[#opts + 1] = { label = q[1], on = SortState.encode(SortState.parse(q[2])) == now,
@@ -5399,16 +5521,16 @@ function States.sortList(list, on_done)
             local titles = { _("Sort by"), _("Then by"), _("And then by") }
             for n = 1, 3 do
                 local prev = levels[n - 1]
-                local allowed = SortState.allowedAfter(prev)
+                local allowed = SortState.allowedAfter(prev, single)
                 if (n == 1 or prev) and #allowed > 0 then
                     local lv = levels[n]
-                    row(titles[n], (lv and SortState.KEY_NAMES[lv.key] or _("None")) .. " ›", function()
+                    row(titles[n], (lv and SortState.keyName(lv.key, single) or _("None")) .. " ›", function()
                         local opts = {}
                         if n > 1 then
                             opts[1] = { label = _("None"), on = lv == nil, callback = function() apply(upto(n - 1)) end }
                         end
                         for _, k in ipairs(allowed) do
-                            opts[#opts + 1] = { label = SortState.KEY_NAMES[k], on = lv ~= nil and lv.key == k,
+                            opts[#opts + 1] = { label = SortState.keyName(k, single), on = lv ~= nil and lv.key == k,
                                 callback = function()
                                     if lv and lv.key == k then return States.sortList(list, on_done) end
                                     local c = upto(n - 1)
@@ -5420,7 +5542,7 @@ function States.sortList(list, on_done)
                         States.chooseCard(list, titles[n], opts)
                     end)
                     if lv then
-                        row("", SortState.DIR_NAMES[lv.key][lv.dir] .. " ⇅", function()
+                        row("", SortState.dirName(lv.key, lv.dir, single) .. " ⇅", function()
                             local c = upto(#levels)
                             c[n] = { key = lv.key, dir = lv.dir == "asc" and "desc" or "asc" }
                             apply(c)
@@ -5747,20 +5869,21 @@ function FilterScreen:build()
     -- sort
     table.insert(body, sectionBar(_("SORT")))
     do
-        local cur = SortState.norm(SortState.get(list.single_book))
+        local single = list.single_book
+        local cur = SortState.normView(SortState.get(single), single)
         local items, known = {}, false
         local function apply(mode)
             SortState.set(list.single_book, mode)
             list:applySort()
             self:changed()
         end
-        for _i, sc in ipairs(SORT_CHOICES) do
-            local is_cur = SortState.norm(sc[1]) == cur
+        for _i, sc in ipairs(single and SortState.CHOICES_BOOK or SORT_CHOICES) do
+            local is_cur = SortState.normView(sc[1], single) == cur
             if is_cur then known = true end
             table.insert(items, chip(sc[2], is_cur, function() if not is_cur then apply(sc[1]) end end, { h = Screen:scaleBySize(36) }))
         end
         -- all other orders (by author/file name, reversed, …) stay in the full sort list
-        table.insert(items, chip(known and _("More…") or sortModeLabel(cur), not known,
+        table.insert(items, chip(known and _("More…") or sortModeLabel(cur, single), not known,
             function() list:showSortMenu(false, function() self:rebuild() end) end, { h = Screen:scaleBySize(36) }))
         table.insert(body, padded(flow(items), Screen:scaleBySize(14), Screen:scaleBySize(14)))
     end
@@ -5778,12 +5901,12 @@ function FilterScreen:build()
         end
         local chips = {}
         for i, p in ipairs(presets) do
-            local on = same(p.filter or {}, list.active_filter or {}) and SortState.norm(p.sort or "") == SortState.norm(SortState.get(list.single_book))
+            local on = same(p.filter or {}, list.active_filter or {}) and SortState.normView(p.sort or "", list.single_book) == SortState.normView(SortState.get(list.single_book), list.single_book)
             table.insert(chips, chip(p.name, on, function()
                 local presence = list.active_filter and list.active_filter.notes_presence
                 list.active_filter = deepCopy(p.filter) or {}
                 list.active_filter.notes_presence = presence
-                if p.sort and SortState.norm(p.sort) ~= SortState.norm(SortState.get(list.single_book)) then
+                if p.sort and SortState.normView(p.sort, list.single_book) ~= SortState.normView(SortState.get(list.single_book), list.single_book) then
                     SortState.set(list.single_book, p.sort)
                     list:applySort()
                 end

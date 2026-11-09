@@ -19,7 +19,7 @@ Key behaviors:
 - Chapter headings in the list, styled like the book title
 - Filter by highlight color, style (underline/strikeout/invert/lighten), books, tags, chapters, highlight text and note text using inclusions and/or exclusions
 - Saved filters, shown as chips in Filter & sort
-- Sort in up to three steps: date, last opened book, author, book, filename or place in the book. All annotations and a single book keep their own sort
+- Sort in up to three steps: date, last opened book, author, book, filename or place in the book. A single book sorts by date, position or chapter. All annotations and a single book keep their own sort
 - Search matches are underlined in highlights and notes
 - Edit note text in-place and save back to the book's settings
 - Change highlight style and color and save back to book settings
