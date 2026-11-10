@@ -2479,28 +2479,22 @@ function NotesListWidget:buildHeader()
     local title
     local bar_h = self.topbar_height or TOPBAR_HEIGHT
     if self.single_book then
-        -- one book: its title, and "Author · N annotations" underneath
+        -- one book: its title, and the author underneath (no counts: the tabs show those)
         local first = self.notes_list and self.notes_list[1] or {}
         local book_title = self.book_title or first.book_title or _("Annotations")
         local authors = first.book_authors and NoteWrapper:new(first):getDisplayAuthors()
-        local n, nb = 0, 0
-        for _i, x in ipairs(self.notes_list or {}) do
-            if x.bookmark then nb = nb + 1 else n = n + 1 end
-        end
-        local sub = (n == 1) and _("1 annotation") or string.format(_("%d annotations"), n)
-        if nb > 0 then sub = sub .. " · " .. ((nb == 1) and _("1 bookmark") or string.format(_("%d bookmarks"), nb)) end
-        if authors and authors ~= "" and authors ~= "Unknown" then sub = authors .. " · " .. sub end
+        local sub = (authors and authors ~= "" and authors ~= "Unknown") and authors or nil
         local max_w = math.floor(w * 0.55)
         local t = TextWidget:new{ text = book_title, face = getFaceOr(SERIF_FONT, 19, "cfont"), bold = true, max_width = max_w }
-        local st = TextWidget:new{ text = sub, face = Font:getFace("cfont", 14), fgcolor = COLORS.muted, max_width = max_w }
+        local st = TextWidget:new{ text = sub or "", face = Font:getFace("cfont", 14), fgcolor = COLORS.muted, max_width = max_w }
         -- Text boxes include room for descenders and line gap; placing the second line from
         -- the title's baseline keeps the two lines close together, like in the mockup.
         local cap = math.floor(Screen:scaleBySize(14) * 0.72)
         local sub_y = t:getBaseline() + Screen:scaleBySize(5) - (st:getBaseline() - cap)
         local tsz, ssz = t:getSize(), st:getSize()
         st.overlap_offset = { 0, sub_y }
-        title = OverlapGroup:new{ allow_mirroring = false,
-            dimen = Geom:new{ w = math.max(tsz.w, ssz.w), h = math.max(tsz.h, sub_y + ssz.h) }, t, st }
+        title = sub and OverlapGroup:new{ allow_mirroring = false,
+            dimen = Geom:new{ w = math.max(tsz.w, ssz.w), h = math.max(tsz.h, sub_y + ssz.h) }, t, st } or t
     else
         title = TextWidget:new{
             text = _("Annotations"), face = getFaceOr(SERIF_FONT, 21, "cfont"), bold = true,
@@ -3490,6 +3484,8 @@ function AllNotesViewer:init()
     AllNotesViewer.registerGestures()
     AllNotesViewer._current = self -- the open file browser's or book's plugin (used by the long-press button)
     AllNotesViewer.addFileDialogButton()
+    self:takeOverInBook()
+    self:takeOverBrowser()
     self.ui.menu:registerToMainMenu(self)
 end
 -- The plugin's gestures (Settings → Taps and gestures → Gesture manager), the same in the file
@@ -3582,12 +3578,43 @@ function AllNotesViewer:bookHasAnnotations(path)
     local ok, list = pcall(self.loadBookAnnotations, self, path)
     return ok and type(list) == "table" and #list > 0
 end
--- Opt-in switch (Settings → LONG-PRESS MENU, off by default): KOReader's own "Bookmarks" button in a
--- book's long-press menu (KOReader 2026.03 and later) opens that book's Bookmarks tab here instead
--- of KOReader's Bookmark browser. Only that button, and only for one book; looked at on each tap.
-function AllNotesViewer.bookmarksButtonAvailable()
-    local ok, coll = pcall(require, "apps/filemanager/filemanagercollection")
-    return ok and type(coll) == "table" and type(coll.genBookmarkBrowserButton) == "function"
+-- Switch "KOReader's Bookmarks open here" (Settings → KOREADER, off by default). When on, every
+-- way into KOReader's own bookmark lists opens this plugin's Bookmarks tab instead:
+--   in a book: the Bookmarks menu entry, gesture and key (ReaderBookmark:onShowBookmark)
+--   the Bookmark browser (2026.03 and later): its menu entry and gesture (onShowBookmarkBrowser)
+--   the "Bookmarks" button in a book's long-press menu, History, search and collections
+--   (genBookmarkBrowserButton): one book opens that book, several open all books.
+-- KOReader's functions get a wrapper that looks at the switch each time, so turning it off works
+-- straight away.
+function AllNotesViewer.takeOverOn()
+    local v = getSetting("take_over_bookmarks", false)
+    return v == true or v == "all" or v == "bookmarks" -- (test builds stored a tab name)
+end
+function AllNotesViewer:takeOverInBook()
+    local bm = self.ui and self.ui.bookmark
+    if not bm or bm._av_show_bookmark or type(bm.onShowBookmark) ~= "function" then return end
+    bm._av_show_bookmark = bm.onShowBookmark
+    local viewer = self
+    bm.onShowBookmark = function(this, ...)
+        if AllNotesViewer.takeOverOn() then
+            viewer:showCurrentBookNotes("bookmarks")
+            return true
+        end
+        return this._av_show_bookmark(this, ...)
+    end
+end
+function AllNotesViewer:takeOverBrowser()
+    local coll = self.ui and self.ui.collections
+    if not coll or coll._av_show_browser or type(coll.onShowBookmarkBrowser) ~= "function" then return end
+    coll._av_show_browser = coll.onShowBookmarkBrowser
+    local viewer = self
+    coll.onShowBookmarkBrowser = function(this, ...)
+        if AllNotesViewer.takeOverOn() then
+            viewer:showAllNotes("bookmarks")
+            return true
+        end
+        return this._av_show_browser(this, ...)
+    end
 end
 function AllNotesViewer.takeOverBookmarksButton()
     local ok, coll = pcall(require, "apps/filemanager/filemanagercollection")
@@ -3595,18 +3622,15 @@ function AllNotesViewer.takeOverBookmarksButton()
     coll._av_gen_button = coll.genBookmarkBrowserButton
     coll.genBookmarkBrowserButton = function(this, files, caller_pre_callback, ...)
         local button = this._av_gen_button(this, files, caller_pre_callback, ...)
-        local only
-        for path in pairs(type(files) == "table" and files or {}) do
-            if only then only = nil; break end
-            only = path
-        end
-        if type(button) == "table" and only then
+        local paths = {}
+        for path in pairs(type(files) == "table" and files or {}) do table.insert(paths, path) end
+        if type(button) == "table" and #paths > 0 then
             local orig = button.callback
             button.callback = function(...)
                 local viewer = AllNotesViewer._current
-                if viewer and getSetting("take_over_bm_button", false) == true then
+                if viewer and AllNotesViewer.takeOverOn() then
                     if caller_pre_callback then caller_pre_callback() end
-                    viewer:showBookFile(only, "bookmarks")
+                    if #paths == 1 then viewer:showBookFile(paths[1], "bookmarks") else viewer:showAllNotes("bookmarks") end
                 elseif orig then
                     return orig(...)
                 end
@@ -3651,16 +3675,32 @@ end
 function AllNotesViewer:addToMainMenu(menu_items)
     if self.ui and self.ui.document then
         menu_items.current_book_notes_viewer = {
-            text = _("Book Annotations"),
+            text = _("Annotations"),
             sorting_hint = "navi",
             callback = function() self:showCurrentBookNotes() end,
         }
+        -- "Annotations: Bookmarks" next to it, left out while KOReader's own Bookmarks open here
+        -- (that entry then does the same). Read when KOReader builds its menu.
+        if not AllNotesViewer.takeOverOn() then
+            menu_items.current_book_bookmarks_viewer = {
+                text = _("Annotations: Bookmarks"),
+                sorting_hint = "navi",
+                callback = function() self:showCurrentBookNotes("bookmarks") end,
+            }
+        end
     else
         menu_items.all_notes_viewer = {
             text = _("Annotations"),
             sorting_hint = "filemanager_settings",
             callback = function() self:showAllNotes() end,
         }
+        if not AllNotesViewer.takeOverOn() then
+            menu_items.all_bookmarks_viewer = {
+                text = _("Annotations: Bookmarks"),
+                sorting_hint = "filemanager_settings",
+                callback = function() self:showAllNotes("bookmarks") end,
+            }
+        end
     end
 end
 -- Tells an open ReaderUI that the annotation for `note` changed, sending KOReader's own item
@@ -6229,11 +6269,9 @@ function SS:build()
             { "vertical", _("Vertical") }, { "disabled", _("Off") } }, getSwipeSetting(),
             function(v) setSetting("swipe_direction", v); self:changed() end))
 
-        if AllNotesViewer.bookmarksButtonAvailable() then
-            add(sectionBar(_("LONG-PRESS MENU")))
-            add(toggle(_("KOReader's Bookmarks button opens here"), _("For one book, on the Bookmarks tab"), "take_over_bm_button",
-                function() return getSetting("take_over_bm_button", false) == true end))
-        end
+        add(sectionBar(_("KOREADER")))
+        add(toggle(_("KOReader's Bookmarks open here"), _("Its menu entries, gestures and Bookmarks buttons open the Bookmarks tab here"),
+            "take_over_bookmarks", AllNotesViewer.takeOverOn))
 
         add(sectionBar(_("FILTER")))
         add(toggle(_("Only offer used colours and styles"), nil, "hide_unused_cs",
