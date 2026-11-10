@@ -5862,7 +5862,6 @@ function FilterScreen:build()
 
     local body = VerticalGroup:new{ align = "left" }
     table.insert(body, sectionBar(_("FILTER")))
-
     -- books / tags / chapters (the existing pickers: tap an item to show only it, again to hide it)
     local book_count
     do
@@ -5885,33 +5884,8 @@ function FilterScreen:build()
         table.insert(body, navRow(_("Chapters"), v, on, function() self.helpers.chapters() end))
     end
 
-    -- notes: All / With a note / Without (same as the tabs)
-    do
-        local seg = HorizontalGroup:new{}
-        local cell_h = Screen:scaleBySize(40)
-        local cell_w = math.floor((inner - thin * 2 - thin * 2) / 3)
-        for i, opt in ipairs({ { nil, _("All") }, { "only", _("With a note") }, { "exclude", _("Without") } }) do
-            local on = (af.notes_presence == opt[1])
-            if i > 1 then table.insert(seg, LineWidget:new{ dimen = Geom:new{ w = thin, h = cell_h }, background = BlitBuffer.COLOR_BLACK }) end
-            table.insert(seg, TapBox:new{
-                FrameContainer:new{ bordersize = 0, padding = 0, margin = 0,
-                    background = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
-                    CenterContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
-                        TextWidget:new{ text = opt[2], face = face14, bold = on,
-                            max_width = cell_w - Screen:scaleBySize(8),
-                            fgcolor = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK } } },
-                callback = function()
-                    if af.notes_presence ~= opt[1] then af.notes_presence = opt[1]; self:changed() end
-                end,
-            })
-        end
-        table.insert(body, padded(VerticalGroup:new{ align = "left",
-            TextWidget:new{ text = _("Notes"), face = face15 },
-            VerticalSpan:new{ width = Screen:scaleBySize(8) },
-            RoundedOutline:new{ radius = Screen:scaleBySize(8), border = thin, seg },
-        }, Screen:scaleBySize(14), Screen:scaleBySize(14)))
-        table.insert(body, rowLine())
-    end
+    -- (What shows - all, with a note, without, bookmarks - is the tab row's job, not a filter:
+    -- filters apply to every tab, so there is no "Notes" row here.)
 
     -- colour & style: chips for all colours and styles; "Hide these instead" flips
     -- between showing only these and hiding these
@@ -6082,11 +6056,13 @@ function FilterScreen:build()
     local header = Page.header(self, _("Filter & sort"), function() self:onClose() end, {
         TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = Screen:scaleBySize(90), h = TOPBAR_HEIGHT }, underlined(_("Reset all"), face14) },
             callback = function()
-                list.active_filter = {}
+                -- clears the filters; the tab stays (as "Clear all" next to the filter chips)
+                local presence = list.active_filter and list.active_filter.notes_presence
+                list.active_filter = { notes_presence = presence }
                 self:changed()
             end },
     }, true)
-    local footer = Page.footer(function() self:onClose() end, Page.countText(#(list.filtered_notes or {})),
+    local footer = Page.footer(function() self:onClose() end, Page.countText(#(list.filtered_notes or {}), list),
         function() self:onDone() end)
 
     -- body scrolls when it doesn't fit (landscape, small screens)
