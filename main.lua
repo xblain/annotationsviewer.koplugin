@@ -817,8 +817,11 @@ local function buildInfoText(note, note_wrapper, skip_title, hide_chapter) -- lu
     if info_fields["chapter"] and not hide_chapter and note.chapter and note.chapter ~= "" then
         table.insert(info_parts, NoteItemWidget.chapterLabel(note.chapter))
     end
-    local date_text = NoteItemWidget:formatDate(note.datetime) or ""
-    if info_fields["date"] and date_text ~= "" then table.insert(info_parts, date_text) end
+    -- the date: always, or (setting) only when the order goes by date
+    local show_date = info_fields["date"] and (getSetting("info_date_when", "always") ~= "sort"
+        or NoteItemWidget.sortUsesDate(NoteItemWidget.list_single))
+    local date_text = show_date and NoteItemWidget:formatDate(note.datetime) or ""
+    if date_text ~= "" then table.insert(info_parts, date_text) end
     return NoteItemWidget.infoText(table.concat(info_parts, " · "))
 end
 
@@ -971,9 +974,15 @@ function NoteItemWidget.bookmarkFace()
     if not font or font == "" then font = getInfoFont() end
     return getFaceOr(font, size or getInfoFontSize(), "cfont")
 end
--- the ribbon and the space after it: the bookmark's chapter text and its note start this far in
+-- the ribbon and the space after it: the bookmark's chapter text and its note start this far in.
+-- The column is as wide as the ribbon or the note icon, whichever is wider, so the note does not
+-- move when its icon is turned on or off.
 function NoteItemWidget.bookmarkIndent()
-    return TextWidget:new{ text = NoteItemWidget.BOOKMARK_CHAR, face = NoteItemWidget.bookmarkFace() }:getSize().w + Screen:scaleBySize(8)
+    return NoteItemWidget.bookmarkColumn() + Screen:scaleBySize(8)
+end
+function NoteItemWidget.bookmarkColumn()
+    return math.max(TextWidget:new{ text = NoteItemWidget.BOOKMARK_CHAR, face = NoteItemWidget.bookmarkFace() }:getSize().w,
+        TextWidget:new{ text = NOTE_ICON_CHAR, face = NoteItemWidget.noteFace() }:getSize().w)
 end
 -- A bookmark's note: without the note icon (default) it lines up with the chapter text; with it,
 -- the icon sits under the ribbon as on an annotation.
@@ -1012,13 +1021,14 @@ function NoteItemWidget.bookmarkRow(note, content_width, hide_chapter, single)
         max_width = math.floor(content_width * 0.6) } or nil
     local right_w = right and right:getSize().w or 0
     local icon = TextWidget:new{ text = NoteItemWidget.BOOKMARK_CHAR, face = info_face }
-    local icon_gap = NoteItemWidget.bookmarkIndent() - icon:getSize().w
+    local col = NoteItemWidget.bookmarkColumn()
+    local icon_gap = NoteItemWidget.bookmarkIndent() - col
     local label = TextWidget:new{ text = NoteItemWidget.infoText(left_text), face = info_face,
         max_width = math.max(Screen:scaleBySize(24), content_width - icon:getSize().w - icon_gap - right_w - gap) }
     local h = math.max(label:getSize().h, icon:getSize().h)
     -- the mark is centred on the height of the text next to it
     local left = HorizontalGroup:new{ align = "center",
-        CenterContainer:new{ dimen = Geom:new{ w = icon:getSize().w, h = h }, icon },
+        CenterContainer:new{ dimen = Geom:new{ w = col, h = h }, icon },
         HorizontalSpan:new{ width = icon_gap }, label }
     local d = Geom:new{ w = content_width, h = h }
     return OverlapGroup:new{ dimen = d, allow_mirroring = false,
@@ -1071,10 +1081,7 @@ local function measureNoteHeight(note, width, skip_title, skip_info)
             widths[NOTE_ICON_CHAR] = icon_w
         end
         local wrap_w = line_width - icon_w - Screen:scaleBySize(6) - NoteItemWidget.noteIndent()
-        if note.bookmark then
-            wrap_w = NoteItemWidget.bmNoteIcon() and (content_width - icon_w - Screen:scaleBySize(6))
-                or (content_width - NoteItemWidget.bookmarkIndent())
-        end
+        if note.bookmark then wrap_w = content_width - NoteItemWidget.bookmarkIndent() end
         local n = math.min(#wrapText(note.user_note, note_face, wrap_w), NoteItemWidget.noteLinesMax())
         local ls = NoteItemWidget.lineSpacing()
         if ls < 0 then h = h + math.max(note_line_h + ls, n * (note_line_h + ls))
@@ -1096,7 +1103,8 @@ local function getLayoutSignature(width)
         tostring(getSetting("author_font", nil)), tostring(getSetting("author_font_size", nil)), getSetting("author_case", "upper"), getSetting("title_case", "normal"), getSetting("info_case", "normal"), NoteItemWidget.noteOffset(), NoteItemWidget.noteIndent(),
         tostring(getTruncateLines()), tostring(NoteItemWidget.noteLinesMax()), tostring(getShowInfo()), getInfoFields(), tostring(NoteItemWidget.measure_hide_chapter),
         os.date("%Y%m%d"), -- "Today"/"Yesterday" labels change the info row text
-        NoteItemWidget.dateStyle("list"), tostring(getSetting("bm_line_size", nil)), tostring(getSetting("bm_font", nil)), tostring(NoteItemWidget.bmNoteIcon()),
+        getSetting("date_year_list", "relevant"), getSetting("date_time_list", "never"), getSetting("date_month", "short"), tostring(NoteItemWidget.twelveHour()),
+        getSetting("info_date_when", "always"), SortState.get(NoteItemWidget.list_single), tostring(getSetting("bm_line_size", nil)), tostring(getSetting("bm_font", nil)), tostring(NoteItemWidget.bmNoteIcon()),
     }, "|")
 end
 
@@ -1363,11 +1371,9 @@ function NoteItemWidget:init()
         -- the chapter text next to the ribbon
         local note_x = h_padding + text_margin + NoteItemWidget.noteIndent()
         local bm_pencil = is_bookmark and NoteItemWidget.bmNoteIcon()
-        if bm_pencil then
-            note_x = h_padding
-            note_text_width = content_width - icon_size - icon_margin
-        elseif is_bookmark then
-            note_x = h_padding + NoteItemWidget.bookmarkIndent()
+        if is_bookmark then
+            -- with or without its icon, the note starts where the chapter text does
+            note_x = h_padding + (bm_pencil and 0 or NoteItemWidget.bookmarkIndent())
             note_text_width = content_width - NoteItemWidget.bookmarkIndent()
         end
         local note_lines = NoteItemWidget.cutLines(wrapText(self.note.user_note, note_face, note_text_width),
@@ -1387,7 +1393,12 @@ function NoteItemWidget:init()
         end
 
                 
-        local note_row = (is_bookmark and not bm_pencil) and note_text_group or HorizontalGroup:new{
+        local col = is_bookmark and NoteItemWidget.bookmarkColumn()
+        local note_row = (is_bookmark and not bm_pencil) and note_text_group or bm_pencil and HorizontalGroup:new{
+            CenterContainer:new{ dimen = Geom:new{ w = col, h = note_icon:getSize().h }, note_icon },
+            HorizontalSpan:new{ width = NoteItemWidget.bookmarkIndent() - col },
+            note_text_group,
+        } or HorizontalGroup:new{
             note_icon,
             HorizontalSpan:new{ width = icon_margin },
             note_text_group,
@@ -1406,12 +1417,14 @@ function NoteItemWidget:init()
     }
 
 end
--- How a date is written: "short" (Today, Yesterday, 3 Feb, 3 Feb 2025), "date" (3 Feb 2026),
--- "short_time" (Today, 14:05 / 3 Feb, 14:05) or "date_time" (3 Feb 2026, 14:05). The list and the
--- annotation sheet each have their own setting; without a style the list's is used.
+-- How a date is written, set apart for the list and for the annotation sheet:
+--   year: "relevant" (Today, Yesterday, 3 Feb, and 3 Feb 2025 for another year) or "always" (3 Feb 2026)
+--   time: "never", "recent" (only for today and yesterday: Today, 14:05) or "always" (3 Feb, 14:05)
+NoteItemWidget.DATE_DEFAULTS = { list = { year = "relevant", time = "never" }, sheet = { year = "always", time = "always" } }
 function NoteItemWidget.dateStyle(where)
-    if where == "sheet" then return getSetting("date_format_sheet", "date_time") end
-    return getSetting("date_format_list", "short")
+    local d = NoteItemWidget.DATE_DEFAULTS[where] or NoteItemWidget.DATE_DEFAULTS.list
+    where = NoteItemWidget.DATE_DEFAULTS[where] and where or "list"
+    return { year = getSetting("date_year_" .. where, d.year), time = getSetting("date_time_" .. where, d.time) }
 end
 function NoteItemWidget:formatDate(datetime, style)
     if not datetime or datetime == "" then return nil end
@@ -1419,17 +1432,40 @@ function NoteItemWidget:formatDate(datetime, style)
     if not year then return datetime end
     style = style or NoteItemWidget.dateStyle("list")
     local hm = datetime:match("[ T](%d%d?:%d%d)")
-    local with_time = (style == "short_time" or style == "date_time") and hm
     local note_time = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day)})
-    local out
-    if style == "date" or style == "date_time" then
-        out = tostring(tonumber(day)) .. " " .. os.date("%b", note_time) .. " " .. year
-    else
-        out = NoteItemWidget.shortDate(note_time)
-    end
-    return with_time and (out .. ", " .. hm) or out
+    local out = NoteItemWidget.shortDate(note_time, style.year == "always")
+    local recent = NoteItemWidget._today_start and note_time >= NoteItemWidget._today_start - 86400
+    if hm and (style.time == "always" or (style.time == "recent" and recent)) then out = out .. ", " .. NoteItemWidget.clockText(hm) end
+    return out
 end
-function NoteItemWidget.shortDate(note_time)
+-- Month and clock, the same in the list and on the sheet. The month is short ("3 Feb") or long
+-- ("3 February"), in KOReader's translation. The clock follows KOReader's own 12-hour clock setting
+-- (Settings → Time and date) unless set to 24 or 12 hours here.
+function NoteItemWidget.monthName(t, long)
+    if long == nil then long = getSetting("date_month", "short") == "long" end
+    local en = os.date(long and "%B" or "%b", t)
+    local ok, dt = pcall(require, "datetime")
+    local tr = ok and type(dt) == "table" and dt[long and "longMonthTranslation" or "shortMonthTranslation"]
+    local name = type(tr) == "table" and tr[en]
+    return type(name) == "string" and name or en
+end
+function NoteItemWidget.twelveHour()
+    local clock = getSetting("date_clock", "koreader")
+    if clock == "12" then return true elseif clock == "24" then return false end
+    local ko = rawget(_G, "G_reader_settings") -- KOReader's own settings (this file shadows the name)
+    return ko and type(ko.isTrue) == "function" and ko:isTrue("twelve_hour_clock") or false
+end
+function NoteItemWidget.clockText(hm)
+    if not NoteItemWidget.twelveHour() then return hm end
+    local h, m = hm:match("(%d+):(%d+)")
+    h = tonumber(h)
+    local suffix = h < 12 and "AM" or "PM"
+    h = h % 12
+    if h == 0 then h = 12 end
+    return string.format("%d:%s %s", h, m, suffix)
+end
+-- full: always "3 Feb 2026" (no Today / Yesterday, always the year)
+function NoteItemWidget.shortDate(note_time, full)
     local today = os.date("*t")
     local today_key = today.year * 10000 + today.month * 100 + today.day
     if NoteItemWidget._today_key ~= today_key then
@@ -1437,12 +1473,16 @@ function NoteItemWidget.shortDate(note_time)
         NoteItemWidget._today_start = os.time({ year = today.year, month = today.month, day = today.day })
     end
     local today_start = NoteItemWidget._today_start
+    if full then
+        local d = os.date("*t", note_time)
+        return tostring(d.day) .. " " .. NoteItemWidget.monthName(note_time) .. " " .. d.year
+    end
     if note_time >= today_start then return _("Today")
     elseif note_time >= today_start - 86400 then return _("Yesterday")
     else
         -- "3 Feb" this year, "3 Feb 2025" for older ones
         local d = os.date("*t", note_time)
-        local day_month = tostring(d.day) .. " " .. os.date("%b", note_time)
+        local day_month = tostring(d.day) .. " " .. NoteItemWidget.monthName(note_time)
         if d.year == today.year then return day_month end
         return day_month .. " " .. d.year
     end
@@ -1658,6 +1698,7 @@ local NotesListWidget = InputContainer:extend{
 }
 -- Sizes that depend on the screen and on whether a filter row is shown.
 function NotesListWidget:computeLayout()
+    NoteItemWidget.list_single = self.single_book and true or false -- whose sort order decides the dates
     self.width = Screen:getWidth()
     self.height = Screen:getHeight()
     self.dimen = Geom:new{ w = self.width, h = self.height }
@@ -6532,6 +6573,8 @@ function SS:build()
         add(sectionBar(_("INFO ROW")))
         add(toggle(_("Show book / info row"), nil, "show_info", getShowInfo))
         add(fieldChips(_("Info row shows"), nil, getInfoFields, "info_fields"))
+        add(segment(_("Date"), { { "sort", _("When sorted by date") }, { "always", _("Always") } },
+            getSetting("info_date_when", "always"), function(v) setSetting("info_date_when", v); self:changed() end))
         add(toggle(_("Title on each page"), nil, "repeat_title_on_page", getRepeatTitleOnPage))
         add(toggle(_("Chapter headings in one book"), _("Heading above each chapter when you open a single book"), "chapter_headings", NoteItemWidget.showHeadings))
         add(toggle(_("Chapter heading on each page"), nil, "repeat_chapter_on_page", NoteItemWidget.repeatChapter))
@@ -6539,17 +6582,29 @@ function SS:build()
         add(toggle(_("Hide duplicate book header"), nil, "hide_dup_title", getHideDupTitle))
         add(toggle(_("Hide duplicate info header"), nil, "hide_dup_info", getHideDupInfo))
         add(fieldChips(_("Duplicate check"), _("Repeated info is hidden when these match"), getDedupInfoFields, "dedup_info_fields"))
-        -- how dates are written: in the list and on the annotation sheet, each its own; the options
-        -- are shown as an example date from earlier this year
-        add(sectionBar(_("DATES")))
-        local sample = os.date("%Y-%m-%d 14:05:00", os.time() - 40 * 86400)
-        local date_opts = {}
-        local styles = { "short", "date", "short_time", "date_time" }
-        for n = 1, #styles do date_opts[n] = { styles[n], NoteItemWidget:formatDate(sample, styles[n]) } end
-        add(segment(_("In the list"), date_opts, NoteItemWidget.dateStyle("list"),
-            function(v) setSetting("date_format_list", v); self:changed() end))
-        add(segment(_("On the annotation sheet"), date_opts, NoteItemWidget.dateStyle("sheet"),
-            function(v) setSetting("date_format_sheet", v); self:changed() end))
+        -- how dates are written: in the list and on the annotation sheet, each its own year and time
+        -- month and clock: one choice for every date
+        add(sectionBar(_("DATE FORMAT")))
+        local sample_t = os.time({ year = 2026, month = 9, day = 3, hour = 14 })
+        add(segment(_("Month"), { { "short", "3 " .. NoteItemWidget.monthName(sample_t, false) },
+                { "long", "3 " .. NoteItemWidget.monthName(sample_t, true) } }, getSetting("date_month", "short"),
+            function(v) setSetting("date_month", v); self:changed() end))
+        local ko = rawget(_G, "G_reader_settings")
+        local ko12 = ko and type(ko.isTrue) == "function" and ko:isTrue("twelve_hour_clock")
+        add(segment(_("Clock"), { { "koreader", ko12 and _("As KOReader (2:05 PM)") or _("As KOReader (14:05)") },
+                { "24", "14:05" }, { "12", "2:05 PM" } }, getSetting("date_clock", "koreader"),
+            function(v) setSetting("date_clock", v); self:changed() end))
+        local places = { { "list", _("DATES IN THE LIST") }, { "sheet", _("DATES ON THE ANNOTATION SHEET") } }
+        for n = 1, #places do
+            local place = places[n]
+            local where = place[1]
+            local st = NoteItemWidget.dateStyle(where)
+            add(sectionBar(place[2]))
+            add(segment(_("Year"), { { "relevant", _("When not this year") }, { "always", _("Always") } }, st.year,
+                function(v) setSetting("date_year_" .. where, v); self:changed() end))
+            add(segment(_("Time"), { { "never", _("Never") }, { "recent", _("Today and yesterday") }, { "always", _("Always") } }, st.time,
+                function(v) setSetting("date_time_" .. where, v); self:changed() end))
+        end
     else
         add(sectionBar(_("LIST")))
         add(navRow(_("Text"), _("Fonts, sizes, capitals"),
