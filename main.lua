@@ -907,12 +907,13 @@ end
 -- column is made narrower to keep a little air between the text and the strip.
 -- How far both sides are pushed in so that text stays clear of the scrollbar (thumb, marks, page number):
 -- 0 when the side margin is already wide enough. The same on the left and the right, so the text stays centred.
-function NoteItemWidget.scrollInset()
-    if not isScrollbarStyle() then return 0 end
+-- no_sb: the list fits on one page, so no scrollbar is drawn and the full width is used.
+function NoteItemWidget.scrollInset(no_sb)
+    if no_sb or not isScrollbarStyle() then return 0 end
     return math.max(0, Screen:scaleBySize(22) - getHMargin())
 end
-function NoteItemWidget.listAvail(W)
-    if not isScrollbarStyle() then return W end
+function NoteItemWidget.listAvail(W, no_sb)
+    if no_sb or not isScrollbarStyle() then return W end
     local center = W - SB_STRIP_WIDTH - SB_MARGIN_RIGHT + math.floor(SB_STRIP_WIDTH / 2)
     return center - 2 * NoteItemWidget.scrollInset()
 end
@@ -1586,10 +1587,16 @@ function NotesListWidget:computeLayout()
         self.footer_height = FOOTER_BAR_HEIGHT + Size.line.medium
     end
     self.content_height = self.height - self.title_height - self.footer_height - getTopPadding()
-    -- width given to each annotation, and how far it is pushed right (landscape column)
-    local avail = NoteItemWidget.listAvail(self.width)
+    self:setNoteColumn()
+end
+-- Width given to each annotation, and how far it is pushed right (landscape column). With a
+-- scrollbar style the column stops at the scrollbar, unless the list fits on one page (no_scrollbar,
+-- set by calculatePages): then there is no scrollbar and the annotations use the full width.
+function NotesListWidget:setNoteColumn()
+    local no_sb = self.no_scrollbar
+    local avail = NoteItemWidget.listAvail(self.width, no_sb)
     self.note_width = NoteItemWidget.columnWidth(avail, self.width, self.height)
-    self.note_x_offset = math.floor((avail - self.note_width) / 2) + NoteItemWidget.scrollInset()
+    self.note_x_offset = math.floor((avail - self.note_width) / 2) + NoteItemWidget.scrollInset(no_sb)
 end
 function NotesListWidget:init()
     self.width = Screen:getWidth()
@@ -1766,7 +1773,20 @@ function NotesListWidget.markKey(note, single)
     if by == "author" then return note.book_authors or "" end
     return note.book_title or ""
 end
+-- Splits the list into pages. With a scrollbar style it first measures at the width beside the
+-- scrollbar; when everything fits on one page there is no scrollbar, so it measures again at the
+-- full width (wider annotations are never taller, so it still fits on one page).
 function NotesListWidget:calculatePages()
+    local sb = isScrollbarStyle()
+    if sb and self.no_scrollbar then self.no_scrollbar = nil; self:setNoteColumn() end
+    self:paginate()
+    if sb and self.total_pages <= 1 then
+        self.no_scrollbar = true
+        self:setNoteColumn()
+        self:paginate()
+    end
+end
+function NotesListWidget:paginate()
     self.pages = {}
     local note_spacing = getNoteSpacing()
     local current_page_notes, current_height = {}, 0
@@ -2640,7 +2660,7 @@ function NotesListWidget:updatePage()
     local tap_height = self.height - self.title_height - self.footer_height
     -- In scrollbar mode, exclude the scrollbar column so taps/swipes there reach the strip
     local tap_width = self.width
-    if isScrollbarStyle(pag_style) and self.sb_x then
+    if isScrollbarStyle(pag_style) and self.sb_x and not self.no_scrollbar then
         tap_width = self.sb_x
     end
     self.ges_events.Tap = { GestureRange:new{ ges = "tap", range = Geom:new{ x = 0, y = self.title_height, w = tap_width, h = tap_height } } }
@@ -3600,7 +3620,7 @@ function NotesListWidget:onTap(_, ges)
     if not ges or not ges.pos then return end
     -- exclude scrollbar column
     local pag_style = getPaginationStyle()
-    if (pag_style == "scrollbar" or pag_style == "scrollbar_chevrons") and self.sb_x and ges.pos.x >= self.sb_x then
+    if isScrollbarStyle(pag_style) and self.sb_x and not self.no_scrollbar and ges.pos.x >= self.sb_x then
         return
     end
     local tap_y = ges.pos.y
