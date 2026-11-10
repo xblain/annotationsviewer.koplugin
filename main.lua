@@ -959,6 +959,28 @@ function NoteItemWidget.pageText(note)
     if label == nil or label == "" then return nil end
     return _("Page") .. " " .. tostring(label)
 end
+-- Bookmark settings: only what differs from an annotation. A bookmark is one short line (plus its
+-- note), so it has its own space between bookmarks, its own size for that line (the info row's
+-- size until changed) and its own choice of when the date shows. Fonts, capitals, margins and the
+-- note's font and lines are the annotations' own.
+NoteItemWidget.DEFAULT_BM_SPACING = 18
+function NoteItemWidget.bmSpacing() return Screen:scaleBySize(getSetting("bm_spacing", NoteItemWidget.DEFAULT_BM_SPACING)) end
+function NoteItemWidget.bookmarkFace()
+    local size = tonumber(getSetting("bm_line_size", nil))
+    if not size then return (select(2, getNoteFaces())) end
+    return getFaceOr(getInfoFont(), size, "cfont")
+end
+-- the ribbon and the space after it: the bookmark's chapter text and its note start this far in
+function NoteItemWidget.bookmarkIndent()
+    return TextWidget:new{ text = NoteItemWidget.BOOKMARK_CHAR, face = NoteItemWidget.bookmarkFace() }:getSize().w + Screen:scaleBySize(8)
+end
+-- "sort" (only when the order goes by date), "always" or "never"
+function NoteItemWidget.bmDate() return getSetting("bm_date", "sort") end
+-- Space above an item in the list: between bookmarks their own (smaller) space, else the space
+-- between annotations; a new book header adds the book gap.
+function NoteItemWidget.gapAbove(note, skip_title)
+    return (note and note.bookmark and NoteItemWidget.bmSpacing() or getNoteSpacing()) + (skip_title and 0 or BOOK_GAP)
+end
 -- Whether the open order uses the date (then a bookmark shows its date).
 function NoteItemWidget.sortUsesDate(single)
     for _, l in ipairs(SortState.view(SortState.get(single), single)) do
@@ -967,10 +989,12 @@ function NoteItemWidget.sortUsesDate(single)
     return false
 end
 function NoteItemWidget.bookmarkRow(note, content_width, hide_chapter, single)
-    local info_face = select(2, getNoteFaces())
+    local info_face = NoteItemWidget.bookmarkFace()
     local chapter = (not hide_chapter and note.chapter and note.chapter ~= "") and NoteItemWidget.chapterLabel(note.chapter) or nil
     local page = NoteItemWidget.pageText(note)
-    local date = NoteItemWidget.sortUsesDate(single) and NoteItemWidget:formatDate(note.datetime) or nil
+    local when = NoteItemWidget.bmDate()
+    local date = (when == "always" or (when == "sort" and NoteItemWidget.sortUsesDate(single)))
+        and NoteItemWidget:formatDate(note.datetime) or nil
     local left_text, right_parts = chapter, {}
     if left_text then
         if page then table.insert(right_parts, page) end
@@ -984,7 +1008,7 @@ function NoteItemWidget.bookmarkRow(note, content_width, hide_chapter, single)
         max_width = math.floor(content_width * 0.6) } or nil
     local right_w = right and right:getSize().w or 0
     local icon = TextWidget:new{ text = NoteItemWidget.BOOKMARK_CHAR, face = info_face }
-    local icon_gap = Screen:scaleBySize(8)
+    local icon_gap = NoteItemWidget.bookmarkIndent() - icon:getSize().w
     local label = TextWidget:new{ text = NoteItemWidget.infoText(left_text), face = info_face,
         max_width = math.max(Screen:scaleBySize(24), content_width - icon:getSize().w - icon_gap - right_w - gap) }
     local h = math.max(label:getSize().h, icon:getSize().h)
@@ -1042,8 +1066,9 @@ local function measureNoteHeight(note, width, skip_title, skip_info)
             icon_w = measureTextWidth(NOTE_ICON_CHAR, note_face)
             widths[NOTE_ICON_CHAR] = icon_w
         end
-        local n = math.min(#wrapText(note.user_note, note_face, line_width - icon_w - Screen:scaleBySize(6) - NoteItemWidget.noteIndent()),
-            NoteItemWidget.noteLinesMax())
+        local wrap_w = line_width - icon_w - Screen:scaleBySize(6) - NoteItemWidget.noteIndent()
+        if note.bookmark then wrap_w = content_width - NoteItemWidget.bookmarkIndent() end
+        local n = math.min(#wrapText(note.user_note, note_face, wrap_w), NoteItemWidget.noteLinesMax())
         local ls = NoteItemWidget.lineSpacing()
         if ls < 0 then h = h + math.max(note_line_h + ls, n * (note_line_h + ls))
         else h = h + math.max(note_line_h, n * note_line_h + (n - 1) * ls) end
@@ -1064,7 +1089,7 @@ local function getLayoutSignature(width)
         tostring(getSetting("author_font", nil)), tostring(getSetting("author_font_size", nil)), getSetting("author_case", "upper"), getSetting("title_case", "normal"), getSetting("info_case", "normal"), NoteItemWidget.noteOffset(), NoteItemWidget.noteIndent(),
         tostring(getTruncateLines()), tostring(NoteItemWidget.noteLinesMax()), tostring(getShowInfo()), getInfoFields(), tostring(NoteItemWidget.measure_hide_chapter),
         os.date("%Y%m%d"), -- "Today"/"Yesterday" labels change the info row text
-        NoteItemWidget.dateStyle("list"),
+        NoteItemWidget.dateStyle("list"), tostring(getSetting("bm_line_size", nil)),
     }, "|")
 end
 
@@ -1327,6 +1352,13 @@ function NoteItemWidget:init()
         local icon_size = note_icon:getSize().w
 
         local note_text_width = line_width - icon_size - icon_margin - NoteItemWidget.noteIndent()
+        -- a bookmark's note has no pencil: the ribbon above marks it, and the note lines up with
+        -- the chapter text next to the ribbon
+        local note_x = h_padding + text_margin + NoteItemWidget.noteIndent()
+        if is_bookmark then
+            note_x = h_padding + NoteItemWidget.bookmarkIndent()
+            note_text_width = content_width - NoteItemWidget.bookmarkIndent()
+        end
         local note_lines = NoteItemWidget.cutLines(wrapText(self.note.user_note, note_face, note_text_width),
             NoteItemWidget.noteLinesMax(), note_face, note_text_width)
         local note_text_group = VerticalGroup:new{ align = "left" }
@@ -1344,14 +1376,14 @@ function NoteItemWidget:init()
         end
 
                 
-        local note_row = HorizontalGroup:new{
+        local note_row = is_bookmark and note_text_group or HorizontalGroup:new{
             note_icon,
             HorizontalSpan:new{ width = icon_margin },
             note_text_group,
         }
         table.insert(note_content, LeftContainer:new{
             dimen = Geom:new{ w = inner_width, h = note_row:getSize().h },
-            HorizontalGroup:new{ HorizontalSpan:new{ width = h_padding + text_margin + NoteItemWidget.noteIndent() }, note_row },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = note_x }, note_row },
         })
     end
 
@@ -1850,7 +1882,6 @@ function NotesListWidget:calculatePages()
 end
 function NotesListWidget:paginate()
     self.pages = {}
-    local note_spacing = getNoteSpacing()
     local current_page_notes, current_height = {}, 0
     
     local available_content_height = self.content_height
@@ -1878,7 +1909,7 @@ function NotesListWidget:paginate()
         if has_ch and ((is_first_on_page and NoteItemWidget.repeatChapter()) or note.chapter ~= prev_chapter) then item_height = item_height + NoteItemWidget.headingHeight(note.chapter, note_width) end
         local spacing = 0
         if not is_first_on_page then
-            spacing = note_spacing + (skip_title and 0 or BOOK_GAP)
+            spacing = NoteItemWidget.gapAbove(note, skip_title)
         end
         local next_height = current_height + spacing + item_height
         if next_height <= effective_content_height then
@@ -2594,7 +2625,6 @@ function NotesListWidget:updatePage()
     -- used by onTap() to find what was tapped
     local tap_rows = {}
     local row_y = top_padding
-    local note_spacing = getNoteSpacing()
     local dedup_fields = getDedupInfoFields()
     local note_width = self.note_width
     -- determine dedup state from last note of previous page
@@ -2617,7 +2647,7 @@ function NotesListWidget:updatePage()
             local skip_title, skip_info = getHeaderSkips(note, is_first_on_page, dedup_prev_title, dedup_prev_info_key, dedup_fields)
             if self.single_book then skip_title = true end
             if not is_first_on_page then
-                local gap = note_spacing + (skip_title and 0 or BOOK_GAP)
+                local gap = NoteItemWidget.gapAbove(note, skip_title)
                 table.insert(notes_group, VerticalSpan:new{ width = gap })
                 row_y = row_y + gap
             end
@@ -2683,7 +2713,7 @@ function NotesListWidget:updatePage()
             for _i, w in ipairs(notes_group) do
                 if w.getSize then used_height = used_height + w:getSize().h end
             end
-            local available_height = self.height - self.title_height - self.footer_height - used_height - note_spacing - 2
+            local available_height = self.height - self.title_height - self.footer_height - used_height - NoteItemWidget.gapAbove(next_note, true) - 2
             if available_height > 0 then
                 local preview_skip_title, preview_skip_info = getHeaderSkips(next_note, false, dedup_prev_title, dedup_prev_info_key, dedup_fields)
                 if self.single_book then preview_skip_title = true end
@@ -2693,7 +2723,7 @@ function NotesListWidget:updatePage()
                     skip_title = preview_skip_title, skip_info = preview_skip_info,
                 }
                 local AlphaContainer = require("ui/widget/container/alphacontainer")
-                table.insert(notes_group, VerticalSpan:new{ width = note_spacing })
+                table.insert(notes_group, VerticalSpan:new{ width = NoteItemWidget.gapAbove(next_note, true) })
                 table.insert(notes_group, place(AlphaContainer:new{
                     alpha = 0.2,
                     FrameContainer:new{
@@ -5037,9 +5067,19 @@ function Page.PreviewClip:paintTo(bb, x, y)
         bb:paintBorder(x + cx - math.floor(tw / 2), y + top, tw, th, Size.border.default, BlitBuffer.COLOR_BLACK, math.floor(tw / 2))
     end
 end
-function Page.preview(list, h, mark_gap)
+function Page.preview(list, h, mark_gap, bookmarks)
     local W = Screen:getWidth()
-    local samples = {
+    local samples = bookmarks and {
+        -- the Bookmarks page: bookmarks as they show in the list, one with a note, one with a long chapter
+        { book_title = "Lorem Ipsum", book_authors = "Dolor Sit", chapter = "Chapter One", bookmark = true,
+          page_label = 12, datetime = "2026-01-09 10:12:00", highlighted_text = "",
+          user_note = "Duis aute irure dolor in reprehenderit in voluptate velit esse." },
+        { book_title = "Lorem Ipsum", book_authors = "Dolor Sit", chapter = "Chapter Two", bookmark = true,
+          page_label = 27, datetime = "2026-01-11 08:40:00", highlighted_text = "" },
+        { book_title = "Lorem Ipsum", book_authors = "Dolor Sit", bookmark = true, page_label = 41,
+          chapter = "Chapter Three: Excepteur sint occaecat cupidatat non proident, sunt in culpa",
+          datetime = "2026-01-14 21:03:00", highlighted_text = "" },
+    } or {
         { book_title = "Lorem Ipsum", book_authors = "Dolor Sit", chapter = "Chapter One",
           datetime = "2026-01-09 10:12:00", drawer = "lighten", color = "yellow",
           highlighted_text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
@@ -5057,7 +5097,7 @@ function Page.preview(list, h, mark_gap)
     local nw = NoteItemWidget.columnWidth(avail, W, Screen:getHeight())
     local x_off = math.floor((avail - nw) / 2) + NoteItemWidget.scrollInset()
     for i, n in ipairs(samples) do
-        if i > 1 then table.insert(g, VerticalSpan:new{ width = getNoteSpacing() }) end
+        if i > 1 then table.insert(g, VerticalSpan:new{ width = NoteItemWidget.gapAbove(n, true) }) end
         local ok, wdg = pcall(function()
             return NoteItemWidget:new{ width = nw, note = n, show_parent = list, skip_title = i > 1, disable_tap = true }
         end)
@@ -5585,6 +5625,14 @@ function States.sortLevels(g, o)
     end
 end
 
+-- The usual orders, one tap each: on the sort card and on the Sort page.
+function States.quickPicks(single)
+    return single and SortState.QUICK_BOOK or {
+        { _("Newest"), "date:desc" }, { _("Oldest"), "date:asc" }, { _("Book A–Z"), "book:asc" },
+        { _("Author A–Z"), "author:asc" }, { _("Last opened book"), "opened:desc" },
+        { _("In book order"), "book:asc,pos:asc" },
+    }
+end
 function States.sortMenu(list, on_done)
     local W = Screen:getWidth()
     local single = list.single_book
@@ -5598,11 +5646,7 @@ function States.sortMenu(list, on_done)
         if on_done then on_done() end
         States.sortMenu(list, on_done)
     end
-    local quick = single and SortState.QUICK_BOOK or {
-        { _("Newest"), "date:desc" }, { _("Oldest"), "date:asc" }, { _("Book A–Z"), "book:asc" },
-        { _("Author A–Z"), "author:asc" }, { _("Last opened book"), "opened:desc" },
-        { _("In book order"), "book:asc,pos:asc" },
-    }
+    local quick = States.quickPicks(single)
     local card_w = math.min(Screen:scaleBySize(360), W - Screen:scaleBySize(20))
     local bw = Size.border.window
     local too_tall = false
@@ -5713,11 +5757,7 @@ function States.sortList(list, on_done)
     end
     local card_w = math.min(Screen:scaleBySize(360), W - Screen:scaleBySize(20))
     local bw = Size.border.window
-    local quick = single and SortState.QUICK_BOOK or {
-        { _("Newest"), "date:desc" }, { _("Oldest"), "date:asc" }, { _("Book A–Z"), "book:asc" },
-        { _("Author A–Z"), "author:asc" }, { _("Last opened book"), "opened:desc" },
-        { _("In book order"), "book:asc,pos:asc" },
-    }
+    local quick = States.quickPicks(single)
     States.Card:new{ modal = true, width = card_w,
         left = W - card_w - Screen:scaleBySize(10), top = list.topbar_height + Screen:scaleBySize(4),
         pad_h = bw, pad_v = bw + Screen:scaleBySize(4),
@@ -6453,6 +6493,17 @@ function SS:build()
         rowsFor({ "text_margin", "line_spacing" })
         add(sectionBar(_("YOUR NOTE")))
         rowsFor({ "note_offset", "note_indent" })
+    elseif self.page == "bookmarks" then
+        -- only what is a bookmark's own; fonts, capitals, margins and the note are the annotations'
+        add(sectionBar(_("BOOKMARK LINE")))
+        local info_size = getInfoFontSize()
+        add(stepper(_("Text size"), _("Same as the info size until you change it"), "bm_line_size",
+            getSetting("bm_line_size", nil) or info_size, 8, 48, 1, info_size))
+        add(segment(_("Date"), { { "sort", _("When sorted by date") }, { "always", _("Always") }, { "never", _("Never") } },
+            NoteItemWidget.bmDate(), function(v) setSetting("bm_date", v); self:changed() end))
+        add(sectionBar(_("SPACING")))
+        add(stepper(_("Between bookmarks"), _("A bookmark is one line, so it needs less room than a highlight"), "bm_spacing",
+            getSetting("bm_spacing", NoteItemWidget.DEFAULT_BM_SPACING), 0, 100, 2, NoteItemWidget.DEFAULT_BM_SPACING))
     elseif self.page == "info" then
         add(sectionBar(_("INFO ROW")))
         add(toggle(_("Show book / info row"), nil, "show_info", getShowInfo))
@@ -6491,6 +6542,8 @@ function SS:build()
             add(navRow(_("Info row and repeats"), getShowInfo() and table.concat(names, " · ") or _("Off"),
                 function() UIManager:show(SS:new{ list = list, page = "info", parent_screen = self }, "flashui") end))
         end
+        add(navRow(_("Bookmarks"), _("Line size, date, spacing"),
+            function() UIManager:show(SS:new{ list = list, page = "bookmarks", parent_screen = self }, "flashui") end))
         add(toggle(_("Counts on tabs"), nil, "show_total", getShowTotalNotes))
 
         add(sectionBar(_("PAGES")))
@@ -6507,10 +6560,10 @@ function SS:build()
             function() return getSetting("hide_unused_cs", false) == true end))
     end
 
-    local titles = { text = _("Text"), spacing = _("Spacing"), info = _("Info row and repeats") }
+    local titles = { text = _("Text"), spacing = _("Spacing"), info = _("Info row and repeats"), bookmarks = _("Bookmarks") }
     local right_items
-    if self.page == "text" or self.page == "spacing" then
-        local keys = self.page == "text" and { "font_size" } or { "margins", "section_margin" }
+    if self.page == "text" or self.page == "spacing" or self.page == "bookmarks" then
+        local keys = ({ text = { "font_size" }, spacing = { "margins", "section_margin" } })[self.page] or {}
         right_items = { TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = Screen:scaleBySize(90), h = TOPBAR_HEIGHT },
                 (function()
                     local tw = TextWidget:new{ text = _("Reset"), face = Font:getFace("cfont", 14) }
@@ -6520,6 +6573,9 @@ function SS:build()
             callback = function()
                 for _i, key in ipairs(keys) do
                     for _j, st in ipairs(SPIN_MENUS[key].settings) do setSetting(st.key, st.default) end
+                end
+                if self.page == "bookmarks" then
+                    setSetting("bm_line_size", nil); setSetting("bm_spacing", nil); setSetting("bm_date", nil)
                 end
                 if self.page == "text" then
                     setSetting("title_font", nil); setSetting("info_font", nil); setSetting("content_font", nil)
@@ -6534,8 +6590,8 @@ function SS:build()
     local header = Page.header(self, titles[self.page] or _("Settings"), function() self:onClose() end, right_items,
         not self.page, function() Page.exitAll(self) end)
     local top_group = VerticalGroup:new{ align = "left", header }
-    if self.page == "text" or self.page == "spacing" then
-        table.insert(top_group, Page.preview(self.list, math.floor(H * 0.26), self.page == "spacing"))
+    if self.page == "text" or self.page == "spacing" or self.page == "bookmarks" then
+        table.insert(top_group, Page.preview(self.list, math.floor(H * 0.26), self.page == "spacing", self.page == "bookmarks"))
     end
     local avail = H - top_group:getSize().h
     local body_widget = Page.paged(self, W, avail, body)
@@ -6907,13 +6963,24 @@ function SortPicker:build()
         SortState.set(single, SortState.encode(SortState.revalidate(c, single)))
         self:changed()
     end
-    -- the same chip rows and direction bars as the sort card, then the order in a sentence
+    -- as the sort card: the quick picks, a line, the chip rows and direction bars per level, then
+    -- the order in a sentence
     local rows = VerticalGroup:new{ align = "left" }
     local function heading(text)
         table.insert(rows, VerticalSpan:new{ width = Screen:scaleBySize(14) })
         table.insert(rows, TextWidget:new{ text = text:upper(), face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted })
         table.insert(rows, VerticalSpan:new{ width = Screen:scaleBySize(6) })
     end
+    heading(_("Quick picks"))
+    local encoded = SortState.encode(levels)
+    local picks = {}
+    for i, q in ipairs(NotesListWidget.States.quickPicks(single)) do
+        picks[i] = { label = q[1], on = SortState.encode(SortState.parse(q[2])) == encoded,
+            callback = function() apply(SortState.parse(q[2])) end }
+    end
+    NotesListWidget.States.sortChips(rows, 0, inner, picks)
+    table.insert(rows, VerticalSpan:new{ width = Screen:scaleBySize(10) })
+    table.insert(rows, LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.medium }, background = COLORS.line })
     NotesListWidget.States.sortLevels(rows, { width = inner, side = 0, single = single, levels = levels,
         heading = heading, apply = apply })
     table.insert(rows, VerticalSpan:new{ width = Screen:scaleBySize(16) })
