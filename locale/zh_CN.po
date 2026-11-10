@@ -1,0 +1,1491 @@
+# Annotations Viewer — KOReader plugin
+# Chinese (Simplified) translation
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: annotationsviewer\n"
+"POT-Creation-Date: 2026-11-10 07:35+0800\n"
+"PO-Revision-Date: 2026-11-10 09:54+0800\n"
+"Last-Translator: gsWang <gs.wang@outlook.com>\n"
+"Language-Team: Chinese (Simplified)\n"
+"Language: zh_CN\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"X-Generator: Poedit 3.9\n"
+
+#: _meta.lua:5
+msgid "Annotations Viewer"
+msgstr "标注查看器"
+
+#: _meta.lua:6
+msgid ""
+"View all your notes and highlights from all books in a unified interface."
+msgstr "在统一界面中查看所有书籍的笔记与高亮。"
+
+#: main.lua:195
+msgid "Newest First"
+msgstr "最新优先"
+
+#: main.lua:196
+msgid "Oldest First"
+msgstr "最早优先"
+
+#: main.lua:197 main.lua:201 main.lua:205
+msgid "A to Z (by Date)"
+msgstr "A 到 Z（按日期）"
+
+#: main.lua:198 main.lua:202 main.lua:206
+msgid "Z to A (by Date)"
+msgstr "Z 到 A（按日期）"
+
+#: main.lua:199 main.lua:203 main.lua:207
+msgid "Location: Begin to End"
+msgstr "位置：从头到尾"
+
+#: main.lua:200 main.lua:204 main.lua:208
+msgid "Location: End to Begin"
+msgstr "位置：从尾到头"
+
+#: main.lua:209
+msgid "Last opened book first"
+msgstr "最近打开的书优先"
+
+#: main.lua:210
+msgid "Longest unopened book first"
+msgstr "最久未打开的书优先"
+
+#: main.lua:224
+msgid "Font sizes"
+msgstr "字号"
+
+#: main.lua:226
+msgid "Title size: "
+msgstr "标题字号："
+
+#: main.lua:227
+msgid "Info size: "
+msgstr "信息字号："
+
+#: main.lua:228
+msgid "Content size: "
+msgstr "正文字号："
+
+#: main.lua:233
+msgid "Space between notes"
+msgstr "笔记间距"
+
+#: main.lua:235
+msgid "Below the book title: "
+msgstr "书名下方："
+
+#: main.lua:236
+msgid "Below the chapter · date line: "
+msgstr "章节 · 日期行下方："
+
+#: main.lua:241
+msgid "Page margins"
+msgstr "页边距"
+
+#: main.lua:243
+msgid "Top padding: "
+msgstr "顶部留白："
+
+#: main.lua:244
+msgid "Horizontal margin: "
+msgstr "水平边距："
+
+#: main.lua:245
+msgid "Landscape width (%): "
+msgstr "横屏宽度（%）："
+
+#: main.lua:246
+msgid "Between annotations: "
+msgstr "标注之间："
+
+#: main.lua:247
+msgid "Space above the note: "
+msgstr "笔记上方留白："
+
+#: main.lua:248
+msgid "Extra indent for the note: "
+msgstr "笔记额外缩进："
+
+#: main.lua:249
+msgid "Line spacing: "
+msgstr "行距："
+
+#: main.lua:250
+msgid "Text indent: "
+msgstr "文本缩进："
+
+#: main.lua:824 main.lua:1927 main.lua:2060 main.lua:2762 main.lua:2796
+#: main.lua:6179 main.lua:6292
+msgid "Chapter"
+msgstr "章节"
+
+#: main.lua:1309
+msgid "Today"
+msgstr "今天"
+
+#: main.lua:1310
+msgid "Yesterday"
+msgstr "昨天"
+
+#: main.lua:1402 main.lua:3264
+msgid "Search: "
+msgstr "搜索："
+
+#: main.lua:1407
+msgid "Notes only"
+msgstr "仅笔记"
+
+#: main.lua:1409
+msgid "Without notes"
+msgstr "不含笔记"
+
+#: main.lua:1894 main.lua:4993
+msgid "Prev"
+msgstr "上一页"
+
+#: main.lua:1899 main.lua:4996
+msgid "Next"
+msgstr "下一页"
+
+#: main.lua:1918 main.lua:1926 main.lua:2761 main.lua:2795 main.lua:6179
+#: main.lua:6292
+msgid "Author"
+msgstr "作者"
+
+#: main.lua:1918 main.lua:1926
+msgid "Book"
+msgstr "书名"
+
+#: main.lua:1918 main.lua:1927
+msgid "Filename"
+msgstr "文件名"
+
+#: main.lua:1920 main.lua:1929
+msgid "Newest first"
+msgstr "最新优先"
+
+#: main.lua:1920 main.lua:1929
+msgid "Oldest first"
+msgstr "最早优先"
+
+#: main.lua:1921
+msgid "A–Z"
+msgstr "A–Z"
+
+#: main.lua:1921
+msgid "Z–A"
+msgstr "Z–A"
+
+#: main.lua:1922
+msgid "start to end"
+msgstr "从头到尾"
+
+#: main.lua:1922
+msgid "end to start"
+msgstr "从尾到头"
+
+#: main.lua:1923
+msgid "Last opened first"
+msgstr "最近打开优先"
+
+#: main.lua:1923
+msgid "Longest unopened first"
+msgstr "最久未打开优先"
+
+#: main.lua:1926 main.lua:2760 main.lua:2794 main.lua:6179 main.lua:6292
+msgid "Date"
+msgstr "日期"
+
+#: main.lua:1926 main.lua:5281 main.lua:5493
+msgid "Last opened book"
+msgstr "最近打开的书"
+
+#: main.lua:1927
+msgid "Place in book"
+msgstr "书中位置"
+
+#: main.lua:1930
+msgid "Longest ago first"
+msgstr "最久之前优先"
+
+#: main.lua:1930
+msgid "Most recent first"
+msgstr "最近优先"
+
+#: main.lua:1931
+msgid "Author A to Z"
+msgstr "作者 A 到 Z"
+
+#: main.lua:1931
+msgid "Author Z to A"
+msgstr "作者 Z 到 A"
+
+#: main.lua:1932
+msgid "Title A to Z"
+msgstr "书名 A 到 Z"
+
+#: main.lua:1932
+msgid "Title Z to A"
+msgstr "书名 Z 到 A"
+
+#: main.lua:1933
+msgid "Filename A to Z"
+msgstr "文件名 A 到 Z"
+
+#: main.lua:1933
+msgid "Filename Z to A"
+msgstr "文件名 Z 到 A"
+
+#: main.lua:1934
+msgid "Start of book first"
+msgstr "书首优先"
+
+#: main.lua:1934
+msgid "End of book first"
+msgstr "书末优先"
+
+#: main.lua:1935 main.lua:1951
+msgid "From the start"
+msgstr "从头开始"
+
+#: main.lua:1935 main.lua:1951
+msgid "From the end"
+msgstr "从尾开始"
+
+#: main.lua:1938 main.lua:1942 main.lua:1955 main.lua:5280 main.lua:5492
+#: main.lua:5604
+msgid "Newest"
+msgstr "最新"
+
+#: main.lua:1938 main.lua:1942 main.lua:1955 main.lua:5280 main.lua:5492
+#: main.lua:5604
+msgid "Oldest"
+msgstr "最旧"
+
+#: main.lua:1939 main.lua:1943 main.lua:1947 main.lua:2063
+msgid "Position"
+msgstr "位置"
+
+#: main.lua:1939 main.lua:1943 main.lua:2063
+msgid "Reverse position"
+msgstr "反向位置"
+
+#: main.lua:1944
+msgid "Chapter, newest first"
+msgstr "章节，最新优先"
+
+#: main.lua:1944
+msgid "Chapter, oldest first"
+msgstr "章节，最旧优先"
+
+#: main.lua:1956
+msgid "Opened long ago"
+msgstr "久未打开"
+
+#: main.lua:1956
+msgid "Opened recently"
+msgstr "最近打开"
+
+#: main.lua:1957
+msgid "Authors A–Z"
+msgstr "作者 A–Z"
+
+#: main.lua:1957
+msgid "Authors Z–A"
+msgstr "作者 Z–A"
+
+#: main.lua:1958
+msgid "Titles A–Z"
+msgstr "书名 A–Z"
+
+#: main.lua:1958
+msgid "Titles Z–A"
+msgstr "书名 Z–A"
+
+#: main.lua:1959
+msgid "Filenames A–Z"
+msgstr "文件名 A–Z"
+
+#: main.lua:1959
+msgid "Filenames Z–A"
+msgstr "文件名 Z–A"
+
+#: main.lua:1960
+msgid "Start to end"
+msgstr "从头到尾"
+
+#: main.lua:1960
+msgid "End to start"
+msgstr "从尾到头"
+
+#: main.lua:1961
+msgid "Chapters start to end"
+msgstr "章节从头到尾"
+
+#: main.lua:1961
+msgid "Chapters end to start"
+msgstr "章节从尾到头"
+
+#: main.lua:1981
+msgid "in book order"
+msgstr "按书中顺序"
+
+#: main.lua:1981
+msgid "from the end of the book"
+msgstr "从书末开始"
+
+#: main.lua:1985
+msgid "Chapters from the start of the book"
+msgstr "章节从书首开始"
+
+#: main.lua:1986
+msgid "Chapters from the end of the book"
+msgstr "章节从书末开始"
+
+#: main.lua:1989
+msgid ", highlights in book order within each chapter."
+msgstr "，章内高亮按书中顺序排列。"
+
+#: main.lua:1990
+msgid ", highlights from the end of each chapter."
+msgstr "，章内高亮从章末开始。"
+
+#: main.lua:1992
+msgid ", newest days first within each chapter"
+msgstr "，章内日期从新到旧"
+
+#: main.lua:1993
+msgid ", oldest days first within each chapter"
+msgstr "，章内日期从旧到新"
+
+#: main.lua:1994 main.lua:2002
+msgid "the same day "
+msgstr "同一天内"
+
+#: main.lua:1998
+msgid "Highlights by position in the book, from the start."
+msgstr "高亮按书中位置，从头开始。"
+
+#: main.lua:1999
+msgid "Highlights by position in the book, from the end."
+msgstr "高亮按书中位置，从尾开始。"
+
+#: main.lua:2001
+msgid "Newest highlights first"
+msgstr "最新高亮优先"
+
+#: main.lua:2001
+msgid "Oldest highlights first"
+msgstr "最旧高亮优先"
+
+#: main.lua:2029
+msgid "Within an author, "
+msgstr "同一作者内，"
+
+#: main.lua:2029
+msgid "Within a day, "
+msgstr "同一天内，"
+
+#: main.lua:2029
+msgid "Within a book, "
+msgstr "同一本书内，"
+
+#: main.lua:2033
+msgid "newest highlights first"
+msgstr "最新高亮优先"
+
+#: main.lua:2033
+msgid "oldest highlights first"
+msgstr "最旧高亮优先"
+
+#: main.lua:2034
+msgid "Newest days first"
+msgstr "最新日期优先"
+
+#: main.lua:2034
+msgid "Oldest days first"
+msgstr "最旧日期优先"
+
+#: main.lua:2035
+msgid "Newest highlights first, across all books"
+msgstr "跨全部书籍，最新高亮优先"
+
+#: main.lua:2035
+msgid "Oldest highlights first, across all books"
+msgstr "跨全部书籍，最旧高亮优先"
+
+#: main.lua:2037
+msgid "from the start to the end"
+msgstr "从头到尾"
+
+#: main.lua:2037
+msgid "from the end to the start"
+msgstr "从尾到头"
+
+#: main.lua:2040
+msgid "authors A to Z"
+msgstr "作者 A 到 Z"
+
+#: main.lua:2040
+msgid "authors Z to A"
+msgstr "作者 Z 到 A"
+
+#: main.lua:2041
+msgid "books opened most recently first"
+msgstr "最近打开的书优先"
+
+#: main.lua:2041
+msgid "books opened longest ago first"
+msgstr "最久未打开的书优先"
+
+#: main.lua:2042
+msgid "books by title A to Z"
+msgstr "书名 A 到 Z"
+
+#: main.lua:2042
+msgid "books by title Z to A"
+msgstr "书名 Z 到 A"
+
+#: main.lua:2043
+msgid "books by filename A to Z"
+msgstr "文件名 A 到 Z"
+
+#: main.lua:2043
+msgid "books by filename Z to A"
+msgstr "文件名 Z 到 A"
+
+#: main.lua:2047
+msgid "Books by title A to Z. Within a book, "
+msgstr "书名 A 到 Z。在同一本书内，"
+
+#: main.lua:2057
+msgid "Newest · position"
+msgstr "最新 · 位置"
+
+#: main.lua:2057
+msgid "Oldest · position"
+msgstr "最旧 · 位置"
+
+#: main.lua:2060
+msgid "Reverse chapter"
+msgstr "反向章节"
+
+#: main.lua:2061
+msgid "Chapter · newest"
+msgstr "章节 · 最新"
+
+#: main.lua:2061
+msgid "Chapter · oldest"
+msgstr "章节 · 最旧"
+
+#: main.lua:2083 main.lua:4152 main.lua:6805
+msgid "Lighten"
+msgstr "浅色"
+
+#: main.lua:2083 main.lua:4152 main.lua:6806
+msgid "Underline"
+msgstr "下划线"
+
+#: main.lua:2083 main.lua:4153
+msgid "Strikeout"
+msgstr "删除线"
+
+#: main.lua:2083 main.lua:4153 main.lua:6808
+msgid "Invert"
+msgstr "反色"
+
+#: main.lua:2113 main.lua:2126 main.lua:2130 main.lua:2134
+msgid "Hide"
+msgstr "隐藏"
+
+#: main.lua:2124 main.lua:2126
+#, lua-format
+msgid "%d books"
+msgstr "%d 本书"
+
+#: main.lua:2128 main.lua:2130
+#, lua-format
+msgid "%d chapters"
+msgstr "%d 个章节"
+
+#: main.lua:2132 main.lua:2134
+#, lua-format
+msgid "%d tags"
+msgstr "%d 个标签"
+
+#: main.lua:2138
+msgid "Highlight:"
+msgstr "高亮："
+
+#: main.lua:2141
+msgid "Highlight not:"
+msgstr "不含高亮："
+
+#: main.lua:2144
+msgid "Note:"
+msgstr "笔记："
+
+#: main.lua:2147
+msgid "Note not:"
+msgstr "不含笔记："
+
+#: main.lua:2159 main.lua:2216 main.lua:5722
+#, lua-format
+msgid "%d of %d"
+msgstr "%d / %d"
+
+#: main.lua:2190
+msgid "Clear all"
+msgstr "全部清除"
+
+#: main.lua:2249 main.lua:2267 main.lua:2585 main.lua:3823
+msgid "Annotations"
+msgstr "标注"
+
+#: main.lua:2252
+msgid "1 annotation"
+msgstr "1 条标注"
+
+#: main.lua:2252
+#, lua-format
+msgid "%d annotations"
+msgstr "%d 条标注"
+
+#: main.lua:2314 main.lua:5774 main.lua:6591
+msgid "All"
+msgstr "全部"
+
+#: main.lua:2315
+msgid "Highlights"
+msgstr "高亮"
+
+#: main.lua:2316 main.lua:5790
+msgid "Notes"
+msgstr "笔记"
+
+#: main.lua:2392 main.lua:3155 main.lua:4759 main.lua:5162 main.lua:5955
+#: main.lua:6655 main.lua:6795 main.lua:6821 main.lua:6939
+msgid "Cancel"
+msgstr "取消"
+
+#: main.lua:2393 main.lua:3156 main.lua:6563 main.lua:6656
+msgid "Clear"
+msgstr "清除"
+
+#: main.lua:2394 main.lua:3166 main.lua:6657
+msgid "Search"
+msgstr "搜索"
+
+#: main.lua:2397
+msgid "Search annotations"
+msgstr "搜索标注"
+
+#: main.lua:2399
+msgid "Words in highlights or notes"
+msgstr "高亮或笔记中的词语"
+
+#: main.lua:2484
+#, lua-format
+msgid "1 more annotation is hidden by filters"
+msgstr "还有 1 条标注被筛选隐藏"
+
+#: main.lua:2484
+#, lua-format
+msgid "%d more annotations are hidden by filters"
+msgstr "还有 %d 条标注被筛选隐藏"
+
+#: main.lua:2486
+msgid "Show all"
+msgstr "显示全部"
+
+#: main.lua:2587
+msgid "Filter"
+msgstr "筛选"
+
+#: main.lua:2602 main.lua:4390
+msgid "page"
+msgstr "页"
+
+#: main.lua:2613
+msgid "Note"
+msgstr "笔记"
+
+#: main.lua:2625
+msgid "Nothing to export."
+msgstr "没有可导出的内容。"
+
+#: main.lua:2634
+msgid "Export failed:"
+msgstr "导出失败："
+
+#: main.lua:2704
+msgid "Prev / Next Buttons"
+msgstr "上一页 / 下一页按钮"
+
+#: main.lua:2705 main.lua:6301
+msgid "Scrollbar"
+msgstr "滚动条"
+
+#: main.lua:2706
+msgid "Scrollbar + Buttons"
+msgstr "滚动条 + 按钮"
+
+#: main.lua:2707 main.lua:2729 main.lua:2763 main.lua:2797 main.lua:3341
+msgid "Back"
+msgstr "返回"
+
+#: main.lua:2712
+msgid "Pagination Style"
+msgstr "分页样式"
+
+#: main.lua:2725
+msgid "Both (horizontal + vertical)"
+msgstr "两者（水平 + 垂直）"
+
+#: main.lua:2726
+msgid "Horizontal only"
+msgstr "仅水平"
+
+#: main.lua:2727
+msgid "Vertical only"
+msgstr "仅垂直"
+
+#: main.lua:2728
+msgid "Disabled"
+msgstr "禁用"
+
+#: main.lua:2734
+msgid "Swipe Gestures"
+msgstr "滑动手势"
+
+#: main.lua:2768
+msgid "Show Info Header: Fields"
+msgstr "显示信息头：字段"
+
+#: main.lua:2802
+msgid "Hide Repeat Info: Match By"
+msgstr "隐藏重复信息：匹配依据"
+
+#: main.lua:2821
+msgid "Set"
+msgstr "设置"
+
+#: main.lua:3077 main.lua:6756
+msgid "Gray"
+msgstr "灰色"
+
+#: main.lua:3083
+msgid "Clear Filter"
+msgstr "清除筛选"
+
+#: main.lua:3086 main.lua:3237
+msgid "Exclude Color/Style"
+msgstr "排除颜色/样式"
+
+#: main.lua:3086 main.lua:3237
+msgid "Filter by Color/Style"
+msgstr "按颜色/样式筛选"
+
+#: main.lua:3140
+msgid "All Words"
+msgstr "全部词语"
+
+#: main.lua:3141
+msgid "Any Word"
+msgstr "任一词语"
+
+#: main.lua:3142
+msgid "Exact Phrase"
+msgstr "精确短语"
+
+#: main.lua:3146
+msgid "Case-Sensitive: On"
+msgstr "区分大小写：开"
+
+#: main.lua:3146
+msgid "Case-Sensitive: Off"
+msgstr "区分大小写：关"
+
+#: main.lua:3166
+msgid "Exclude"
+msgstr "排除"
+
+#: main.lua:3216
+msgid "Filter by Book"
+msgstr "按书籍筛选"
+
+#: main.lua:3223
+msgid "Filter by Chapter"
+msgstr "按章节筛选"
+
+#: main.lua:3230
+msgid "Filter by Tags"
+msgstr "按标签筛选"
+
+#: main.lua:3239
+msgid "Mode: Exclude"
+msgstr "模式：排除"
+
+#: main.lua:3239
+msgid "Mode: Filter"
+msgstr "模式：筛选"
+
+#: main.lua:3268
+msgid "Clear Search"
+msgstr "清除搜索"
+
+#: main.lua:3276
+msgid "Search Highlights and Notes…"
+msgstr "搜索高亮与笔记…"
+
+#: main.lua:3283
+msgid "Filter by Highlight Text"
+msgstr "按高亮文本筛选"
+
+#: main.lua:3285 main.lua:5999 main.lua:6000
+msgid "Words in highlighted text…"
+msgstr "高亮文本中的词语…"
+
+#: main.lua:3287
+msgid "Exclude by Highlight Text"
+msgstr "按高亮文本排除"
+
+#: main.lua:3289
+msgid "Words to hide highlighted text…"
+msgstr "要隐藏的高亮文本词语…"
+
+#: main.lua:3293
+msgid "Filter by Note Text"
+msgstr "按笔记文本筛选"
+
+#: main.lua:3295
+msgid "Words in annotation notes…"
+msgstr "标注中的词语…"
+
+#: main.lua:3297
+msgid "Exclude by Note Text"
+msgstr "按笔记文本排除"
+
+#: main.lua:3299
+msgid "Words to hide annotation notes…"
+msgstr "要隐藏的标注词语…"
+
+#: main.lua:3308
+msgid "With Notes Only"
+msgstr "仅含笔记"
+
+#: main.lua:3310
+msgid "Highlights Only (no notes)"
+msgstr "仅高亮（无笔记）"
+
+#: main.lua:3312
+msgid "Notes: All"
+msgstr "笔记：全部"
+
+#: main.lua:3332
+msgid "Clear All Filters"
+msgstr "清除全部筛选"
+
+#: main.lua:3349
+msgid "Annotation Filters"
+msgstr "标注筛选"
+
+#: main.lua:3773
+msgid "Show all annotations"
+msgstr "显示全部标注"
+
+#: main.lua:3779
+msgid "Show current book annotations"
+msgstr "显示当前书籍标注"
+
+#: main.lua:3817
+msgid "Book Annotations"
+msgstr "书籍标注"
+
+#: main.lua:4392 main.lua:4436
+msgid "Annotation"
+msgstr "标注"
+
+#: main.lua:4440
+msgid "Tap the highlight to read all of it"
+msgstr "轻触高亮可查看全文"
+
+#: main.lua:4448
+msgid "Edit"
+msgstr "编辑"
+
+#: main.lua:4448 main.lua:6941
+msgid "Add note"
+msgstr "添加笔记"
+
+#: main.lua:4455 main.lua:6269
+msgid "YOUR NOTE"
+msgstr "你的笔记"
+
+#: main.lua:4464
+msgid "No note yet."
+msgstr "还没有笔记。"
+
+#: main.lua:4470
+msgid "STYLE"
+msgstr "样式"
+
+#: main.lua:4508
+msgid "COLOUR"
+msgstr "颜色"
+
+#: main.lua:4564
+msgid "Go to note"
+msgstr "跳转到笔记"
+
+#: main.lua:4564
+msgid "Go to highlight"
+msgstr "跳转到高亮"
+
+#: main.lua:4571 main.lua:5164 main.lua:5920
+msgid "Delete"
+msgstr "删除"
+
+#: main.lua:5030
+msgid "Show 1 annotation"
+msgstr "显示 1 条标注"
+
+#: main.lua:5030
+#, lua-format
+msgid "Show %d annotations"
+msgstr "显示 %d 条标注"
+
+#: main.lua:5120
+msgid "Loading annotations…"
+msgstr "正在加载标注…"
+
+#: main.lua:5122
+msgid "Reading your books. Only the first time after starting KOReader."
+msgstr "正在读取书籍。仅在启动 KOReader 后的首次运行时。"
+
+#: main.lua:5137
+msgid "Delete this highlight?"
+msgstr "删除此高亮？"
+
+#: main.lua:5137
+msgid "Delete this annotation?"
+msgstr "删除此标注？"
+
+#: main.lua:5156
+msgid "Your note on it is deleted too. This can’t be undone."
+msgstr "其上的笔记也会一并删除。此操作无法撤销。"
+
+#: main.lua:5156
+msgid "This can’t be undone."
+msgstr "此操作无法撤销。"
+
+#: main.lua:5183
+msgid "Exported 1 annotation"
+msgstr "已导出 1 条标注"
+
+#: main.lua:5183
+#, lua-format
+msgid "Exported %d annotations"
+msgstr "已导出 %d 条标注"
+
+#: main.lua:5207 main.lua:5758 main.lua:6698
+msgid "Books"
+msgstr "书籍"
+
+#: main.lua:5208
+msgid "Filtered"
+msgstr "已筛选"
+
+#: main.lua:5208
+#, lua-format
+msgid "All %d"
+msgstr "全部 %d"
+
+#: main.lua:5212
+msgid "Export to Markdown"
+msgstr "导出为 Markdown"
+
+#: main.lua:5213
+#, lua-format
+msgid "%d shown"
+msgstr "显示 %d"
+
+#: main.lua:5214
+msgid "Reload annotations"
+msgstr "重新加载标注"
+
+#: main.lua:5217 main.lua:6338
+msgid "Settings"
+msgstr "设置"
+
+#: main.lua:5280 main.lua:5492 main.lua:5605
+msgid "Book A–Z"
+msgstr "书名 A–Z"
+
+#: main.lua:5281 main.lua:5493 main.lua:5605
+msgid "Author A–Z"
+msgstr "作者 A–Z"
+
+#: main.lua:5282 main.lua:5494
+msgid "In book order"
+msgstr "按书中顺序"
+
+#: main.lua:5374 main.lua:5515 main.lua:5521
+msgid "Quick picks"
+msgstr "快捷选择"
+
+#: main.lua:5387 main.lua:5523
+msgid "Sort by"
+msgstr "排序依据"
+
+#: main.lua:5387 main.lua:5523
+msgid "Then by"
+msgstr "其次按"
+
+#: main.lua:5387 main.lua:5523
+msgid "And then by"
+msgstr "再次按"
+
+#: main.lua:5400 main.lua:5529 main.lua:5532
+msgid "None"
+msgstr "无"
+
+#: main.lua:5570
+msgid "No annotations yet"
+msgstr "还没有标注"
+
+#: main.lua:5572
+msgid "Highlight a passage in this book and it shows up here."
+msgstr "在本书中高亮一段文字，它就会出现在这里。"
+
+#: main.lua:5573
+msgid "Highlight a passage in any book and it shows up here."
+msgstr "在任意书籍中高亮一段文字，它就会出现在这里。"
+
+#: main.lua:5578
+msgid "Nothing matches"
+msgstr "无匹配结果"
+
+#: main.lua:5578
+msgid "Nothing here"
+msgstr "暂无内容"
+
+#: main.lua:5582
+msgid "No annotations in this view."
+msgstr "此视图中没有标注。"
+
+#: main.lua:5584
+msgid "No annotations fit these filters."
+msgstr "没有标注符合当前筛选条件。"
+
+#: main.lua:5585
+msgid "1 is hidden."
+msgstr "已隐藏 1 条。"
+
+#: main.lua:5585
+#, lua-format
+msgid "%d are hidden."
+msgstr "已隐藏 %d 条。"
+
+#: main.lua:5590
+msgid "Clear filters"
+msgstr "清除筛选"
+
+#: main.lua:5606
+msgid "Position in book"
+msgstr "书中位置"
+
+#: main.lua:5720
+msgid "Any"
+msgstr "任意"
+
+#: main.lua:5722
+#, lua-format
+msgid "%d chosen"
+msgstr "已选 %d"
+
+#: main.lua:5723
+#, lua-format
+msgid "%d hidden"
+msgstr "已隐藏 %d"
+
+#: main.lua:5745 main.lua:6309
+msgid "FILTER"
+msgstr "筛选"
+
+#: main.lua:5762 main.lua:6740
+msgid "Tags"
+msgstr "标签"
+
+#: main.lua:5766 main.lua:6722
+msgid "Chapters"
+msgstr "章节"
+
+#: main.lua:5774
+msgid "With a note"
+msgstr "含笔记"
+
+#: main.lua:5774
+msgid "Without"
+msgstr "不含"
+
+#: main.lua:5833
+msgid "Show only these instead"
+msgstr "改为仅显示这些"
+
+#: main.lua:5833
+msgid "Hide these instead"
+msgstr "改为隐藏这些"
+
+#: main.lua:5839
+msgid "Hide colour & style"
+msgstr "隐藏颜色与样式"
+
+#: main.lua:5839
+msgid "Colour & style"
+msgstr "颜色与样式"
+
+#: main.lua:5850
+msgid "Search highlights and notes"
+msgstr "搜索高亮与笔记"
+
+#: main.lua:5862
+msgid "More text filters"
+msgstr "更多文本筛选"
+
+#: main.lua:5865
+msgid "Text contains"
+msgstr "文本包含"
+
+#: main.lua:5872
+msgid "SORT"
+msgstr "排序"
+
+#: main.lua:5888
+msgid "More…"
+msgstr "更多…"
+
+#: main.lua:5894
+msgid "SAVED FILTERS"
+msgstr "已保存的筛选"
+
+#: main.lua:5919
+#, lua-format
+msgid "Delete the saved filter “%s”?"
+msgstr "删除已保存的筛选“%s”？"
+
+#: main.lua:5929
+msgid "Nothing saved yet."
+msgstr "尚未保存任何筛选。"
+
+#: main.lua:5933
+msgid "Hold one to delete it."
+msgstr "长按可删除。"
+
+#: main.lua:5936
+msgid "Save current filters…"
+msgstr "保存当前筛选…"
+
+#: main.lua:5944
+#, lua-format
+msgid "Filter %d"
+msgstr "筛选 %d"
+
+#: main.lua:5952
+msgid "Save filters"
+msgstr "保存筛选"
+
+#: main.lua:5952
+msgid "Name"
+msgstr "名称"
+
+#: main.lua:5953
+msgid "Saves the filters and sort order as they are now."
+msgstr "保存当前的筛选条件与排序方式。"
+
+#: main.lua:5956 main.lua:6951
+msgid "Save"
+msgstr "保存"
+
+#: main.lua:5963
+msgid "Filter & sort"
+msgstr "筛选与排序"
+
+#: main.lua:5964
+msgid "Reset all"
+msgstr "全部重置"
+
+#: main.lua:5997
+msgid "Text filters"
+msgstr "文本筛选"
+
+#: main.lua:5999
+msgid "Highlight contains"
+msgstr "高亮包含"
+
+#: main.lua:6000
+msgid "Highlight doesn't contain"
+msgstr "高亮不包含"
+
+#: main.lua:6001
+msgid "Note contains"
+msgstr "笔记包含"
+
+#: main.lua:6001 main.lua:6002
+msgid "Words in your notes…"
+msgstr "笔记中的词语…"
+
+#: main.lua:6002
+msgid "Note doesn't contain"
+msgstr "笔记不包含"
+
+#: main.lua:6003
+msgid "Close"
+msgstr "关闭"
+
+#: main.lua:6217
+msgid "FONTS"
+msgstr "字体"
+
+#: main.lua:6218
+msgid "Title font"
+msgstr "标题字体"
+
+#: main.lua:6219
+msgid "Info font"
+msgstr "信息字体"
+
+#: main.lua:6220 main.lua:6222
+msgid "Author font"
+msgstr "作者字体"
+
+#: main.lua:6221
+msgid "Same as info"
+msgstr "与信息字体相同"
+
+#: main.lua:6224
+msgid "Content font"
+msgstr "正文字体"
+
+#: main.lua:6225 main.lua:6227
+msgid "Note font"
+msgstr "笔记字体"
+
+#: main.lua:6226
+msgid "Same as content"
+msgstr "与正文字体相同"
+
+#: main.lua:6229
+msgid "SIZES"
+msgstr "字号"
+
+#: main.lua:6232
+msgid "Author size"
+msgstr "作者字号"
+
+#: main.lua:6232
+msgid "Same as the info size until you change it"
+msgstr "更改前与信息字号相同"
+
+#: main.lua:6235
+msgid "Note size"
+msgstr "笔记字号"
+
+#: main.lua:6235
+msgid "Same as the content size until you change it"
+msgstr "更改前与正文字号相同"
+
+#: main.lua:6237
+msgid "Lines per highlight"
+msgstr "每条高亮显示行数"
+
+#: main.lua:6237
+msgid "Longer ones end with “…”; tap to read all"
+msgstr "较长内容以“…”结尾；轻触查看全文"
+
+#: main.lua:6238
+msgid "Lines per note"
+msgstr "每条笔记显示行数"
+
+#: main.lua:6238
+msgid "Longer notes end with “…”; tap to read all"
+msgstr "较长笔记以“…”结尾；轻触查看全文"
+
+#: main.lua:6239
+msgid "Justify text"
+msgstr "文本两端对齐"
+
+#: main.lua:6240 main.lua:6241 main.lua:6246
+msgid "CAPITALS"
+msgstr "大写"
+
+#: main.lua:6241 main.lua:6246
+msgid "As written"
+msgstr "保持原样"
+
+#: main.lua:6242
+msgid "Book and chapter titles"
+msgstr "书名与章节标题"
+
+#: main.lua:6244
+msgid "Chapter · date line"
+msgstr "章节 · 日期行"
+
+#: main.lua:6246
+msgid "Author name"
+msgstr "作者姓名"
+
+#: main.lua:6261
+msgid "PAGE"
+msgstr "页面"
+
+#: main.lua:6263
+msgid "BETWEEN ANNOTATIONS"
+msgstr "标注之间"
+
+#: main.lua:6265
+msgid "BOOK HEADING"
+msgstr "书籍标题"
+
+#: main.lua:6267
+msgid "HIGHLIGHT TEXT"
+msgstr "高亮文本"
+
+#: main.lua:6272
+msgid "INFO ROW"
+msgstr "信息行"
+
+#: main.lua:6273
+msgid "Show book / info row"
+msgstr "显示书籍 / 信息行"
+
+#: main.lua:6274
+msgid "Info row shows"
+msgstr "信息行显示"
+
+#: main.lua:6275
+msgid "Title on each page"
+msgstr "每页显示标题"
+
+#: main.lua:6276
+msgid "Chapter headings in one book"
+msgstr "单本书中的章节标题"
+
+#: main.lua:6276
+msgid "Heading above each chapter when you open a single book"
+msgstr "打开单本书时，在每章上方显示标题"
+
+#: main.lua:6277
+msgid "Chapter heading on each page"
+msgstr "每页显示章节标题"
+
+#: main.lua:6278
+msgid "Chapter / date on each page"
+msgstr "每页显示章节 / 日期"
+
+#: main.lua:6279
+msgid "Hide duplicate book header"
+msgstr "隐藏重复的书籍标题"
+
+#: main.lua:6280
+msgid "Hide duplicate info header"
+msgstr "隐藏重复的信息标题"
+
+#: main.lua:6281
+msgid "Duplicate check"
+msgstr "重复检查"
+
+#: main.lua:6281
+msgid "Repeated info is hidden when these match"
+msgstr "这些项匹配时隐藏重复信息"
+
+#: main.lua:6283
+msgid "LIST"
+msgstr "列表"
+
+#: main.lua:6284 main.lua:6314
+msgid "Text"
+msgstr "文本"
+
+#: main.lua:6284
+msgid "Fonts, sizes, capitals"
+msgstr "字体、字号、大写"
+
+#: main.lua:6286 main.lua:6314
+msgid "Spacing"
+msgstr "间距"
+
+#: main.lua:6286
+msgid "Margins, lines, notes"
+msgstr "边距、行、笔记"
+
+#: main.lua:6295 main.lua:6314
+msgid "Info row and repeats"
+msgstr "信息行与重复项"
+
+#: main.lua:6295 main.lua:6306
+msgid "Off"
+msgstr "关闭"
+
+#: main.lua:6298
+msgid "Counts on tabs"
+msgstr "标签页计数"
+
+#: main.lua:6300
+msgid "PAGES"
+msgstr "页面"
+
+#: main.lua:6301
+msgid "Page controls"
+msgstr "翻页控件"
+
+#: main.lua:6301
+msgid "Prev / Next"
+msgstr "上一页 / 下一页"
+
+#: main.lua:6302
+msgid "Scrollbar + buttons"
+msgstr "滚动条 + 按钮"
+
+#: main.lua:6304
+msgid "Marks on the scrollbar"
+msgstr "滚动条上的标记"
+
+#: main.lua:6304
+msgid "Where a new book, author, month or chapter starts, by sort order"
+msgstr "根据排序顺序，在新书、作者、月份或章节起始处标记"
+
+#: main.lua:6305
+msgid "Swipe to turn pages"
+msgstr "滑动翻页"
+
+#: main.lua:6305
+msgid "Both"
+msgstr "两者"
+
+#: main.lua:6305
+msgid "Horizontal"
+msgstr "水平"
+
+#: main.lua:6306
+msgid "Vertical"
+msgstr "垂直"
+
+#: main.lua:6310
+msgid "Only offer used colours and styles"
+msgstr "仅提供已使用的颜色与样式"
+
+#: main.lua:6320
+msgid "Reset"
+msgstr "重置"
+
+#: main.lua:6376 main.lua:6407
+msgid "Default"
+msgstr "默认"
+
+#: main.lua:6392
+msgid "The quick brown fox jumps over the lazy dog."
+msgstr "敏捷的棕色狐狸跳过了懒狗。"
+
+#: main.lua:6558
+msgid "Select all"
+msgstr "全选"
+
+#: main.lua:6568
+#, lua-format
+msgid "%d of %d selected"
+msgstr "已选 %d / %d"
+
+#: main.lua:6636
+msgid "Nothing found."
+msgstr "未找到结果。"
+
+#: main.lua:6687
+msgid "Unknown"
+msgstr "未知"
+
+#: main.lua:6699
+msgid "Only these books"
+msgstr "仅这些书籍"
+
+#: main.lua:6699
+msgid "Hide these books"
+msgstr "隐藏这些书籍"
+
+#: main.lua:6699
+msgid "Search title or author"
+msgstr "搜索书名或作者"
+
+#: main.lua:6723
+msgid "Only these chapters"
+msgstr "仅这些章节"
+
+#: main.lua:6723
+msgid "Hide these chapters"
+msgstr "隐藏这些章节"
+
+#: main.lua:6741
+msgid "Only these tags"
+msgstr "仅这些标签"
+
+#: main.lua:6741
+msgid "Hide these tags"
+msgstr "隐藏这些标签"
+
+#: main.lua:6765
+msgid "Select Color"
+msgstr "选择颜色"
+
+#: main.lua:6780
+msgid "Highlight Style"
+msgstr "高亮样式"
+
+#: main.lua:6783
+msgid "Change Style"
+msgstr "更改样式"
+
+#: main.lua:6789
+msgid "Change Color"
+msgstr "更改颜色"
+
+#: main.lua:6807
+msgid "Strikethrough"
+msgstr "删除线"
+
+#: main.lua:6822
+msgid "Select Style"
+msgstr "选择样式"
+
+#: main.lua:6860
+msgid "Style updated."
+msgstr "样式已更新。"
+
+#: main.lua:6863
+msgid "Color updated."
+msgstr "颜色已更新。"
+
+#: main.lua:6937
+msgid "Remove note"
+msgstr "移除笔记"
+
+#: main.lua:6941
+msgid "Edit note"
+msgstr "编辑笔记"
+
+#: main.lua:6944
+msgid "Your note on this passage"
+msgstr "你对这段文字的笔记"
+
+#: main.lua:6996
+msgid "Note saved."
+msgstr "笔记已保存。"
+
+#: main.lua:7002
+msgid "Cannot find book path."
+msgstr "找不到书籍路径。"
