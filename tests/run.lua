@@ -188,5 +188,63 @@ check("markdown book heading", md:find("## A — Me", 1, true) ~= nil, md)
 check("markdown quote lines", md:find("> line1\n> line2", 1, true) ~= nil, md)
 check("markdown note", md:find("**Note:** n", 1, true) ~= nil, md)
 
+-- bookmarks: reading them from KOReader's annotations list
+local toNote = plugin.toNote
+local bm = toNote({ page = "/body/p[3]", pageno = 34, chapter = "Two", text = "in Two", datetime = "2026-01-09 10:00:00" }, 4)
+check("bookmark kept", bm and bm.bookmark == true)
+check("bookmark has no highlighted text", bm and bm.text == "")
+check("bookmark page label", bm and bm.page_label == 34)
+check("bookmark keeps its order", bm and bm.order == 4)
+check("bookmark keeps KOReader's text for matching", bm and bm.bm_text == "in Two")
+local bm2 = toNote({ page = 7, pageno = 7, pageref = "vii", datetime = "d", note = "n" }, 1)
+check("bookmark page label prefers pageref", bm2 and bm2.page_label == "vii")
+check("bookmark note", bm2 and bm2.notes == "n")
+check("bookmark without position skipped", toNote({ datetime = "d" }, 1) == nil)
+check("empty highlight skipped", toNote({ drawer = "lighten", text = "", datetime = "d" }, 1) == nil)
+local hl = toNote({ drawer = "lighten", text = "t", pos0 = "a", pos1 = "b", page = "a", pageno = 12, datetime = "d" }, 2)
+check("highlight kept", hl and not hl.bookmark and hl.text == "t" and hl.page_label == 12)
+
+-- bookmarks: finding them again in the sidecar
+local bnote = { bookmark = true, datetime = "d", page = "/body/p[3]" }
+check("bookmark match", T.itemMatchesNote({ datetime = "d", page = "/body/p[3]", text = "in Two" }, bnote))
+check("bookmark no match on other page", not T.itemMatchesNote({ datetime = "d", page = "/body/p[4]" }, bnote))
+check("bookmark never matches a highlight", not T.itemMatchesNote({ datetime = "d", page = "/body/p[3]", drawer = "lighten" }, bnote))
+check("bookmark match on pdf page", T.itemMatchesNote({ datetime = "d", page = 5 }, { bookmark = true, datetime = "d", page = 5 }))
+
+-- bookmarks: tabs and filters
+local blist = {
+    { book_title = "A", highlighted_text = "alpha", user_note = "n", drawer = "lighten", color = "yellow" },
+    { book_title = "A", highlighted_text = "beta", drawer = "lighten", color = "red" },
+    { book_title = "A", highlighted_text = "", bookmark = true, page_label = 3, user_note = "page note" },
+    { book_title = "B", highlighted_text = "", bookmark = true, page_label = 9 },
+}
+local function bfiltered(af)
+    local w = { notes_list = blist, active_filter = af }
+    T.NotesListWidget.applyFilter(w)
+    local out = {}
+    for i, n in ipairs(w.filtered_notes) do out[i] = (n.bookmark and "bm" or "hl") .. n.book_title end
+    return join(out), w
+end
+local r, w0 = bfiltered(nil)
+check("all tab leaves bookmarks out", r == "hlA|hlA", r)
+check("bookmark count", w0.tab_counts.bookmarks == 2 and w0.tab_counts.all == 2)
+check("highlight and note counts", w0.tab_counts.notes == 1 and w0.tab_counts.highlights == 1)
+check("bookmarks tab", bfiltered({ notes_presence = "bookmarks" }) == "bmA|bmB")
+check("notes tab leaves bookmarks out", bfiltered({ notes_presence = "only" }) == "hlA")
+check("colour filter skips bookmarks", bfiltered({ notes_presence = "bookmarks", cs = { ["color:red"] = true } }) == "bmA|bmB")
+check("book filter applies to bookmarks", bfiltered({ notes_presence = "bookmarks", books = { B = true } }) == "bmB")
+check("search finds bookmark notes", bfiltered({ notes_presence = "bookmarks", search_any = "page" }) == "bmA")
+local _r2, w2 = bfiltered({ notes_presence = "bookmarks", books = { B = true } })
+check("tab totals ignore filters", w2.tab_totals.bookmarks == 2 and w2.tab_counts.bookmarks == 1)
+
+-- bookmarks: page text and export
+check("page text", T.NoteItemWidget.pageText({ page_label = 34 }) == "Page 34")
+check("page text from pdf page", T.NoteItemWidget.pageText({ page = 5 }) == "Page 5")
+check("no page text for an xpointer", T.NoteItemWidget.pageText({ page = "/body/p[3]" }) == nil)
+local bmd = T.notesToMarkdown({ { book_title = "A", bookmark = true, datetime = "2026-01-09 10:00:00",
+    chapter = "Two", page = "/body/p[3]", page_label = 34, highlighted_text = "", user_note = "n" } }, "")
+check("markdown bookmark line", bmd:find("*Bookmark · 2026-01-09 · Two · page 34*", 1, true) ~= nil, bmd)
+check("markdown no xpointer", bmd:find("/body", 1, true) == nil, bmd)
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

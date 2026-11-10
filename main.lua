@@ -941,6 +941,35 @@ function NoteItemWidget.chapterHeading(chapter, width)
     return HorizontalGroup:new{ HorizontalSpan:new{ width = h_margin + h_padding },
         VerticalGroup:new{ widget, VerticalSpan:new{ width = getTitleMargin() } } }
 end
+-- A bookmark's line in the list: ribbon and "Page 34" on the left, chapter · date on the right
+-- (as the info row above a highlight; the chapter is left out under a chapter heading).
+-- Bookmarks keep no text from the page, so this line is all there is besides the note.
+NoteItemWidget.BOOKMARK_CHAR = "\u{F097}" -- KOReader's own bookmark mark (same font as the note pencil)
+function NoteItemWidget.pageText(note)
+    local label = note.page_label
+    if label == nil and type(note.page) == "number" and note.page > 0 then label = note.page end
+    if label == nil or label == "" then return nil end
+    return _("Page") .. " " .. tostring(label)
+end
+function NoteItemWidget.bookmarkRow(note, content_width, hide_chapter)
+    local info_face, content_face = select(2, getNoteFaces())
+    local left = HorizontalGroup:new{ align = "center",
+        TextWidget:new{ text = NoteItemWidget.BOOKMARK_CHAR, face = content_face },
+        HorizontalSpan:new{ width = Screen:scaleBySize(8) },
+        TextWidget:new{ text = NoteItemWidget.pageText(note) or _("Bookmark"), face = content_face, bold = true,
+            max_width = math.floor(content_width * 0.6) },
+    }
+    local lw = left:getSize()
+    local info = buildInfoText(note, NoteWrapper:new(note), false, hide_chapter)
+    local right
+    local room = content_width - lw.w - Screen:scaleBySize(12)
+    if info ~= "" and room > Screen:scaleBySize(24) then
+        right = TextWidget:new{ text = info, face = info_face, fgcolor = COLORS.muted, max_width = room }
+    end
+    local d = Geom:new{ w = content_width, h = math.max(lw.h, right and right:getSize().h or 0) }
+    return OverlapGroup:new{ dimen = d, allow_mirroring = false,
+        LeftContainer:new{ dimen = d, left }, right and RightContainer:new{ dimen = d, right } or nil }
+end
 local function measureNoteHeight(note, width, skip_title, skip_info)
     local h_margin = getHMargin()
     local text_margin = getTextMargin()
@@ -956,13 +985,18 @@ local function measureNoteHeight(note, width, skip_title, skip_info)
             getHeaderAuthor(note_wrapper), title_face, NoteItemWidget.authorFace(), content_width)
         h = h + header_h + getTitleMargin()
     end
-    local info_text = buildInfoText(note, note_wrapper, skip_title, NoteItemWidget.measure_hide_chapter)
-    local info_visible = not skip_info and info_text ~= ""
-    if info_visible then
-        h = h + getBoxHeight(info_text, info_face, content_width, false)
-    end
-    if (not skip_title) or info_visible then
-        h = h + getInfoMargin()
+    if note.bookmark then
+        -- the bookmark line takes the place of the info row (and there is no highlight)
+        h = h + NoteItemWidget.bookmarkRow(note, content_width, NoteItemWidget.measure_hide_chapter):getSize().h
+    else
+        local info_text = buildInfoText(note, note_wrapper, skip_title, NoteItemWidget.measure_hide_chapter)
+        local info_visible = not skip_info and info_text ~= ""
+        if info_visible then
+            h = h + getBoxHeight(info_text, info_face, content_width, false)
+        end
+        if (not skip_title) or info_visible then
+            h = h + getInfoMargin()
+        end
     end
     local line_h = getLineHeight(content_face)
     if note_wrapper:hasHighlightedText() then
@@ -1125,7 +1159,16 @@ function NoteItemWidget:init()
         })
         table.insert(note_content, VerticalSpan:new{ width = title_margin })
     end
-    local info_visible = show_info_header and not self.skip_info and info_text ~= ""
+    local is_bookmark = self.note.bookmark == true
+    if is_bookmark then
+        local row = NoteItemWidget.bookmarkRow(self.note, content_width,
+            self.show_parent and self.show_parent.single_book and NoteItemWidget.showHeadings())
+        table.insert(note_content, LeftContainer:new{
+            dimen = Geom:new{ w = inner_width, h = row:getSize().h },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = h_padding }, row },
+        })
+    end
+    local info_visible = not is_bookmark and show_info_header and not self.skip_info and info_text ~= ""
     if info_visible then
         table.insert(note_content, LeftContainer:new{
             dimen = Geom:new{ w = inner_width, h = date_widget:getSize().h },
@@ -1133,7 +1176,7 @@ function NoteItemWidget:init()
         })
     end
     -- only add the post-header margin when at least one header row is actually shown
-    local any_header_visible = (not self.skip_title) or info_visible
+    local any_header_visible = not is_bookmark and ((not self.skip_title) or info_visible)
     if any_header_visible then
         table.insert(note_content, VerticalSpan:new{ width = info_margin })
     end
@@ -1405,6 +1448,8 @@ local function filterToString(filter, skip_presence)
             table.insert(parts, _("Notes only"))
         elseif filter.notes_presence == "exclude" then
             table.insert(parts, _("Without notes"))
+        elseif filter.notes_presence == "bookmarks" then
+            table.insert(parts, _("Bookmarks"))
         end
     end
     return #parts > 0 and table.concat(parts, "; ") or ""
@@ -1553,6 +1598,14 @@ function NotesListWidget:init()
     
     self:computeLayout()
     self:applyFilter()
+    -- A book (or library) with bookmarks but no highlights or notes opens on the Bookmarks tab
+    -- instead of an empty list
+    if not (self.active_filter and self.active_filter.notes_presence)
+            and self.tab_totals.all == 0 and self.tab_totals.bookmarks > 0 then
+        self.active_filter = self.active_filter or {}
+        self.active_filter.notes_presence = "bookmarks"
+        self:applyFilter()
+    end
     self:calculatePages()
     if Device:hasKeys() then
         self.key_events.GotoPrevPage = { { Input.group.PgBack } }
@@ -1598,9 +1651,12 @@ function NotesListWidget:applyFilter()
     end
     normalizeColorStyle(self.active_filter)
     self.filtered_notes = {}
-    local counts = { all = 0, highlights = 0, notes = 0 }
+    -- counts: what each tab shows with the filters; totals: what it would show without them
+    local counts = { all = 0, highlights = 0, notes = 0, bookmarks = 0 }
+    local totals = { all = 0, highlights = 0, notes = 0, bookmarks = 0 }
     for _, note in ipairs(self.notes_list) do
         local match = true
+        local is_bm = note.bookmark == true
         if self.active_filter then
             local af = self.active_filter
             -- Books include / exclude
@@ -1632,12 +1688,12 @@ function NotesListWidget:applyFilter()
             if match and af.chapters_exclude and next(af.chapters_exclude) then
                 if note.chapter and af.chapters_exclude[note.chapter] then match = false end
             end
-            -- Colour / style
-            if match and af.cs and next(af.cs) then
+            -- Colour / style (bookmarks have neither, so these don't apply to them)
+            if match and af.cs and next(af.cs) and not is_bm then
                 match = colorStyleMatches(af, note)
             end
-            -- Highlight text include / exclude
-            if match and af.search_highlight and af.search_highlight ~= "" then
+            -- Highlight text include / exclude (bookmarks have no highlighted text)
+            if match and af.search_highlight and af.search_highlight ~= "" and not is_bm then
                 match = textMatches(note.highlighted_text or "", af.search_highlight,
                     af.search_highlight_mode or "all", af.search_highlight_case == true)
             end
@@ -1665,13 +1721,21 @@ function NotesListWidget:applyFilter()
                     or textMatches(note.user_note or "", af.search_any, "all", case)
             end
         end
-        -- Notes presence last, so the tab counts can be taken before it
+        -- Notes presence (the tab) last, so the tab counts can be taken before it.
+        -- Bookmarks only show in their own tab; All, Highlights and Notes leave them out.
         local has_note = note.user_note ~= nil and note.user_note ~= ""
+        local tab = is_bm and "bookmarks" or (has_note and "notes" or "highlights")
+        totals[tab] = totals[tab] + 1
+        if not is_bm then totals.all = totals.all + 1 end
         if match then
-            counts.all = counts.all + 1
-            if has_note then counts.notes = counts.notes + 1 else counts.highlights = counts.highlights + 1 end
+            counts[tab] = counts[tab] + 1
+            if not is_bm then counts.all = counts.all + 1 end
             local presence = self.active_filter and self.active_filter.notes_presence
-            if presence == "only" then
+            if presence == "bookmarks" then
+                match = is_bm
+            elseif is_bm then
+                match = false
+            elseif presence == "only" then
                 match = has_note
             elseif presence == "exclude" then
                 match = not has_note
@@ -1680,6 +1744,12 @@ function NotesListWidget:applyFilter()
         if match then table.insert(self.filtered_notes, note) end
     end
     self.tab_counts = counts
+    self.tab_totals = totals
+end
+-- Key of the open tab in tab_counts / tab_totals.
+function NotesListWidget:tabKey()
+    local presence = self.active_filter and self.active_filter.notes_presence
+    return ({ only = "notes", exclude = "highlights", bookmarks = "bookmarks" })[presence or ""] or "all"
 end
 -- Scrollbar marks follow the sort order: a mark where the group changes. Books (or authors) when
 -- sorted by book / author / file, months when sorted by date, chapters in one book sorted by location.
@@ -1752,6 +1822,41 @@ function NotesListWidget:calculatePages()
     if #current_page_notes > 0 then table.insert(self.pages, current_page_notes) end
     if #self.pages == 0 then self.pages = {{}} end
     self.total_pages = #self.pages
+end
+-- The Prev / Next bar: "|‹ ‹ Prev" left, the label ("1 / 4") in the middle, "Next › ›|" right.
+-- Holding Prev / Next jumps to the first / last. Used under the list, on paged menu pages and in
+-- the bookmark sheet. o = { width, label, has_prev, has_next, first, prev, next, last, side }
+function NotesListWidget.navBar(o)
+    local cl, cr, cf, clast = "chevron.left", "chevron.right", "chevron.first", "chevron.last"
+    if BD.mirroredUILayout() then cl, cr, cf, clast = cr, cl, clast, cf end
+    local face = Font:getFace("cfont", 13)
+    local icon = Screen:scaleBySize(20)
+    local function pageButton(text, icon_name, icon_first, enabled, cb, hold_cb)
+        local tw = TextWidget:new{ text = text, face = face, bold = enabled, fgcolor = enabled and COLORS.ink or COLORS.disabled }
+        local iw = IconWidget:new{ icon = icon_name, width = icon, height = icon, dim = not enabled }
+        local row = icon_first and HorizontalGroup:new{ align = "center", iw, HorizontalSpan:new{ width = Screen:scaleBySize(4) }, tw }
+            or HorizontalGroup:new{ align = "center", tw, HorizontalSpan:new{ width = Screen:scaleBySize(4) }, iw }
+        return TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = row:getSize().w + Screen:scaleBySize(20), h = FOOTER_BAR_HEIGHT }, row },
+            callback = function() if enabled then cb() end end,
+            hold_callback = function() if enabled then hold_cb() end end }
+    end
+    -- first / last: icon only, next to Prev / Next
+    local function jumpButton(icon_name, enabled, cb)
+        local iw = IconWidget:new{ icon = icon_name, width = icon, height = icon, dim = not enabled }
+        return TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = icon + Screen:scaleBySize(20), h = FOOTER_BAR_HEIGHT }, iw },
+            callback = function() if enabled then cb() end end }
+    end
+    local bd = Geom:new{ w = o.width, h = FOOTER_BAR_HEIGHT }
+    local side = o.side or 0
+    return OverlapGroup:new{ dimen = bd, allow_mirroring = false,
+        LeftContainer:new{ dimen = bd, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
+            jumpButton(cf, o.has_prev, o.first),
+            pageButton(_("Prev"), cl, true, o.has_prev, o.prev, o.first) } },
+        CenterContainer:new{ dimen = bd, TextWidget:new{ text = o.label, face = face, bold = true } },
+        RightContainer:new{ dimen = bd, HorizontalGroup:new{
+            pageButton(_("Next"), cr, false, o.has_next, o.next, o.last),
+            jumpButton(clast, o.has_next, o.last),
+            HorizontalSpan:new{ width = side } } } }
 end
 function NotesListWidget:createFooter()
     local style = getPaginationStyle()
@@ -1851,53 +1956,14 @@ function NotesListWidget:createFooter()
         -- Bottom bar as in the mockup: thin line on top, "‹ Prev" left, "1 / 4" centred,
         -- "Next ›" right, with first / last page buttons on the outside (holding Prev / Next
         -- also jumps to the first / last page).
-        local chevron_left, chevron_right = "chevron.left", "chevron.right"
-        local chevron_first, chevron_last = "chevron.first", "chevron.last"
-        if BD.mirroredUILayout() then
-            chevron_left, chevron_right = chevron_right, chevron_left
-            chevron_first, chevron_last = chevron_last, chevron_first
-        end
-        local has_prev = self.current_page > 1
-        local has_next = self.current_page < self.total_pages
-        local face = Font:getFace("cfont", 13)
-        local icon = Screen:scaleBySize(20)
-        local function pageButton(text, icon_name, icon_first, enabled, callback, hold_callback)
-            local tw = TextWidget:new{ text = text, face = face, bold = enabled,
-                fgcolor = enabled and COLORS.ink or COLORS.disabled }
-            local iw = IconWidget:new{ icon = icon_name, width = icon, height = icon, dim = not enabled }
-            local row = icon_first and HorizontalGroup:new{ align = "center", iw, HorizontalSpan:new{ width = Screen:scaleBySize(4) }, tw }
-                or HorizontalGroup:new{ align = "center", tw, HorizontalSpan:new{ width = Screen:scaleBySize(4) }, iw }
-            return TapBox:new{
-                CenterContainer:new{ dimen = Geom:new{ w = row:getSize().w + Screen:scaleBySize(20), h = FOOTER_BAR_HEIGHT }, row },
-                callback = function() if enabled then callback() end end,
-                hold_callback = function() if enabled then hold_callback() end end,
-            }
-        end
-        -- first / last page: icon only, next to Prev / Next
-        local function jumpButton(icon_name, enabled, callback)
-            local iw = IconWidget:new{ icon = icon_name, width = icon, height = icon, dim = not enabled }
-            return TapBox:new{
-                CenterContainer:new{ dimen = Geom:new{ w = icon + Screen:scaleBySize(20), h = FOOTER_BAR_HEIGHT }, iw },
-                callback = function() if enabled then callback() end end,
-            }
-        end
         local function goFirst() self.current_page = 1; self:updatePage() end
         local function goLast() self.current_page = self.total_pages; self:updatePage() end
-        local bar_dimen = Geom:new{ w = self.width, h = FOOTER_BAR_HEIGHT }
-        local side = Screen:scaleBySize(12) - Screen:scaleBySize(10) -- mockup padding minus the button's own
-        local bar = OverlapGroup:new{
-            dimen = bar_dimen, allow_mirroring = false,
-            LeftContainer:new{ dimen = bar_dimen, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
-                jumpButton(chevron_first, has_prev, goFirst),
-                pageButton(_("Prev"), chevron_left, true, has_prev,
-                    function() self:onGotoPrevPage() end, goFirst) } },
-            CenterContainer:new{ dimen = bar_dimen, TextWidget:new{
-                text = string.format("%d / %d", self.current_page, self.total_pages), face = face, bold = true } },
-            RightContainer:new{ dimen = bar_dimen, HorizontalGroup:new{
-                pageButton(_("Next"), chevron_right, false, has_next,
-                    function() self:onGotoNextPage() end, goLast),
-                jumpButton(chevron_last, has_next, goLast),
-                HorizontalSpan:new{ width = side } } },
+        local bar = NotesListWidget.navBar{
+            width = self.width, label = string.format("%d / %d", self.current_page, self.total_pages),
+            has_prev = self.current_page > 1, has_next = self.current_page < self.total_pages,
+            first = goFirst, prev = function() self:onGotoPrevPage() end,
+            next = function() self:onGotoNextPage() end, last = goLast,
+            side = Screen:scaleBySize(12) - Screen:scaleBySize(10), -- mockup padding minus the button's own
         }
         return BottomContainer:new{
             dimen = Geom:new{ w = self.width, h = self.height },
@@ -2211,7 +2277,8 @@ function NotesListWidget:buildFilterChips(w)
     table.insert(rows, row)
     local h = CHIPS_PAD_TOP + n_rows * CHIP_HEIGHT + (n_rows - 1) * CHIP_GAP + CHIPS_PAD_BOTTOM + Size.line.thin
     local count = TextWidget:new{
-        text = string.format(_("%d of %d"), #(self.filtered_notes or {}), #(self.notes_list or {})),
+        text = string.format(_("%d of %d"), #(self.filtered_notes or {}),
+            self.tab_totals and self.tab_totals[self:tabKey()] or #(self.notes_list or {})),
         face = small, fgcolor = COLORS.muted,
     }
     local first_row = Geom:new{ w = avail, h = CHIP_HEIGHT }
@@ -2246,8 +2313,12 @@ function NotesListWidget:buildHeader()
         local first = self.notes_list and self.notes_list[1] or {}
         local book_title = self.book_title or first.book_title or _("Annotations")
         local authors = first.book_authors and NoteWrapper:new(first):getDisplayAuthors()
-        local n = #(self.notes_list or {})
+        local n, nb = 0, 0
+        for _i, x in ipairs(self.notes_list or {}) do
+            if x.bookmark then nb = nb + 1 else n = n + 1 end
+        end
         local sub = (n == 1) and _("1 annotation") or string.format(_("%d annotations"), n)
+        if nb > 0 then sub = sub .. " · " .. ((nb == 1) and _("1 bookmark") or string.format(_("%d bookmarks"), nb)) end
         if authors and authors ~= "" and authors ~= "Unknown" then sub = authors .. " · " .. sub end
         local max_w = math.floor(w * 0.55)
         local t = TextWidget:new{ text = book_title, face = getFaceOr(SERIF_FONT, 19, "cfont"), bold = true, max_width = max_w }
@@ -2299,8 +2370,9 @@ function NotesListWidget:buildHeader()
         RightContainer:new{ dimen = bar_dimen, right },
     })
 
-    -- 2. tabs: All / Highlights (no note) / Notes, plus the sort button
-    local counts = self.tab_counts or { all = 0, highlights = 0, notes = 0 }
+    -- 2. tabs: All / Highlights (no note) / Notes / Bookmarks, plus the sort button. The
+    -- Bookmarks tab is only there when some book has bookmarks.
+    local counts = self.tab_counts or { all = 0, highlights = 0, notes = 0, bookmarks = 0 }
     local presence = self.active_filter and self.active_filter.notes_presence
     local show_counts = getShowTotalNotes()
     local tab_face = Font:getFace("cfont", 15)
@@ -2308,11 +2380,15 @@ function NotesListWidget:buildHeader()
     local underline_h = Screen:scaleBySize(2)
     local row_h = TABS_HEIGHT - line_h
     local tabs = HorizontalGroup:new{ align = "top", HorizontalSpan:new{ width = h_pad } }
-    for i, tab in ipairs({
+    local tab_list = {
         { key = nil,       label = _("All"),        n = counts.all },
         { key = "exclude", label = _("Highlights"), n = counts.highlights },
         { key = "only",    label = _("Notes"),      n = counts.notes },
-    }) do
+    }
+    if (self.tab_totals and self.tab_totals.bookmarks or 0) > 0 or presence == "bookmarks" then
+        table.insert(tab_list, { key = "bookmarks", label = _("Bookmarks"), n = counts.bookmarks or 0 })
+    end
+    for i, tab in ipairs(tab_list) do
         local active = (presence == tab.key)
         local text = tab.label .. (show_counts and ("  " .. tab.n) or "")
         local tw = TextWidget:new{
@@ -2328,16 +2404,20 @@ function NotesListWidget:buildHeader()
         if i > 1 then table.insert(tabs, HorizontalSpan:new{ width = Screen:scaleBySize(20) }) end
         table.insert(tabs, TapBox:new{ box, callback = function() self:setNotesPresence(tab.key) end })
     end
-    local sort_text = TextWidget:new{
-        text = sortModeLabel(SortState.get(self.single_book), self.single_book),
-        face = Font:getFace("cfont", 13), fgcolor = COLORS.muted,
-        max_width = math.floor(w * 0.4),
-    }
+    -- The tabs keep their size; the sort label gets the room that is left. When that is too
+    -- little for a readable label (four tabs on a narrow screen), only the arrow is shown.
     local arrow_size = Screen:scaleBySize(14)
-    local sort_label = HorizontalGroup:new{
-        align = "center", sort_text, HorizontalSpan:new{ width = Screen:scaleBySize(3) },
-        IconWidget:new{ icon = "chevron.up", rotation_angle = 180, width = arrow_size, height = arrow_size },
-    }
+    local sort_room = w - tabs:getSize().w - h_pad - math.floor(h_pad / 2) - arrow_size - Screen:scaleBySize(3 + 16)
+    local sort_label = HorizontalGroup:new{ align = "center" }
+    if sort_room >= Screen:scaleBySize(48) then
+        table.insert(sort_label, TextWidget:new{
+            text = sortModeLabel(SortState.get(self.single_book), self.single_book),
+            face = Font:getFace("cfont", 13), fgcolor = COLORS.muted,
+            max_width = math.min(math.floor(w * 0.4), sort_room),
+        })
+        table.insert(sort_label, HorizontalSpan:new{ width = Screen:scaleBySize(3) })
+    end
+    table.insert(sort_label, IconWidget:new{ icon = "chevron.up", rotation_angle = 180, width = arrow_size, height = arrow_size })
     local sort_btn = TapBox:new{
         CenterContainer:new{ dimen = Geom:new{ w = sort_label:getSize().w + h_pad, h = row_h }, sort_label },
         callback = function() self:showSortMenu(false) end,
@@ -2474,14 +2554,19 @@ function NotesListWidget:updatePage()
         for k, v in pairs(self.active_filter or {}) do
             if k ~= "notes_presence" and v and (type(v) ~= "table" or next(v)) then active = true end
         end
-        local hidden = #self.notes_list - #self.filtered_notes
+        local tab = self:tabKey()
+        local hidden = (self.tab_totals and self.tab_totals[tab] or #self.notes_list) - #self.filtered_notes
         if active and hidden > 0 then
             local used = 0
             for _i, w in ipairs(notes_group) do if w.getSize then used = used + w:getSize().h end end
             local face = Font:getFace("cfont", 13)
-            local msg = TextWidget:new{ text = string.format(hidden == 1 and _("1 more annotation is hidden by filters") or _("%d more annotations are hidden by filters"), hidden),
+            local hidden_text = hidden == 1 and _("1 more annotation is hidden by filters") or _("%d more annotations are hidden by filters")
+            if tab == "bookmarks" then
+                hidden_text = hidden == 1 and _("1 more bookmark is hidden by filters") or _("%d more bookmarks are hidden by filters")
+            end
+            local msg = TextWidget:new{ text = string.format(hidden_text, hidden),
                 face = face, fgcolor = COLORS.muted, max_width = self.note_width - 2 * getHMargin() }
-            local link = TextWidget:new{ text = _("Show all"), face = face }
+            local link = TextWidget:new{ text = _("Clear all"), face = face } -- same as "Clear all" by the chips
             local line = LineWidget:new{ dimen = Geom:new{ w = link:getSize().w, h = Size.line.medium }, background = BlitBuffer.COLOR_BLACK }
             local gap = Screen:scaleBySize(16)
             local box_h = gap + msg:getSize().h + Screen:scaleBySize(8) + link:getSize().h + line:getSize().h + gap
@@ -2595,9 +2680,13 @@ local function notesToMarkdown(notes, filter_label)
             table.insert(out, "")
         end
         local meta = {}
+        if note.bookmark then table.insert(meta, _("Bookmark")) end
         if note.datetime and note.datetime ~= "" then table.insert(meta, note.datetime:sub(1, 10)) end
         if note.chapter and note.chapter ~= "" then table.insert(meta, note.chapter) end
-        if note.page then table.insert(meta, _("page") .. " " .. tostring(note.page)) end
+        -- page number as KOReader shows it (an EPUB position is not a page number)
+        local page_no = note.page_label
+        if page_no == nil and tonumber(note.page) then page_no = tonumber(note.page) end
+        if page_no ~= nil and page_no ~= "" then table.insert(meta, _("page") .. " " .. tostring(page_no)) end
         if #meta > 0 then table.insert(out, "*" .. table.concat(meta, " · ") .. "*") end
         local text = note.highlighted_text or ""
         if text:find("%S") then
@@ -2634,7 +2723,9 @@ function NotesListWidget:exportToMarkdown()
     end
     file:write(notesToMarkdown(notes, filterToString(self.active_filter)))
     file:close()
-    NotesListWidget.States.exported(#notes, path)
+    local all_bm = #notes > 0
+    for _i, n in ipairs(notes) do if not n.bookmark then all_bm = false; break end end
+    NotesListWidget.States.exported(#notes, path, all_bm)
 end
 
 -- back_to_menu == false: opened from the sort button in the tab row, so don't reopen the ☰ menu.
@@ -3617,7 +3708,7 @@ end
 
 -- On-disk copy of the caches above, so a KOReader restart doesn't mean parsing every
 -- book's sidecar again. Bump CACHE_VERSION whenever the cached data's shape changes.
-local CACHE_VERSION = 2
+local CACHE_VERSION = 3 -- 3: bookmarks and page labels are kept
 local _persist = nil        -- LuaSettings object, loaded on the first scan
 local _persist_dirty = false
 local _persist_count = 0
@@ -3687,6 +3778,9 @@ end
 -- second with the same text are told apart.
 local function itemMatchesNote(item, note)
     if item.datetime ~= note.datetime then return false end
+    if note.bookmark then -- a bookmark has no text of its own: match on its place
+        return item.drawer == nil and positionsEqual(item.page or item.pageno, note.page)
+    end
     if (item.text or "") ~= (note.highlighted_text or "") then return false end
     if note.pos0 ~= nil then
         return positionsEqual(item.pos0, note.pos0) and positionsEqual(item.pos1, note.pos1)
@@ -3854,26 +3948,37 @@ function AllNotesViewer:clearBookCache(book_path)
     -- book_info rarely changes, but clear it too so tags/title edits are reflected
     _book_info_cache[book_path] = nil
 end
+-- One item of KOReader's `annotations` list (sidecar or open book) as the plugin keeps it, or
+-- nil when there is nothing to show. Highlights and notes have a `drawer`; an item without one
+-- is a page bookmark: KOReader stores its place, chapter, date and an optional note, but no
+-- text from the page (its `text` is only "in <chapter>"), so the list shows the page instead.
+function AllNotesViewer.toNote(item, idx)
+    local label = item.pageref or item.pageno -- page number as KOReader shows it
+    if not item.drawer then
+        if item.page == nil and item.pageno == nil then return nil end
+        return {
+            page = item.page or item.pageno, order = idx, page_label = label,
+            chapter = item.chapter or "", text = "", notes = item.note or "",
+            datetime = item.datetime or "", bookmark = true, bm_text = item.text,
+            tags = item.tags, keywords = item.keywords,
+        }
+    end
+    local has_highlight = item.text and item.text ~= ""
+    local has_note = item.note and item.note ~= ""
+    if not (has_highlight or has_note) then return nil end
+    return {
+        page = item.page or item.pageno or 0, order = idx, page_label = label,
+        pos0 = item.pos0, pos1 = item.pos1,
+        chapter = item.chapter or "", text = item.text or "", notes = item.note or "",
+        datetime = item.datetime or "", drawer = item.drawer, color = item.color or "yellow",
+        tags = item.tags, keywords = item.keywords,
+    }
+end
 function AllNotesViewer:convertLiveAnnotations(live)
     local annotations = {}
     for idx, item in ipairs(live) do
-        if item.drawer then
-            local has_highlight = item.text and item.text ~= ""
-            local has_note = item.note and item.note ~= ""
-            if has_highlight or has_note then
-                table.insert(annotations, {
-                    page = item.page or item.pageno or 0, order = idx,
-                    pos0 = item.pos0, pos1 = item.pos1,
-                    chapter = item.chapter or "",
-                    text = item.text or "",
-                    notes = item.note or "",
-                    datetime = item.datetime or "",
-                    drawer = item.drawer,
-                    color = item.color or "yellow",
-                    tags = item.tags, keywords = item.keywords,
-                })
-            end
-        end
+        local n = AllNotesViewer.toNote(item, idx)
+        if n then table.insert(annotations, n) end
     end
     return annotations
 end
@@ -3895,18 +4000,8 @@ function AllNotesViewer:loadBookAnnotations(book_path, key, sidecar)
     local items = data.annotations
     if items and #items > 0 then
         for idx, item in ipairs(items) do
-            if item.drawer then
-                local has_highlight = item.text and item.text ~= ""
-                local has_note = item.note and item.note ~= ""
-                if has_highlight or has_note then
-                    table.insert(annotations, {
-                        page = item.page or item.pageno or 0, order = idx, pos0 = item.pos0, pos1 = item.pos1,
-                        chapter = item.chapter or "", text = item.text or "", notes = item.note or "",
-                        datetime = item.datetime or "", drawer = item.drawer, color = item.color or "yellow",
-                        tags = item.tags, keywords = item.keywords
-                    })
-                end
-            end
+            local n = AllNotesViewer.toNote(item, idx)
+            if n then table.insert(annotations, n) end
         end
     else
         local highlights = data.highlight or {}
@@ -4087,6 +4182,7 @@ function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations)
             pos0 = note.pos0, pos1 = note.pos1,
             highlighted_text = note.text, user_note = note.notes,
             datetime = note.datetime, drawer = note.drawer, color = note.color,
+            bookmark = note.bookmark, bm_text = note.bm_text, page_label = note.page_label,
             tags = all_tags,
         })
     end
@@ -4133,6 +4229,7 @@ function AllNotesViewer:showAllNotes()
                 pos0 = note.pos0, pos1 = note.pos1,
                 highlighted_text = note.text, user_note = note.notes,
                 datetime = note.datetime, drawer = note.drawer, color = note.color,
+                bookmark = note.bookmark, bm_text = note.bm_text, page_label = note.page_label,
                 tags = all_tags
             })
         end
@@ -4385,7 +4482,10 @@ function AnnotationSheet:build()
     if note.chapter and note.chapter ~= "" then table.insert(meta, note.chapter) end
     local date_text = NoteItemWidget:formatDate(note.datetime)
     if date_text then table.insert(meta, date_text) end
-    if tonumber(note.page) and tonumber(note.page) > 0 then table.insert(meta, _("page") .. " " .. tostring(tonumber(note.page))) end
+    -- KOReader's page number (EPUB positions aren't numbers, so its label is used when there)
+    local page_no = note.page_label
+    if page_no == nil and tonumber(note.page) and tonumber(note.page) > 0 then page_no = tonumber(note.page) end
+    if page_no ~= nil and page_no ~= "" then table.insert(meta, _("page") .. " " .. tostring(page_no)) end
     local head = VerticalGroup:new{ align = "left",
         TextBoxWidget:new{ text = note.book_title or _("Annotation"), face = getFaceOr(SERIF_FONT, 20, "cfont"),
             bold = true, width = text_w },
@@ -4463,6 +4563,8 @@ function AnnotationSheet:build()
     end
     table.insert(group, VerticalSpan:new{ width = gap })
 
+    -- 4 and 5 (style, colour) are for highlights only: a bookmark has neither
+    if not note.bookmark then
     -- 4. style: one bordered row of four; Underline/Strikeout labels show their line;
     -- the chosen one is filled black with white bold text
     table.insert(group, sectionLabel(_("STYLE")))
@@ -4552,6 +4654,7 @@ function AnnotationSheet:build()
     if row_w > 0 then table.insert(rows, row) end
     table.insert(group, rows)
     table.insert(group, VerticalSpan:new{ width = gap + Screen:scaleBySize(4) })
+    end -- not a bookmark
 
     -- 6. actions: Go to (twice as wide) and Delete
     local btn_gap = Screen:scaleBySize(10)
@@ -4559,7 +4662,11 @@ function AnnotationSheet:build()
     local can_open = note.book_path and lfs.attributes(note.book_path, "mode") ~= nil
     local unit = math.floor((inner - btn_gap) / 3)
     if can_open then
-        table.insert(btn_row, actionButton(has_note and _("Go to note") or _("Go to highlight"), function()
+        local goto_text = has_note and _("Go to note") or _("Go to highlight")
+        if note.bookmark then
+            goto_text = page_no and (_("Go to page") .. " " .. tostring(page_no)) or _("Go to bookmark")
+        end
+        table.insert(btn_row, actionButton(goto_text, function()
             self:onClose()
             UIManager:close(parent)
             viewer:openBookAtNote(note)
@@ -4571,6 +4678,26 @@ function AnnotationSheet:build()
         viewer:confirmDelete(note, parent)
     end, false, can_open and unit or inner))
     table.insert(group, btn_row)
+
+    -- Bookmarks: step to the previous / next one in the list without closing the sheet
+    if note.bookmark and parent and parent.filtered_notes then
+        local list, idx = parent.filtered_notes, nil
+        for i, n in ipairs(list) do if n == note then idx = i; break end end
+        if idx and #list > 1 then
+            local function go(i)
+                self.note = list[i]
+                self:rebuild()
+            end
+            table.insert(group, VerticalSpan:new{ width = Screen:scaleBySize(12) })
+            table.insert(group, LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.medium }, background = COLORS.line })
+            table.insert(group, NotesListWidget.navBar{
+                width = inner, label = string.format("%d / %d", idx, #list),
+                has_prev = idx > 1, has_next = idx < #list,
+                first = function() go(1) end, prev = function() go(idx - 1) end,
+                next = function() go(idx + 1) end, last = function() go(#list) end,
+            })
+        end
+    end
 
     self.sheet = SheetFrame:new{
         -- Size.border.window: the outline KOReader uses on its own dialogs and buttons
@@ -4965,35 +5092,12 @@ function Page.paged(owner, W, avail, rows, opts)
     end
     local cur = owner.page_idx
     local has_prev, has_next = cur > 1, cur < count
-    local face = Font:getFace("cfont", 13)
-    local icon = Screen:scaleBySize(20)
-    local cl, cr, cf, clast = "chevron.left", "chevron.right", "chevron.first", "chevron.last"
-    if BD.mirroredUILayout() then cl, cr, cf, clast = cr, cl, clast, cf end
-    local function pageButton(text, icon_name, icon_first, enabled, cb, hold_cb)
-        local tw = TextWidget:new{ text = text, face = face, bold = enabled, fgcolor = enabled and COLORS.ink or COLORS.disabled }
-        local iw = IconWidget:new{ icon = icon_name, width = icon, height = icon, dim = not enabled }
-        local row = icon_first and HorizontalGroup:new{ align = "center", iw, HorizontalSpan:new{ width = Screen:scaleBySize(4) }, tw }
-            or HorizontalGroup:new{ align = "center", tw, HorizontalSpan:new{ width = Screen:scaleBySize(4) }, iw }
-        return TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = row:getSize().w + Screen:scaleBySize(20), h = FOOTER_BAR_HEIGHT }, row },
-            callback = function() if enabled then cb() end end,
-            hold_callback = function() if enabled then hold_cb() end end }
-    end
-    local function jumpButton(icon_name, enabled, cb)
-        local iw = IconWidget:new{ icon = icon_name, width = icon, height = icon, dim = not enabled }
-        return TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = icon + Screen:scaleBySize(20), h = FOOTER_BAR_HEIGHT }, iw },
-            callback = function() if enabled then cb() end end }
-    end
-    local bd = Geom:new{ w = W, h = FOOTER_BAR_HEIGHT }
-    local side = Screen:scaleBySize(2)
-    local bar = OverlapGroup:new{ dimen = bd, allow_mirroring = false,
-        LeftContainer:new{ dimen = bd, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
-            jumpButton(cf, has_prev, function() go(1) end),
-            pageButton(_("Prev"), cl, true, has_prev, function() go(cur - 1) end, function() go(1) end) } },
-        CenterContainer:new{ dimen = bd, TextWidget:new{ text = string.format("%d / %d", cur, count), face = face, bold = true } },
-        RightContainer:new{ dimen = bd, HorizontalGroup:new{
-            pageButton(_("Next"), cr, false, has_next, function() go(cur + 1) end, function() go(count) end),
-            jumpButton(clast, has_next, function() go(count) end),
-            HorizontalSpan:new{ width = side } } } }
+    local bar = NotesListWidget.navBar{
+        width = W, label = string.format("%d / %d", cur, count), has_prev = has_prev, has_next = has_next,
+        first = function() go(1) end, prev = function() go(cur - 1) end,
+        next = function() go(cur + 1) end, last = function() go(count) end,
+        side = Screen:scaleBySize(2),
+    }
     -- swipes (as the list's swipe setting) and page-turn keys also turn the pages
     local sw = getSwipeSetting()
     owner.ges_events = owner.ges_events or {}
@@ -5024,7 +5128,10 @@ function Page.paged(owner, W, avail, rows, opts)
         LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.medium }, background = COLORS.line },
         bar }
 end
-function Page.countText(n)
+function Page.countText(n, list)
+    if list and list:tabKey() == "bookmarks" then
+        return n == 1 and _("Show 1 bookmark") or string.format(_("Show %d bookmarks"), n)
+    end
     return n == 1 and _("Show 1 annotation") or string.format(_("Show %d annotations"), n)
 end
 
@@ -5132,7 +5239,17 @@ function States.confirmDelete(note, on_delete)
     local has_text = nw:hasHighlightedText()
     States.Card:new{ modal = true, build = function(w, card)
         local g = VerticalGroup:new{ align = "left" }
-        table.insert(g, States.title(has_text and _("Delete this highlight?") or _("Delete this annotation?"), 17, w))
+        local title = has_text and _("Delete this highlight?") or _("Delete this annotation?")
+        if note.bookmark then title = _("Delete this bookmark?") end
+        table.insert(g, States.title(title, 17, w))
+        if note.bookmark then -- which one: "Page 34 · Chapter Two"
+            local where = { NoteItemWidget.pageText(note) }
+            if note.chapter and note.chapter ~= "" then table.insert(where, note.chapter) end
+            if #where > 0 then
+                table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(6) })
+                table.insert(g, States.lines(table.concat(where, " · "), Font:getFace("cfont", 14), w, COLORS.ink, true, false))
+            end
+        end
         if has_text then
             table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(10) })
             local drawer = note.drawer or "lighten"
@@ -5166,7 +5283,7 @@ function States.confirmDelete(note, on_delete)
 end
 
 -- Export done: a note at the bottom that closes itself; the list under it stays usable.
-function States.exported(count, path)
+function States.exported(count, path, bookmarks)
     local rel = path
     local ok, DataStorage = pcall(require, "datastorage")
     if ok then
@@ -5179,6 +5296,9 @@ function States.exported(count, path)
         local icon_s = Screen:scaleBySize(18)
         local gap = Screen:scaleBySize(8)
         local title = count == 1 and _("Exported 1 annotation") or string.format(_("Exported %d annotations"), count)
+        if bookmarks then
+            title = count == 1 and _("Exported 1 bookmark") or string.format(_("Exported %d bookmarks"), count)
+        end
         return VerticalGroup:new{ align = "left",
             HorizontalGroup:new{ align = "center",
                 IconWidget:new{ icon = "check", width = icon_s, height = icon_s },
@@ -5576,10 +5696,11 @@ function States.noMatch(list, width, height)
         States.title(filtered and _("Nothing matches") or _("Nothing here"), 18, col_w, true),
         VerticalSpan:new{ width = Screen:scaleBySize(12) },
     }
-    local hidden = #(list.notes_list or {})
-    local body = _("No annotations in this view.")
+    local hidden = list.tab_totals and list.tab_totals[list:tabKey()] or #(list.notes_list or {})
+    local bm_tab = list:tabKey() == "bookmarks"
+    local body = bm_tab and _("No bookmarks in this view.") or _("No annotations in this view.")
     if filtered then
-        body = _("No annotations fit these filters.") .. " "
+        body = (bm_tab and _("No bookmarks fit these filters.") or _("No annotations fit these filters.")) .. " "
             .. (hidden == 1 and _("1 is hidden.") or string.format(_("%d are hidden."), hidden))
     end
     table.insert(g, States.lines(body, Font:getFace("cfont", 13), col_w, COLORS.muted, false, true))
@@ -6634,7 +6755,7 @@ function ListPicker:build()
         table.insert(rows, TextWidget:new{ text = _("Nothing found."), face = face14, fgcolor = COLORS.muted })
     end
 
-    local footer = Page.footer(function() self:onClose() end, Page.countText(#(self.list.filtered_notes or {})),
+    local footer = Page.footer(function() self:onClose() end, Page.countText(#(self.list.filtered_notes or {}), self.list),
         function() self:onDone() end)
 
     local avail = H - top:getSize().h - footer:getSize().h
@@ -6824,7 +6945,8 @@ end
 local function updateListedNote(parent_widget, note, fn)
     for i, n in ipairs(parent_widget.notes_list) do
         if n == note or (n.book_path == note.book_path and itemMatchesNote(
-                { datetime = n.datetime, text = n.highlighted_text, pos0 = n.pos0, pos1 = n.pos1 }, note)) then
+                { datetime = n.datetime, text = n.highlighted_text, pos0 = n.pos0, pos1 = n.pos1,
+                  page = n.page, drawer = n.drawer }, note)) then
             fn(n, i)
             break
         end
@@ -6871,7 +6993,17 @@ function AllNotesViewer:deleteAnnotation(note, parent_widget)
     local ui = getLiveReader(note.book_path)
     if ui then
         local index = findLiveIndex(ui, note)
-        if index then
+        if index and note.bookmark then
+            local item = ui.annotation.annotations[index]
+            if ui.bookmark and ui.bookmark.removeItem then
+                -- KOReader's own path: also hides the dog-ear when it is the page on screen
+                ui.bookmark:removeItem(item, index)
+            else
+                table.remove(ui.annotation.annotations, index)
+                ui:handleEvent(Event:new("AnnotationsModified", { item, index_modified = -index }))
+            end
+            deleted = true
+        elseif index then
             if ui.highlight and ui.highlight.deleteHighlight then
                 -- KOReader's own path: removes the PDF annotation, updates statistics,
                 -- the "has annotations" flag and the footer
@@ -6939,7 +7071,7 @@ function AllNotesViewer:editNote(note, parent_widget, on_done)
         title = has_note and _("Edit note") or _("Add note"),
         description = description ~= "" and description or nil,
         input = note.user_note or "",
-        input_hint = _("Your note on this passage"),
+        input_hint = note.bookmark and _("Your note on this page") or _("Your note on this passage"),
         input_type = "text",
         text_height = Screen:scaleBySize(120),
         buttons = {
@@ -7000,32 +7132,54 @@ function AllNotesViewer:openBookAtNote(note)
         NotesListWidget.showDialog(InfoMessage:new{ text = _("Cannot find book path.") })
         return
     end
-    
+
     local ReaderUI = require("apps/reader/readerui")
-    
+
+    -- Jump the way KOReader's own bookmark list does: to the exact spot (xpointer or page)
+    -- with the highlight marked, after remembering where the reader was, so KOReader's Back
+    -- returns there. Older KOReader without these: go to the page number.
     local function gotoNote(ui)
         if not ui or not ui.document then return end
-        local target_page = note.page
-        if note.pos0 and ui.document.getPageFromXPointer then
-            local ok, page = pcall(function() return ui.document:getPageFromXPointer(note.pos0) end)
+        -- EPUB-like books need an xpointer here, PDFs a page number (very old sidecars kept a
+        -- page number for EPUBs too: those take the fallback below)
+        local fits = (ui.rolling and type(note.page) == "string")
+            or (ui.paging and tonumber(note.page) and tonumber(note.page) > 0)
+        if ui.bookmark and ui.bookmark.gotoBookmark and fits then
+            if ui.link and ui.link.addCurrentLocationToStack then ui.link:addCurrentLocationToStack() end
+            ui.bookmark:gotoBookmark(note.page, note.pos0)
+            return
+        end
+        local target_page = tonumber(note.page)
+        local xp = note.pos0 or (type(note.page) == "string" and note.page or nil)
+        if xp and ui.document.getPageFromXPointer then
+            local ok, page = pcall(function() return ui.document:getPageFromXPointer(xp) end)
             if ok and page then target_page = page end
         end
         if target_page and target_page > 0 then
-            ui:handleEvent(require("ui/event"):new("GotoPage", target_page))
+            ui:handleEvent(Event:new("GotoPage", target_page))
         end
     end
-    
+
     if ReaderUI.instance and ReaderUI.instance.document then
         if ReaderUI.instance.document.file == book_path then
             gotoNote(ReaderUI.instance)
             return
         end
     end
-    
-    ReaderUI:showReader(book_path)
+
+    -- KOReader 2026.03+ calls this once the book is open; older versions ignore the extra
+    -- argument, so the timer below is the fallback for them.
+    local done = false
+    local function after_open(ui)
+        if done then return end
+        done = true
+        gotoNote(ui)
+    end
+    ReaderUI:showReader(book_path, nil, nil, nil, after_open)
     UIManager:scheduleIn(1.5, function()
+        if done then return end
         local ui = require("apps/reader/readerui").instance
-        if ui then gotoNote(ui) end
+        if ui and ui.document and ui.document.file == book_path then after_open(ui) end
     end)
 end
 -- Internals exposed for tests/run.lua; KOReader doesn't use this.
@@ -7040,6 +7194,7 @@ AllNotesViewer._test = {
     itemMatchesNote = itemMatchesNote,
     notesToMarkdown = notesToMarkdown,
     NotesListWidget = NotesListWidget,
+    NoteItemWidget = NoteItemWidget,
 }
 
 return AllNotesViewer
