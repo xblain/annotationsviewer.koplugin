@@ -1998,10 +1998,6 @@ SortState.DIR_NAMES = {
     pos = { asc = _("Start of book first"), desc = _("End of book first") },
     chapter = { asc = _("From the start"), desc = _("From the end") },
 }
-SortState.CHOICES_BOOK = {
-    { "date:desc", _("Newest") }, { "date:asc", _("Oldest") },
-    { "pos:asc", _("Position") }, { "pos:desc", _("Reverse position") },
-}
 SortState.QUICK_BOOK = {
     { _("Newest"), "date:desc" }, { _("Oldest"), "date:asc" },
     { _("Position"), "pos:asc" }, { _("Reverse position"), "pos:desc" },
@@ -5381,6 +5377,119 @@ end
 -- Sort order as a dropdown card under the sort label: up to three levels (sort by, then by, then by).
 -- Each level is a row of chips for the keys that still make sense plus a two-part bar for the
 -- direction, and a sentence at the bottom says in words what the order is.
+-- Sort chips as wide as their text; each row is filled to the edge by sharing out what is left.
+-- items = { { label, on, callback } }; the chosen one gets a thick black outline.
+function States.sortChips(g, side, inner, items)
+    local thin, thick = Size.border.button, Size.border.thick
+    local gap = Screen:scaleBySize(8)
+    local chip_h = Screen:scaleBySize(36)
+    local face = Font:getFace("cfont", 13)
+        local widths = {}
+    for i, it in ipairs(items) do
+        widths[i] = TextWidget:new{ text = it.label, face = face, bold = true }:getSize().w + Screen:scaleBySize(26)
+    end
+    local rows, row, row_w = {}, {}, 0
+    for i in ipairs(items) do
+        if #row > 0 and row_w + gap + widths[i] > inner then
+            rows[#rows + 1] = row; row, row_w = {}, 0
+        end
+        row_w = row_w + (#row > 0 and gap or 0) + widths[i]
+        row[#row + 1] = i
+    end
+    if #row > 0 then rows[#rows + 1] = row end
+    for _, r in ipairs(rows) do
+        local used = (#r - 1) * gap
+        for _, i in ipairs(r) do used = used + widths[i] end
+        local extra, rg = inner - used, HorizontalGroup:new{ HorizontalSpan:new{ width = side } }
+        for k, i in ipairs(r) do
+            local it = items[i]
+            local cw = widths[i] + math.floor(extra / #r) + (k == #r and extra % #r or 0)
+            local color = BlitBuffer.COLOR_BLACK
+            if k > 1 then table.insert(rg, HorizontalSpan:new{ width = gap }) end
+            table.insert(rg, TapBox:new{
+                Pill:new{ width = cw, height = chip_h, fill = BlitBuffer.COLOR_WHITE,
+                    border = it.on and thick or thin, border_color = it.on and COLORS.ink or COLORS.line,
+                    TextWidget:new{ text = it.label, face = face, bold = it.on, fgcolor = color,
+                        max_width = cw - Screen:scaleBySize(8) } },
+                callback = it.callback })
+        end
+        table.insert(g, rg)
+        table.insert(g, VerticalSpan:new{ width = gap })
+    end
+end
+
+-- The Sort by / Then by / And then by rows: per level a row of key chips (as wide as their text,
+-- each row filled to the edge; the chosen one has a thick black outline) and a two-part direction
+-- bar. Used by the sort card and by the Filter & sort page. Appends to group g.
+-- o = { width, side, single, levels, apply = function(new_levels), heading = function(text) }
+function States.sortLevels(g, o)
+    local side, inner, single, levels = o.side, o.width, o.single, o.levels
+    local thin = Size.border.button
+    local bar_h = Screen:scaleBySize(38)
+    local face = Font:getFace("cfont", 13)
+    local heading = o.heading
+    local function chipRows(items) States.sortChips(g, side, inner, items) end
+    -- two joined halves in one outline, the chosen one black
+    local function directionBar(lv, on_flip)
+        local cell_h = bar_h
+        local cell_w = math.floor((inner - thin * 2 - thin) / 2)
+        local cells = {}
+        for _, dir in ipairs({ "asc", "desc" }) do
+            local on = lv.dir == dir
+            if lv.key == "date" or lv.key == "opened" then dir = dir == "asc" and "desc" or "asc"; on = lv.dir == dir end
+            table.insert(cells, TapBox:new{
+                FrameContainer:new{ bordersize = 0, padding = 0, margin = 0,
+                    background = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
+                    CenterContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
+                        TextWidget:new{ text = SortState.dirName(lv.key, dir, single), face = face, bold = on,
+                            max_width = cell_w - Screen:scaleBySize(8),
+                            fgcolor = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK } } },
+                callback = function() if not on then on_flip() end end })
+        end
+        local seg = HorizontalGroup:new{}
+        for i, c in ipairs(cells) do
+            if i > 1 then table.insert(seg, LineWidget:new{ dimen = Geom:new{ w = thin, h = cell_h }, background = BlitBuffer.COLOR_BLACK }) end
+            table.insert(seg, c)
+        end
+        table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
+            RoundedOutline:new{ radius = Screen:scaleBySize(8), border = thin, seg } })
+    end
+    local titles = { _("Sort by"), _("Then by"), _("And then by") }
+    for n = 1, 3 do
+        local prev = levels[n - 1]
+        local allowed = SortState.allowedAfter(prev, single)
+        if (n == 1 or prev) and #allowed > 0 then
+            heading(titles[n])
+            local lv = levels[n]
+            local function upto(k)
+                local c = {}
+                for x = 1, k do c[x] = levels[x] end
+                return c
+            end
+            local keys = {}
+            if n > 1 then keys[1] = { label = _("None"), on = lv == nil, callback = function() if lv then o.apply(upto(n - 1)) end end } end
+            for _, k in ipairs(allowed) do
+                keys[#keys + 1] = { label = SortState.keyName(k, single), on = lv ~= nil and lv.key == k,
+                    callback = function()
+                        if lv and lv.key == k then return end
+                        local c = upto(n - 1)
+                        c[n] = { key = k, dir = (k == "date" or k == "opened") and "desc" or "asc" }
+                        for x = n + 1, #levels do c[x] = levels[x] end
+                        o.apply(c)
+                    end }
+            end
+            chipRows(keys)
+            if lv then
+                directionBar(lv, function()
+                    local c = upto(#levels)
+                    c[n] = { key = lv.key, dir = lv.dir == "asc" and "desc" or "asc" }
+                    o.apply(c)
+                end)
+            end
+        end
+    end
+end
+
 function States.sortMenu(list, on_done)
     local W = Screen:getWidth()
     local single = list.single_book
@@ -5416,76 +5525,11 @@ function States.sortMenu(list, on_done)
             local side = Screen:scaleBySize(16)
             local inner = w - side * 2
             local thin = Size.border.button
-            local thick = Size.border.thick -- same as the chosen colour in the annotation sheet
-            local gap = Screen:scaleBySize(8)
-            local chip_h = Screen:scaleBySize(36)
-            local bar_h = Screen:scaleBySize(38)
-            local face = Font:getFace("cfont", 13)
             local function heading(text)
                 table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(10) })
                 table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
                     TextWidget:new{ text = text:upper(), face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted } })
                 table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(4) })
-            end
-            -- chips as wide as their text; each row is filled to the edge by sharing out what is left
-            local function chipRows(items)
-                local widths = {}
-                for i, it in ipairs(items) do
-                    widths[i] = TextWidget:new{ text = it.label, face = face, bold = true }:getSize().w + Screen:scaleBySize(26)
-                end
-                local rows, row, row_w = {}, {}, 0
-                for i in ipairs(items) do
-                    if #row > 0 and row_w + gap + widths[i] > inner then
-                        rows[#rows + 1] = row; row, row_w = {}, 0
-                    end
-                    row_w = row_w + (#row > 0 and gap or 0) + widths[i]
-                    row[#row + 1] = i
-                end
-                if #row > 0 then rows[#rows + 1] = row end
-                for _, r in ipairs(rows) do
-                    local used = (#r - 1) * gap
-                    for _, i in ipairs(r) do used = used + widths[i] end
-                    local extra, rg = inner - used, HorizontalGroup:new{ HorizontalSpan:new{ width = side } }
-                    for k, i in ipairs(r) do
-                        local it = items[i]
-                        local cw = widths[i] + math.floor(extra / #r) + (k == #r and extra % #r or 0)
-                        local color = BlitBuffer.COLOR_BLACK
-                        if k > 1 then table.insert(rg, HorizontalSpan:new{ width = gap }) end
-                        table.insert(rg, TapBox:new{
-                            Pill:new{ width = cw, height = chip_h, fill = BlitBuffer.COLOR_WHITE,
-                                border = it.on and thick or thin, border_color = it.on and COLORS.ink or COLORS.line,
-                                TextWidget:new{ text = it.label, face = face, bold = it.on, fgcolor = color,
-                                    max_width = cw - Screen:scaleBySize(8) } },
-                            callback = it.callback })
-                    end
-                    table.insert(g, rg)
-                    table.insert(g, VerticalSpan:new{ width = gap })
-                end
-            end
-            -- two joined halves in one outline, the chosen one black
-            local function directionBar(lv, on_flip)
-                local cell_h = bar_h
-                local cell_w = math.floor((inner - thin * 2 - thin) / 2)
-                local cells = {}
-                for _, dir in ipairs({ "asc", "desc" }) do
-                    local on = lv.dir == dir
-                    if lv.key == "date" or lv.key == "opened" then dir = dir == "asc" and "desc" or "asc"; on = lv.dir == dir end
-                    table.insert(cells, TapBox:new{
-                        FrameContainer:new{ bordersize = 0, padding = 0, margin = 0,
-                            background = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
-                            CenterContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
-                                TextWidget:new{ text = SortState.dirName(lv.key, dir, single), face = face, bold = on,
-                                    max_width = cell_w - Screen:scaleBySize(8),
-                                    fgcolor = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK } } },
-                        callback = function() if not on then on_flip() end end })
-                end
-                local seg = HorizontalGroup:new{}
-                for i, c in ipairs(cells) do
-                    if i > 1 then table.insert(seg, LineWidget:new{ dimen = Geom:new{ w = thin, h = cell_h }, background = BlitBuffer.COLOR_BLACK }) end
-                    table.insert(seg, c)
-                end
-                table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
-                    RoundedOutline:new{ radius = Screen:scaleBySize(8), border = thin, seg } })
             end
             local encoded = SortState.encode(levels)
             if tier < 1 then
@@ -5495,47 +5539,15 @@ function States.sortMenu(list, on_done)
                     items[#items + 1] = { label = q[1], on = SortState.encode(SortState.parse(q[2])) == encoded,
                         callback = function() apply(SortState.parse(q[2]), card) end }
                 end
-                chipRows(items)
+                States.sortChips(g, side, inner, items)
                 -- a line between the usual orders and building your own
                 table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(4) })
                 table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
                     LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.medium }, background = COLORS.line } })
                 table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(2) })
             end
-            local titles = { _("Sort by"), _("Then by"), _("And then by") }
-            for n = 1, 3 do
-                local prev = levels[n - 1]
-                local allowed = SortState.allowedAfter(prev, single)
-                if (n == 1 or prev) and #allowed > 0 then
-                    heading(titles[n])
-                    local lv = levels[n]
-                    local function upto(k)
-                        local c = {}
-                        for x = 1, k do c[x] = levels[x] end
-                        return c
-                    end
-                    local keys = {}
-                    if n > 1 then keys[1] = { label = _("None"), on = lv == nil, callback = function() if lv then apply(upto(n - 1), card) end end } end
-                    for _, k in ipairs(allowed) do
-                        keys[#keys + 1] = { label = SortState.keyName(k, single), on = lv ~= nil and lv.key == k,
-                            callback = function()
-                                if lv and lv.key == k then return end
-                                local c = upto(n - 1)
-                                c[n] = { key = k, dir = (k == "date" or k == "opened") and "desc" or "asc" }
-                                for x = n + 1, #levels do c[x] = levels[x] end
-                                apply(c, card)
-                            end }
-                    end
-                    chipRows(keys)
-                    if lv then
-                        directionBar(lv, function()
-                            local c = upto(#levels)
-                            c[n] = { key = lv.key, dir = lv.dir == "asc" and "desc" or "asc" }
-                            apply(c, card)
-                        end)
-                    end
-                end
-            end
+            States.sortLevels(g, { width = inner, side = side, single = single, levels = levels,
+                heading = heading, apply = function(c) apply(c, card) end })
             if tier < 2 then
                 table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(12) })
                 table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
@@ -5719,11 +5731,6 @@ local function deepCopy(t)
     for k, v in pairs(t) do c[k] = deepCopy(v) end
     return c
 end
-local SORT_CHOICES = {
-    { "date_newest", _("Newest") }, { "date_oldest", _("Oldest") },
-    { "book_asc", _("Book A–Z") }, { "author_asc", _("Author A–Z") },
-    { "book_location_asc", _("Position in book") },
-}
 local FilterScreen = InputContainer:extend{ list = nil, helpers = nil, covers_fullscreen = true }
 Page.watchResize(FilterScreen)
 Page.forwardGestures(FilterScreen)
@@ -5961,26 +5968,14 @@ function FilterScreen:build()
         }, Screen:scaleBySize(14), Screen:scaleBySize(14)))
     end
 
-    -- sort
+    -- sort: one row, drawn like the Books and Tags rows; the value is the same label the list shows
+    -- next to the tabs ("Titles A–Z › Start to end"). A tap opens the Sort page (SortPicker), where
+    -- Then by / And then by are set. The quick picks stay on the sort card in the tab row.
     table.insert(body, sectionBar(_("SORT")))
     do
         local single = list.single_book
-        local cur = SortState.normView(SortState.get(single), single)
-        local items, known = {}, false
-        local function apply(mode)
-            SortState.set(list.single_book, mode)
-            list:applySort()
-            self:changed()
-        end
-        for _i, sc in ipairs(single and SortState.CHOICES_BOOK or SORT_CHOICES) do
-            local is_cur = SortState.normView(sc[1], single) == cur
-            if is_cur then known = true end
-            table.insert(items, chip(sc[2], is_cur, function() if not is_cur then apply(sc[1]) end end, { h = Screen:scaleBySize(36) }))
-        end
-        -- all other orders (by author/file name, reversed, …) stay in the full sort list
-        table.insert(items, chip(known and _("More…") or sortModeLabel(cur, single), not known,
-            function() list:showSortMenu(false, function() self:rebuild() end) end, { h = Screen:scaleBySize(36) }))
-        table.insert(body, padded(flow(items), Screen:scaleBySize(14), Screen:scaleBySize(14)))
+        table.insert(body, navRow(_("Sort by"), sortModeLabel(SortState.get(single), single), true,
+            function() list:showSortPicker(function() self:rebuild() end) end))
     end
 
     -- saved filters: the current filters and sort order under a name, one tap to bring them back
@@ -6770,6 +6765,146 @@ function ListPicker:onClose()
     UIManager:close(self, "flashui")
     if self.on_done then self.on_done() end
     return true
+end
+
+-- Sort page, opened from the Sort rows on Filter & sort: built like the Books / Tags pickers
+-- (same header, footer and paging). Per level a section with the keys as rows (✓ on the chosen
+-- one, as in the font list) and, once a key is chosen, a two-part direction switch like the
+-- pickers' Only / Hide switch. Then by / And then by appear when the level before allows them.
+-- Changes show straight away; Cancel / ‹ / ✕ put the old order back.
+local SortPicker = InputContainer:extend{ list = nil, on_done = nil, covers_fullscreen = true }
+Page.watchResize(SortPicker)
+Page.forwardGestures(SortPicker)
+function SortPicker:init()
+    self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
+    self.saved_sort = SortState.get(self.list.single_book)
+    if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
+    self:build()
+end
+function SortPicker:changed()
+    self.list:applySort()
+    self.list:applyFilter()
+    local offset = self.scroller and self.scroller:getScrolledOffset()
+    self:build()
+    if offset and self.scroller then self.scroller:setScrolledOffset(offset) end
+    UIManager:setDirty(self, "ui")
+end
+function SortPicker:build()
+    local W, H = Screen:getWidth(), Screen:getHeight()
+    local P = Screen:scaleBySize(24)
+    local inner = W - P * 2 - (self.narrow and Page.SCROLL_EXTRA or 0)
+    local thin = Size.border.button
+    local face14, face15 = Font:getFace("cfont", 14), Font:getFace("cfont", 15)
+    local single = self.list.single_book
+    local levels = SortState.view(SortState.get(single), single)
+    local function apply(c)
+        SortState.set(single, SortState.encode(SortState.revalidate(c, single)))
+        self:changed()
+    end
+    local function upto(k)
+        local c = {}
+        for x = 1, k do c[x] = levels[x] end
+        return c
+    end
+    local rows = VerticalGroup:new{ align = "left" }
+    local function rowLine()
+        table.insert(rows, LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light })
+    end
+    local first = true
+    local function heading(text)
+        local bar = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = Screen:scaleBySize(first and 10 or 20) },
+            TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted },
+            VerticalSpan:new{ width = Screen:scaleBySize(6) },
+            LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.medium }, background = COLORS.ink } }
+        bar.keep_with_next = true
+        first = false
+        table.insert(rows, bar)
+    end
+    local function choice(label, on, callback)
+        local d = Geom:new{ w = inner, h = Screen:scaleBySize(46) }
+        local mark = on and TextWidget:new{ text = "✓", face = Font:getFace("cfont", 17), bold = true } or nil
+        table.insert(rows, TapBox:new{ OverlapGroup:new{ dimen = d, allow_mirroring = false,
+                LeftContainer:new{ dimen = d, TextWidget:new{ text = label, face = face15, bold = on, max_width = inner - Screen:scaleBySize(40) } },
+                mark and RightContainer:new{ dimen = d, mark } or nil },
+            callback = function() if not on then callback() end end })
+        rowLine()
+    end
+    local function directionSwitch(lv, n)
+        local cell_h = Screen:scaleBySize(40)
+        local cell_w = math.floor((inner - thin * 3) / 2)
+        local seg = HorizontalGroup:new{}
+        for i, dir in ipairs({ "asc", "desc" }) do
+            if lv.key == "date" or lv.key == "opened" then dir = (dir == "asc") and "desc" or "asc" end
+            local on = lv.dir == dir
+            if i > 1 then table.insert(seg, LineWidget:new{ dimen = Geom:new{ w = thin, h = cell_h }, background = COLORS.ink }) end
+            table.insert(seg, TapBox:new{
+                FrameContainer:new{ bordersize = 0, padding = 0, margin = 0, background = on and COLORS.ink or BlitBuffer.COLOR_WHITE,
+                    CenterContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
+                        TextWidget:new{ text = SortState.dirName(lv.key, dir, single), face = face14, bold = on,
+                            max_width = cell_w - Screen:scaleBySize(8), fgcolor = on and BlitBuffer.COLOR_WHITE or COLORS.ink } } },
+                callback = function()
+                    if on then return end
+                    local c = upto(#levels)
+                    c[n] = { key = lv.key, dir = dir }
+                    apply(c)
+                end })
+        end
+        local sw = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = Screen:scaleBySize(12) },
+            RoundedOutline:new{ radius = Screen:scaleBySize(8), border = thin, seg }, VerticalSpan:new{ width = Screen:scaleBySize(4) } }
+        table.insert(rows, sw)
+    end
+    local titles = { _("SORT BY"), _("THEN BY"), _("AND THEN BY") }
+    for n = 1, 3 do
+        local prev = levels[n - 1]
+        local allowed = SortState.allowedAfter(prev, single)
+        if (n == 1 or prev) and #allowed > 0 then
+            local lv = levels[n]
+            heading(titles[n])
+            if lv then directionSwitch(lv, n) end
+            if n > 1 then choice(_("None"), lv == nil, function() apply(upto(n - 1)) end) end
+            for _, k in ipairs(allowed) do
+                choice(SortState.keyName(k, single), lv ~= nil and lv.key == k, function()
+                    local c = upto(n - 1)
+                    c[n] = { key = k, dir = (k == "date" or k == "opened") and "desc" or "asc" }
+                    for x = n + 1, #levels do c[x] = levels[x] end
+                    apply(c)
+                end)
+            end
+        end
+    end
+
+    local header = Page.header(self, _("Sort"), function() self:onClose() end, nil, false, function()
+        self:onClose()
+        if self.list.filter_screen then self.list.filter_screen:onClose() end
+    end)
+    local footer = Page.footer(function() self:onClose() end, Page.countText(#(self.list.filtered_notes or {}), self.list),
+        function() self:onDone() end)
+    local avail = H - header:getSize().h - footer:getSize().h
+    local body = Page.paged(self, W, avail, rows, { left = P })
+    self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0, background = BlitBuffer.COLOR_WHITE,
+        OverlapGroup:new{ dimen = Geom:new{ w = W, h = H }, allow_mirroring = false,
+            VerticalGroup:new{ align = "left", header, body },
+            BottomContainer:new{ dimen = Geom:new{ w = W, h = H }, footer } } }
+end
+function SortPicker:onDone()
+    UIManager:close(self, "flashui")
+    self.list.current_page = 1
+    self.list:refresh()
+    if self.on_done then self.on_done() end
+    return true
+end
+function SortPicker:onClose()
+    if SortState.get(self.list.single_book) ~= self.saved_sort then
+        SortState.set(self.list.single_book, self.saved_sort)
+        self.list:applySort()
+    end
+    self.list:applyFilter()
+    UIManager:close(self, "flashui")
+    if self.on_done then self.on_done() end
+    return true
+end
+function NotesListWidget:showSortPicker(on_done)
+    UIManager:show(SortPicker:new{ list = self, on_done = on_done })
 end
 
 -- The pickers count what the open tab is about: bookmarks on the Bookmarks tab, annotations
