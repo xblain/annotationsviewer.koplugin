@@ -6873,10 +6873,10 @@ function ListPicker:onClose()
     return true
 end
 
--- Sort page, opened from the Sort rows on Filter & sort: built like the Books / Tags pickers
--- (same header, footer and paging). Per level a section with the keys as rows (✓ on the chosen
--- one, as in the font list) and, once a key is chosen, a two-part direction switch like the
--- pickers' Only / Hide switch. Then by / And then by appear when the level before allows them.
+-- Sort page, opened from the Sort row on Filter & sort: the page frame of the Books / Tags pickers
+-- (same header, footer and paging) around the sort card's levels: per level a row of key chips and
+-- a two-part direction bar, and the order in words underneath. Then by / And then by appear when
+-- the level before allows them.
 -- Changes show straight away; Cancel / ‹ / ✕ put the old order back.
 local SortPicker = InputContainer:extend{ list = nil, on_done = nil, covers_fullscreen = true }
 Page.watchResize(SortPicker)
@@ -6900,84 +6900,27 @@ function SortPicker:build()
     local P = Screen:scaleBySize(24)
     local inner = W - P * 2 - (self.narrow and Page.SCROLL_EXTRA or 0)
     local thin = Size.border.button
-    local face14, face15 = Font:getFace("cfont", 14), Font:getFace("cfont", 15)
+    local face14 = Font:getFace("cfont", 14)
     local single = self.list.single_book
     local levels = SortState.view(SortState.get(single), single)
     local function apply(c)
         SortState.set(single, SortState.encode(SortState.revalidate(c, single)))
         self:changed()
     end
-    local function upto(k)
-        local c = {}
-        for x = 1, k do c[x] = levels[x] end
-        return c
-    end
+    -- the same chip rows and direction bars as the sort card, then the order in a sentence
     local rows = VerticalGroup:new{ align = "left" }
-    local function rowLine()
-        table.insert(rows, LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light })
-    end
-    local first = true
     local function heading(text)
-        local bar = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = Screen:scaleBySize(first and 10 or 20) },
-            TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted },
-            VerticalSpan:new{ width = Screen:scaleBySize(6) },
-            LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.medium }, background = COLORS.ink } }
-        bar.keep_with_next = true
-        first = false
-        table.insert(rows, bar)
+        table.insert(rows, VerticalSpan:new{ width = Screen:scaleBySize(14) })
+        table.insert(rows, TextWidget:new{ text = text:upper(), face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted })
+        table.insert(rows, VerticalSpan:new{ width = Screen:scaleBySize(6) })
     end
-    local function choice(label, on, callback)
-        local d = Geom:new{ w = inner, h = Screen:scaleBySize(46) }
-        local mark = on and TextWidget:new{ text = "✓", face = Font:getFace("cfont", 17), bold = true } or nil
-        table.insert(rows, TapBox:new{ OverlapGroup:new{ dimen = d, allow_mirroring = false,
-                LeftContainer:new{ dimen = d, TextWidget:new{ text = label, face = face15, bold = on, max_width = inner - Screen:scaleBySize(40) } },
-                mark and RightContainer:new{ dimen = d, mark } or nil },
-            callback = function() if not on then callback() end end })
-        rowLine()
-    end
-    local function directionSwitch(lv, n)
-        local cell_h = Screen:scaleBySize(40)
-        local cell_w = math.floor((inner - thin * 3) / 2)
-        local seg = HorizontalGroup:new{}
-        for i, dir in ipairs({ "asc", "desc" }) do
-            if lv.key == "date" or lv.key == "opened" then dir = (dir == "asc") and "desc" or "asc" end
-            local on = lv.dir == dir
-            if i > 1 then table.insert(seg, LineWidget:new{ dimen = Geom:new{ w = thin, h = cell_h }, background = COLORS.ink }) end
-            table.insert(seg, TapBox:new{
-                FrameContainer:new{ bordersize = 0, padding = 0, margin = 0, background = on and COLORS.ink or BlitBuffer.COLOR_WHITE,
-                    CenterContainer:new{ dimen = Geom:new{ w = cell_w, h = cell_h },
-                        TextWidget:new{ text = SortState.dirName(lv.key, dir, single), face = face14, bold = on,
-                            max_width = cell_w - Screen:scaleBySize(8), fgcolor = on and BlitBuffer.COLOR_WHITE or COLORS.ink } } },
-                callback = function()
-                    if on then return end
-                    local c = upto(#levels)
-                    c[n] = { key = lv.key, dir = dir }
-                    apply(c)
-                end })
-        end
-        local sw = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = Screen:scaleBySize(12) },
-            RoundedOutline:new{ radius = Screen:scaleBySize(8), border = thin, seg }, VerticalSpan:new{ width = Screen:scaleBySize(4) } }
-        table.insert(rows, sw)
-    end
-    local titles = { _("SORT BY"), _("THEN BY"), _("AND THEN BY") }
-    for n = 1, 3 do
-        local prev = levels[n - 1]
-        local allowed = SortState.allowedAfter(prev, single)
-        if (n == 1 or prev) and #allowed > 0 then
-            local lv = levels[n]
-            heading(titles[n])
-            if lv then directionSwitch(lv, n) end
-            if n > 1 then choice(_("None"), lv == nil, function() apply(upto(n - 1)) end) end
-            for _, k in ipairs(allowed) do
-                choice(SortState.keyName(k, single), lv ~= nil and lv.key == k, function()
-                    local c = upto(n - 1)
-                    c[n] = { key = k, dir = (k == "date" or k == "opened") and "desc" or "asc" }
-                    for x = n + 1, #levels do c[x] = levels[x] end
-                    apply(c)
-                end)
-            end
-        end
-    end
+    NotesListWidget.States.sortLevels(rows, { width = inner, side = 0, single = single, levels = levels,
+        heading = heading, apply = apply })
+    table.insert(rows, VerticalSpan:new{ width = Screen:scaleBySize(16) })
+    table.insert(rows, FrameContainer:new{ bordersize = thin, color = COLORS.line, radius = Screen:scaleBySize(8),
+        padding = Screen:scaleBySize(10), margin = 0,
+        TextBoxWidget:new{ text = SortState.describe(levels, single), face = face14,
+            width = inner - Screen:scaleBySize(20) - thin * 2 } })
 
     local header = Page.header(self, _("Sort"), function() self:onClose() end, nil, false, function()
         self:onClose()
