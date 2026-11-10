@@ -315,16 +315,19 @@ end
 -- never had its own order set starts in reading order (first highlight in the book first).
 -- The Bookmarks tab has an order of its own too (bm_tab: the list is on that tab); until one is
 -- set it follows the annotations' order.
-function SortState.get(single)
-    if SortState.bm_tab then
+function SortState.get(single) return SortState.getFor(single, SortState.bm_tab) end
+function SortState.set(single, mode) SortState.setFor(single, SortState.bm_tab, mode) end
+-- bm: the order of the Bookmarks tab (else of the annotation tabs)
+function SortState.getFor(single, bm)
+    if bm then
         local own = getSetting(single and "sort_mode_book_bm" or "sort_mode_bm", nil)
         if own then return own end
     end
     if single then return getSetting("sort_mode_book", nil) or "book:asc,pos:asc" end
     return getSetting("sort_mode", "date_newest")
 end
-function SortState.set(single, mode)
-    setSetting((single and "sort_mode_book" or "sort_mode") .. (SortState.bm_tab and "_bm" or ""), mode)
+function SortState.setFor(single, bm, mode)
+    setSetting((single and "sort_mode_book" or "sort_mode") .. (bm and "_bm" or ""), mode)
 end
 function SortState.encode(levels)
     local parts = {}
@@ -3484,68 +3487,145 @@ end
 local AllNotesViewer = WidgetContainer:extend{ name = "allnotesviewer", is_doc_only = false }
 AllNotesViewer.is_doc_only = false
 function AllNotesViewer:init()
-    local Dispatcher = require("dispatcher")
-    Dispatcher:registerAction("show_all_annotations", {
-        category = "none",
-        event = "ShowAllAnnotations",
-        title = _("Show all annotations"),
-        filemanager = true,
-    })
-    Dispatcher:registerAction("show_current_book_annotations", {
-        category = "none",
-        event = "ShowCurrentBookAnnotations",
-        title = _("Show current book annotations"),
-        reader = true,
-    })
-    -- the same lists, opened on the Bookmarks tab
-    Dispatcher:registerAction("show_all_bookmarks", {
-        category = "none",
-        event = "ShowAllBookmarksList",
-        title = _("Show all bookmarks"),
-        filemanager = true,
-    })
-    Dispatcher:registerAction("show_current_book_bookmarks", {
-        category = "none",
-        event = "ShowCurrentBookBookmarksList",
-        title = _("Show current book bookmarks"),
-        reader = true,
-    })
-    if not self.ui.document then
-        self.ui.menu:registerToMainMenu(self)
-    else
-        self.ui.menu:registerToMainMenu(self)
-        self:takeOverBookmarkList()
-    end
+    AllNotesViewer.registerGestures()
+    AllNotesViewer._current = self -- the open file browser's or book's plugin (used by the long-press button)
+    AllNotesViewer.addFileDialogButton()
+    self.ui.menu:registerToMainMenu(self)
 end
--- Setting "Bookmarks in a book" (Settings → KOReader): KOReader's own Bookmarks list (its gesture,
--- menu entry and key) opens this book's list here instead, on the All or the Bookmarks tab. Off by
--- default. The book's ReaderBookmark gets a wrapper that looks at the setting each time, so turning
--- it off works straight away.
-function AllNotesViewer:takeOverBookmarkList()
-    local bm = self.ui and self.ui.bookmark
-    if not bm or bm._av_show_bookmark or type(bm.onShowBookmark) ~= "function" then return end
-    bm._av_show_bookmark = bm.onShowBookmark
-    local viewer = self
-    bm.onShowBookmark = function(this, ...)
-        local mode = getSetting("take_over_bookmarks", "off")
-        if mode == "all" or mode == "bookmarks" then
-            viewer:showCurrentBookNotes(mode == "bookmarks" and "bookmarks" or nil)
-            return true
+-- The plugin's gestures (Settings → Taps and gestures → Gesture manager), the same in the file
+-- browser and in a book: "Annotations" opens this book's list in a book and all books in the file
+-- browser; "Annotations: Bookmarks" does the same on the Bookmarks tab. Older versions had a
+-- separate in-book action; it stays only for those who still have it on a gesture, so that gesture
+-- keeps working.
+AllNotesViewer.GESTURES = {
+    { id = "show_all_annotations", event = "ShowAnnotationsHere", title = _("Annotations") },
+    { id = "show_all_bookmarks", event = "ShowBookmarksHere", title = _("Annotations: Bookmarks") },
+}
+function AllNotesViewer.legacyGestureUsed()
+    if AllNotesViewer._legacy_used == nil then
+        AllNotesViewer._legacy_used = false
+        local ok, DataStorage = pcall(require, "datastorage")
+        if ok and type(DataStorage) == "table" and type(DataStorage.getSettingsDir) == "function" then
+            for _, name in ipairs({ "gestures.lua", "profiles.lua" }) do
+                local f = io.open(DataStorage:getSettingsDir() .. "/" .. name, "r")
+                if f then
+                    local text = f:read("*a") or ""
+                    f:close()
+                    if text:find("show_current_book_annotations", 1, true) then AllNotesViewer._legacy_used = true end
+                end
+            end
         end
-        return this._av_show_bookmark(this, ...)
+    end
+    return AllNotesViewer._legacy_used
+end
+function AllNotesViewer.registerGestures()
+    local Dispatcher = require("dispatcher")
+    for n = 1, #AllNotesViewer.GESTURES do
+        local g = AllNotesViewer.GESTURES[n]
+        Dispatcher:registerAction(g.id, { category = "none", event = g.event, title = g.title,
+            filemanager = true, reader = true })
+    end
+    if AllNotesViewer.legacyGestureUsed() then
+        Dispatcher:registerAction("show_current_book_annotations", { category = "none",
+            event = "ShowAnnotationsHere", title = _("Annotations (this book, old)"), reader = true })
     end
 end
-function AllNotesViewer:onShowAllAnnotations()
-    self:showAllNotes()
+function AllNotesViewer:onShowAnnotationsHere()
+    if self.ui and self.ui.document then self:showCurrentBookNotes() else self:showAllNotes() end
+    return true
 end
-function AllNotesViewer:onShowCurrentBookAnnotations()
-    self:showCurrentBookNotes()
+function AllNotesViewer:onShowBookmarksHere()
+    if self.ui and self.ui.document then self:showCurrentBookNotes("bookmarks") else self:showAllNotes("bookmarks") end
+    return true
 end
-function AllNotesViewer:onShowAllBookmarksList()
-    self:showAllNotes("bookmarks")
+-- "Annotations" in a book's long-press menu (file browser, History, collections, search): opens
+-- that book's list (on the Bookmarks tab when the book has only bookmarks). Only shown for a book
+-- with annotations or bookmarks. Added once to KOReader's file dialogs; uses the plugin of the
+-- open file browser or book.
+function AllNotesViewer.addFileDialogButton()
+    if AllNotesViewer._fd_added then return end
+    local classes = {}
+    for _, m in ipairs({ "apps/filemanager/filemanager", "apps/filemanager/filemanagerhistory",
+            "apps/filemanager/filemanagercollection", "apps/filemanager/filemanagerfilesearcher" }) do
+        local ok, c = pcall(require, m)
+        if ok and type(c) == "table" then table.insert(classes, c) end
+    end
+    local FM = classes[1]
+    if not FM or type(FM.addFileDialogButtons) ~= "function" then return end
+    AllNotesViewer._fd_added = true
+    local okr, DocumentRegistry = pcall(require, "document/documentregistry")
+    local function row(file, is_file)
+        if not is_file or (okr and type(DocumentRegistry.hasProvider) == "function" and not DocumentRegistry:hasProvider(file)) then
+            return nil
+        end
+        local viewer = AllNotesViewer._current
+        if viewer and not viewer:bookHasAnnotations(file) then return nil end
+        return { { text = _("Annotations"), callback = function()
+            for _, c in ipairs(classes) do
+                local ok, menu = pcall(c.getMenuInstance)
+                if ok and type(menu) == "table" and menu.file_dialog then UIManager:close(menu.file_dialog); menu.file_dialog = nil end
+            end
+            local v = AllNotesViewer._current
+            if v then v:showBookFile(file) end
+        end } }
+    end
+    for _, c in ipairs(classes) do FM.addFileDialogButtons(c, "annotationsviewer", row) end
+    AllNotesViewer.takeOverBookmarksButton()
 end
-function AllNotesViewer:onShowCurrentBookBookmarksList()
-    self:showCurrentBookNotes("bookmarks")
+-- Whether a book has any annotations or bookmarks (the book open in the reader: its live ones).
+function AllNotesViewer:bookHasAnnotations(path)
+    local ReaderUI = require("apps/reader/readerui")
+    local open = ReaderUI and ReaderUI.instance
+    if open and open.document and open.document.file == path and open.annotation and open.annotation.annotations then
+        return #open.annotation.annotations > 0
+    end
+    local ok, list = pcall(self.loadBookAnnotations, self, path)
+    return ok and type(list) == "table" and #list > 0
+end
+-- Opt-in switch (Settings → LONG-PRESS MENU, off by default): KOReader's own "Bookmarks" button in a
+-- book's long-press menu (KOReader 2026.03 and later) opens that book's Bookmarks tab here instead
+-- of KOReader's Bookmark browser. Only that button, and only for one book; looked at on each tap.
+function AllNotesViewer.bookmarksButtonAvailable()
+    local ok, coll = pcall(require, "apps/filemanager/filemanagercollection")
+    return ok and type(coll) == "table" and type(coll.genBookmarkBrowserButton) == "function"
+end
+function AllNotesViewer.takeOverBookmarksButton()
+    local ok, coll = pcall(require, "apps/filemanager/filemanagercollection")
+    if not ok or type(coll) ~= "table" or type(coll.genBookmarkBrowserButton) ~= "function" or coll._av_gen_button then return end
+    coll._av_gen_button = coll.genBookmarkBrowserButton
+    coll.genBookmarkBrowserButton = function(this, files, caller_pre_callback, ...)
+        local button = this._av_gen_button(this, files, caller_pre_callback, ...)
+        local only
+        for path in pairs(type(files) == "table" and files or {}) do
+            if only then only = nil; break end
+            only = path
+        end
+        if type(button) == "table" and only then
+            local orig = button.callback
+            button.callback = function(...)
+                local viewer = AllNotesViewer._current
+                if viewer and getSetting("take_over_bm_button", false) == true then
+                    if caller_pre_callback then caller_pre_callback() end
+                    viewer:showBookFile(only, "bookmarks")
+                elseif orig then
+                    return orig(...)
+                end
+            end
+        end
+        return button
+    end
+end
+-- One book's list by its path (tab: "bookmarks" or nil). The book open in the reader uses its live
+-- annotations.
+function AllNotesViewer:showBookFile(path, tab)
+    local ReaderUI = require("apps/reader/readerui")
+    local open = ReaderUI and ReaderUI.instance
+    if open and open.document and open.document.file == path then
+        return self:showCurrentBookNotes(tab)
+    end
+    local info = self:getBookInfo(path)
+    self:showNotesForBook(path, info and info.title or (path:match("([^/\\]+)$") or path),
+        self:loadBookAnnotations(path) or {}, tab)
 end
 -- tab: "bookmarks" opens the list on the Bookmarks tab; nil on All
 function AllNotesViewer:showCurrentBookNotes(tab)
@@ -3856,6 +3936,7 @@ function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations,
     UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self, single_book = true, book_title = book_title,
         active_filter = tab and { notes_presence = tab } or nil })
 end
+-- tab: "bookmarks" opens on the Bookmarks tab
 function AllNotesViewer:showAllNotes(tab)
     -- The first open after starting KOReader may have to read many books: say so
     local loading
@@ -4783,19 +4864,17 @@ function Page.paged(owner, W, avail, rows, opts)
         next = function() go(cur + 1) end, last = function() go(count) end,
         side = Screen:scaleBySize(2),
     }
-    -- swipes (as the list's swipe setting) and page-turn keys also turn the pages
-    local sw = getSwipeSetting()
+    -- left / right swipes and page-turn keys also turn the pages. Always left / right, whatever the
+    -- list's swipe setting: these pages turn sideways like KOReader's own menus.
     owner.ges_events = owner.ges_events or {}
-    owner.ges_events.PagedSwipe = sw ~= "disabled" and { GestureRange:new{ ges = "swipe",
-        range = Geom:new{ x = 0, y = 0, w = W, h = Screen:getHeight() } } } or nil
+    owner.ges_events.PagedSwipe = { GestureRange:new{ ges = "swipe",
+        range = Geom:new{ x = 0, y = 0, w = W, h = Screen:getHeight() } } }
     owner.onPagedSwipe = function(_self, _args, ges)
-        local d = ges and ges.direction
-        local horiz = sw == "horizontal" or sw == "both"
-        local vert = sw == "vertical" or sw == "both"
-        if (d == "west" and horiz) or (d == "north" and vert) then
+        local d = ges and BD.flipDirectionIfMirroredUILayout(ges.direction)
+        if d == "west" then
             if has_next then go(cur + 1) end
             return true
-        elseif (d == "east" and horiz) or (d == "south" and vert) then
+        elseif d == "east" then
             if has_prev then go(cur - 1) end
             return true
         end
@@ -5679,21 +5758,31 @@ function FilterScreen:build()
             return true
         end
         local chips = {}
-        -- A saved sort order belongs to the kind of tab it was saved on: the Bookmarks tab has its
-        -- own order, so an order saved there is only used there, and one saved on the annotation
-        -- tabs only there. The filters themselves apply on every tab.
-        local function sortHere(p) return p.sort and ((p.bm and true or false) == (SortState.bm_tab and true or false)) end
+        -- A saved filter keeps both sort orders: the annotation tabs' (sort) and the Bookmarks
+        -- tab's (sort_bm); each tab gets its own back. (Filters saved before kept one order, from
+        -- the kind of tab they were saved on: p.bm.) The filters apply on every tab.
+        local single = list.single_book
+        local function sortsOf(p)
+            if p.bm then return nil, p.sort end
+            return p.sort, p.sort_bm
+        end
+        local function sortHere(p)
+            local a, b = sortsOf(p)
+            if SortState.bm_tab then return b end
+            return a
+        end
         for i, p in ipairs(presets) do
-            local on = same(p.filter or {}, list.active_filter or {}) and (not sortHere(p)
-                or SortState.normView(p.sort, list.single_book) == SortState.normView(SortState.get(list.single_book), list.single_book))
+            local here = sortHere(p)
+            local on = same(p.filter or {}, list.active_filter or {}) and (not here
+                or SortState.normView(here, single) == SortState.normView(SortState.get(single), single))
             table.insert(chips, chip(p.name, on, function()
                 local presence = list.active_filter and list.active_filter.notes_presence
                 list.active_filter = deepCopy(p.filter) or {}
                 list.active_filter.notes_presence = presence
-                if sortHere(p) and SortState.normView(p.sort, list.single_book) ~= SortState.normView(SortState.get(list.single_book), list.single_book) then
-                    SortState.set(list.single_book, p.sort)
-                    list:applySort()
-                end
+                local a, b = sortsOf(p)
+                if a then SortState.setFor(single, false, a) end
+                if b then SortState.setFor(single, true, b) end
+                if a or b then list:applySort() end
                 self:changed()
             end, { hold = function()
                 local ConfirmBox = require("ui/widget/confirmbox")
@@ -5726,14 +5815,14 @@ function FilterScreen:build()
                     if name == "" then name = string.format(_("Filter %d"), #presets + 1) end
                     local copy = deepCopy(list.active_filter) or {}
                     copy.notes_presence = nil
-                    table.insert(presets, { name = name, filter = copy, sort = SortState.get(list.single_book),
-                        bm = SortState.bm_tab and true or nil })
+                    table.insert(presets, { name = name, filter = copy, sort = SortState.getFor(list.single_book, false),
+                        sort_bm = SortState.getFor(list.single_book, true) })
                     setSetting("filter_presets", presets)
                     UIManager:close(dlg)
                     self:rebuild()
                 end
                 dlg = InputDialog:new{ title = _("Save filters"), input = "", input_hint = _("Name"),
-                    description = _("Saves the filters and sort order as they are now."),
+                    description = _("Saves the filters and the sort orders (annotations and bookmarks) as they are now."),
                     buttons = {{
                         { text = _("Cancel"), id = "close", callback = function() UIManager:close(dlg) end },
                         { text = _("Save"), is_enter_default = true, callback = save } } } }
@@ -5899,7 +5988,7 @@ function SS:build()
         return row(label, nil, right, callback)
     end
     -- on/off switch: black track with a white knob on the right when on
-    local function toggle(label, sub, key, getter)
+    local function toggle(label, sub, key, getter, after)
         local on = getter() == true
         local sw_w, sw_h, knob, m = Screen:scaleBySize(50), Screen:scaleBySize(28), Screen:scaleBySize(20), Screen:scaleBySize(4)
         local track = Pill:new{ width = sw_w, height = sw_h, fill = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
@@ -5907,7 +5996,7 @@ function SS:build()
         local k = Pill:new{ width = knob, height = knob, border = 0, fill = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK }
         k.overlap_offset = { on and (sw_w - knob - m) or m, math.floor((sw_h - knob) / 2) }
         local sw = OverlapGroup:new{ dimen = Geom:new{ w = sw_w, h = sw_h }, allow_mirroring = false, track, k }
-        return row(label, sub, sw, function() setSetting(key, not on); self:changed() end)
+        return row(label, sub, sw, function() setSetting(key, not on); if after then after() end; self:changed() end)
     end
     local function outlineCells(cells, cell_h)
         local seg = HorizontalGroup:new{}
@@ -6140,10 +6229,11 @@ function SS:build()
             { "vertical", _("Vertical") }, { "disabled", _("Off") } }, getSwipeSetting(),
             function(v) setSetting("swipe_direction", v); self:changed() end))
 
-        add(sectionBar(_("KOREADER")))
-        add(segment(_("KOReader's Bookmarks list in a book"), { { "off", _("Keep KOReader's") }, { "all", _("Open here: All") },
-                { "bookmarks", _("Open here: Bookmarks") } }, getSetting("take_over_bookmarks", "off"),
-            function(v) setSetting("take_over_bookmarks", v); self:changed() end))
+        if AllNotesViewer.bookmarksButtonAvailable() then
+            add(sectionBar(_("LONG-PRESS MENU")))
+            add(toggle(_("KOReader's Bookmarks button opens here"), _("For one book, on the Bookmarks tab"), "take_over_bm_button",
+                function() return getSetting("take_over_bm_button", false) == true end))
+        end
 
         add(sectionBar(_("FILTER")))
         add(toggle(_("Only offer used colours and styles"), nil, "hide_unused_cs",
