@@ -1454,18 +1454,20 @@ function NoteItemWidget.twelveHour()
     local ko = rawget(_G, "G_reader_settings") -- KOReader's own settings (this file shadows the name)
     return ko and type(ko.isTrue) == "function" and ko:isTrue("twelve_hour_clock") or false
 end
--- twelve: force the 12-hour clock (nil: as set). The 12-hour time comes from KOReader, in its
--- language ("2:05 PM" or its translation); the plain one below is only used without KOReader.
+-- twelve: force the 12-hour clock (nil: KOReader's setting). The time comes from KOReader, in its
+-- language ("14:05", "2:05 PM" or their translation); the plain one below is only used without KOReader.
 function NoteItemWidget.clockText(hm, twelve)
     if twelve == nil then twelve = NoteItemWidget.twelveHour() end
-    if not twelve then return hm end
     local h, m = hm:match("(%d+):(%d+)")
+    if not h then return hm end
     h = tonumber(h)
+    -- both clocks as KOReader writes them, in its language (some write 14.05)
     local ok, dt = pcall(require, "datetime")
     if ok and type(dt) == "table" and type(dt.secondsToHour) == "function" then
-        local r = dt.secondsToHour(os.time({ year = 2000, month = 1, day = 1, hour = h, min = tonumber(m) }), true)
+        local r = dt.secondsToHour(os.time({ year = 2000, month = 1, day = 1, hour = h, min = tonumber(m) }), twelve and true or false)
         if type(r) == "string" then return r end
     end
+    if not twelve then return hm end
     local suffix = h < 12 and "AM" or "PM"
     h = h % 12
     if h == 0 then h = 12 end
