@@ -1440,8 +1440,8 @@ function NoteItemWidget:formatDate(datetime, style)
     return out
 end
 -- Month and clock, the same in the list and on the sheet. The month is short ("3 Feb") or long
--- ("3 February"), in KOReader's translation. The clock follows KOReader's own 12-hour clock setting
--- (Settings → Time and date) unless set to 24 or 12 hours here.
+-- ("3 February"), in KOReader's translation. The clock always follows KOReader's 12-hour clock setting
+-- (Settings → Time and date).
 function NoteItemWidget.monthName(t, long)
     if long == nil then long = getSetting("date_month", "short") == "long" end
     local en = os.date(long and "%B" or "%b", t)
@@ -1451,8 +1451,6 @@ function NoteItemWidget.monthName(t, long)
     return type(name) == "string" and name or en
 end
 function NoteItemWidget.twelveHour()
-    local clock = getSetting("date_clock", "koreader")
-    if clock == "12" then return true elseif clock == "24" then return false end
     local ko = rawget(_G, "G_reader_settings") -- KOReader's own settings (this file shadows the name)
     return ko and type(ko.isTrue) == "function" and ko:isTrue("twelve_hour_clock") or false
 end
@@ -3497,23 +3495,13 @@ AllNotesViewer.GESTURES = {
     { id = "show_all_annotations", event = "ShowAnnotationsHere", title = _("Annotations") },
     { id = "show_all_bookmarks", event = "ShowBookmarksHere", title = _("Annotations: Bookmarks") },
 }
-function AllNotesViewer.legacyGestureUsed()
-    if AllNotesViewer._legacy_used == nil then
-        AllNotesViewer._legacy_used = false
-        local ok, DataStorage = pcall(require, "datastorage")
-        if ok and type(DataStorage) == "table" and type(DataStorage.getSettingsDir) == "function" then
-            for _, name in ipairs({ "gestures.lua", "profiles.lua" }) do
-                local f = io.open(DataStorage:getSettingsDir() .. "/" .. name, "r")
-                if f then
-                    local text = f:read("*a") or ""
-                    f:close()
-                    if text:find("show_current_book_annotations", 1, true) then AllNotesViewer._legacy_used = true end
-                end
-            end
-        end
-    end
-    return AllNotesViewer._legacy_used
-end
+-- Actions of earlier versions. They stay registered so anything still set to them keeps working:
+-- a gesture, a profile, or another plugin (SimpleUI and the like) that saved the action. They have
+-- no menu section, so KOReader lists them nowhere for new choices, but still runs them.
+AllNotesViewer.LEGACY_GESTURES = {
+    { id = "show_current_book_annotations", event = "ShowCurrentBookAnnotations", title = _("Annotations") },
+    { id = "show_current_book_bookmarks", event = "ShowCurrentBookBookmarksList", title = _("Annotations: Bookmarks") },
+}
 function AllNotesViewer.registerGestures()
     local Dispatcher = require("dispatcher")
     for n = 1, #AllNotesViewer.GESTURES do
@@ -3521,9 +3509,8 @@ function AllNotesViewer.registerGestures()
         Dispatcher:registerAction(g.id, { category = "none", event = g.event, title = g.title,
             filemanager = true, reader = true })
     end
-    if AllNotesViewer.legacyGestureUsed() then
-        Dispatcher:registerAction("show_current_book_annotations", { category = "none",
-            event = "ShowAnnotationsHere", title = _("Annotations (this book, old)"), reader = true })
+    for _, g in ipairs(AllNotesViewer.LEGACY_GESTURES) do
+        Dispatcher:registerAction(g.id, { category = "none", event = g.event, title = g.title })
     end
 end
 function AllNotesViewer:onShowAnnotationsHere()
@@ -3534,6 +3521,11 @@ function AllNotesViewer:onShowBookmarksHere()
     if self.ui and self.ui.document then self:showCurrentBookNotes("bookmarks") else self:showAllNotes("bookmarks") end
     return true
 end
+-- the events of earlier versions, for anything that sends them itself
+AllNotesViewer.onShowAllAnnotations = AllNotesViewer.onShowAnnotationsHere
+AllNotesViewer.onShowCurrentBookAnnotations = AllNotesViewer.onShowAnnotationsHere
+AllNotesViewer.onShowAllBookmarksList = AllNotesViewer.onShowBookmarksHere
+AllNotesViewer.onShowCurrentBookBookmarksList = AllNotesViewer.onShowBookmarksHere
 -- "Annotations" in a book's long-press menu (file browser, History, collections, search): opens
 -- that book's list (on the Bookmarks tab when the book has only bookmarks). Only shown for a book
 -- with annotations or bookmarks. Added once to KOReader's file dialogs; uses the plugin of the
@@ -6199,19 +6191,13 @@ function SS:build()
         add(stepper(_("Between bookmarks"), nil, "bm_spacing",
             getSetting("bm_spacing", NoteItemWidget.DEFAULT_BM_SPACING), 0, 100, 2, NoteItemWidget.DEFAULT_BM_SPACING))
     elseif self.page == "dates" then
-        -- how dates are written: month and clock for every date, then year and time for the list
-        -- and for the annotation sheet, each its own
+        -- how dates are written: the month for every date (the clock is KOReader's own setting),
+        -- then year and time for the list and for the annotation sheet, each its own
         add(sectionBar(_("DATE FORMAT")))
         local sample_t = os.time({ year = 2026, month = 9, day = 3, hour = 14 })
         add(segment(_("Month"), { { "short", "3 " .. NoteItemWidget.monthName(sample_t, false) },
                 { "long", "3 " .. NoteItemWidget.monthName(sample_t, true) } }, getSetting("date_month", "short"),
             function(v) setSetting("date_month", v); self:changed() end))
-        local ko = rawget(_G, "G_reader_settings")
-        local ko12 = ko and type(ko.isTrue) == "function" and ko:isTrue("twelve_hour_clock")
-        local pm = NoteItemWidget.clockText("14:05", true)
-        add(segment(_("Clock"), { { "koreader", string.format(_("As KOReader (%s)"), ko12 and pm or "14:05") },
-                { "24", "14:05" }, { "12", pm } }, getSetting("date_clock", "koreader"),
-            function(v) setSetting("date_clock", v); self:changed() end))
         -- above a highlight: always, or only when the order goes by date (bookmarks: Bookmarks page)
         add(sectionBar(_("ABOVE HIGHLIGHTS")))
         add(segment(_("Show the date"), { { "sort", _("When sorted by date") }, { "always", _("Always") } },
