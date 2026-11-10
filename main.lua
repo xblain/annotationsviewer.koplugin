@@ -966,14 +966,18 @@ end
 NoteItemWidget.DEFAULT_BM_SPACING = 18
 function NoteItemWidget.bmSpacing() return Screen:scaleBySize(getSetting("bm_spacing", NoteItemWidget.DEFAULT_BM_SPACING)) end
 function NoteItemWidget.bookmarkFace()
-    local size = tonumber(getSetting("bm_line_size", nil))
-    if not size then return (select(2, getNoteFaces())) end
-    return getFaceOr(getInfoFont(), size, "cfont")
+    local font, size = getSetting("bm_font", nil), tonumber(getSetting("bm_line_size", nil))
+    if (not font or font == "") and not size then return (select(2, getNoteFaces())) end
+    if not font or font == "" then font = getInfoFont() end
+    return getFaceOr(font, size or getInfoFontSize(), "cfont")
 end
 -- the ribbon and the space after it: the bookmark's chapter text and its note start this far in
 function NoteItemWidget.bookmarkIndent()
     return TextWidget:new{ text = NoteItemWidget.BOOKMARK_CHAR, face = NoteItemWidget.bookmarkFace() }:getSize().w + Screen:scaleBySize(8)
 end
+-- A bookmark's note: without the pencil (default) it lines up with the chapter text; with it, the
+-- pencil sits under the ribbon as on an annotation.
+function NoteItemWidget.bmNoteIcon() return getSetting("bm_note_icon", false) == true end
 -- "sort" (only when the order goes by date), "always" or "never"
 function NoteItemWidget.bmDate() return getSetting("bm_date", "sort") end
 -- Space above an item in the list: between bookmarks their own (smaller) space, else the space
@@ -1067,7 +1071,10 @@ local function measureNoteHeight(note, width, skip_title, skip_info)
             widths[NOTE_ICON_CHAR] = icon_w
         end
         local wrap_w = line_width - icon_w - Screen:scaleBySize(6) - NoteItemWidget.noteIndent()
-        if note.bookmark then wrap_w = content_width - NoteItemWidget.bookmarkIndent() end
+        if note.bookmark then
+            wrap_w = NoteItemWidget.bmNoteIcon() and (content_width - icon_w - Screen:scaleBySize(6))
+                or (content_width - NoteItemWidget.bookmarkIndent())
+        end
         local n = math.min(#wrapText(note.user_note, note_face, wrap_w), NoteItemWidget.noteLinesMax())
         local ls = NoteItemWidget.lineSpacing()
         if ls < 0 then h = h + math.max(note_line_h + ls, n * (note_line_h + ls))
@@ -1089,7 +1096,7 @@ local function getLayoutSignature(width)
         tostring(getSetting("author_font", nil)), tostring(getSetting("author_font_size", nil)), getSetting("author_case", "upper"), getSetting("title_case", "normal"), getSetting("info_case", "normal"), NoteItemWidget.noteOffset(), NoteItemWidget.noteIndent(),
         tostring(getTruncateLines()), tostring(NoteItemWidget.noteLinesMax()), tostring(getShowInfo()), getInfoFields(), tostring(NoteItemWidget.measure_hide_chapter),
         os.date("%Y%m%d"), -- "Today"/"Yesterday" labels change the info row text
-        NoteItemWidget.dateStyle("list"), tostring(getSetting("bm_line_size", nil)),
+        NoteItemWidget.dateStyle("list"), tostring(getSetting("bm_line_size", nil)), tostring(getSetting("bm_font", nil)), tostring(NoteItemWidget.bmNoteIcon()),
     }, "|")
 end
 
@@ -1355,7 +1362,11 @@ function NoteItemWidget:init()
         -- a bookmark's note has no pencil: the ribbon above marks it, and the note lines up with
         -- the chapter text next to the ribbon
         local note_x = h_padding + text_margin + NoteItemWidget.noteIndent()
-        if is_bookmark then
+        local bm_pencil = is_bookmark and NoteItemWidget.bmNoteIcon()
+        if bm_pencil then
+            note_x = h_padding
+            note_text_width = content_width - icon_size - icon_margin
+        elseif is_bookmark then
             note_x = h_padding + NoteItemWidget.bookmarkIndent()
             note_text_width = content_width - NoteItemWidget.bookmarkIndent()
         end
@@ -1376,7 +1387,7 @@ function NoteItemWidget:init()
         end
 
                 
-        local note_row = is_bookmark and note_text_group or HorizontalGroup:new{
+        local note_row = (is_bookmark and not bm_pencil) and note_text_group or HorizontalGroup:new{
             note_icon,
             HorizontalSpan:new{ width = icon_margin },
             note_text_group,
@@ -5107,9 +5118,16 @@ function Page.preview(list, h, mark_gap, bookmarks)
         end
     end
     -- Spacing page: end the preview just after the top of the second note, so the gap between the
-    -- notes can be judged from the sliver of the next one
-    if mark_gap and first_h then
-        h = math.min(math.floor(Screen:getHeight() * 0.5), top + first_h + getNoteSpacing() + Screen:scaleBySize(28))
+    -- notes can be judged from the sliver of the next one. Text page: tall enough for the whole first
+    -- annotation with its note (a bigger or taller note font is not cut off). Bookmarks: all of them.
+    -- Never more than half the screen.
+    local max_h = math.floor(Screen:getHeight() * 0.5)
+    if bookmarks then
+        h = math.min(max_h, g:getSize().h + Screen:scaleBySize(12))
+    elseif mark_gap and first_h then
+        h = math.min(max_h, top + first_h + getNoteSpacing() + Screen:scaleBySize(28))
+    elseif first_h then
+        h = math.min(max_h, math.max(h, top + first_h + Screen:scaleBySize(12)))
     end
     return VerticalGroup:new{ align = "left",
         Page.PreviewClip:new{ w = W, h = h, g },
@@ -6496,13 +6514,19 @@ function SS:build()
     elseif self.page == "bookmarks" then
         -- only what is a bookmark's own; fonts, capitals, margins and the note are the annotations'
         add(sectionBar(_("BOOKMARK LINE")))
+        add(navRow(_("Font"), getSetting("bm_font", nil) and NotesListWidget.SubPage.fontName(getSetting("bm_font", nil))
+                or _("Same as info"), function()
+            UIManager:show(NotesListWidget.SubPage:new{ list = list, parent = self, font_key = "bm_font", title = _("Bookmark font") })
+        end))
         local info_size = getInfoFontSize()
         add(stepper(_("Text size"), _("Same as the info size until you change it"), "bm_line_size",
             getSetting("bm_line_size", nil) or info_size, 8, 48, 1, info_size))
         add(segment(_("Date"), { { "sort", _("When sorted by date") }, { "always", _("Always") }, { "never", _("Never") } },
             NoteItemWidget.bmDate(), function(v) setSetting("bm_date", v); self:changed() end))
+        add(sectionBar(_("NOTE")))
+        add(toggle(_("Pencil before the note"), nil, "bm_note_icon", NoteItemWidget.bmNoteIcon))
         add(sectionBar(_("SPACING")))
-        add(stepper(_("Between bookmarks"), _("A bookmark is one line, so it needs less room than a highlight"), "bm_spacing",
+        add(stepper(_("Between bookmarks"), nil, "bm_spacing",
             getSetting("bm_spacing", NoteItemWidget.DEFAULT_BM_SPACING), 0, 100, 2, NoteItemWidget.DEFAULT_BM_SPACING))
     elseif self.page == "info" then
         add(sectionBar(_("INFO ROW")))
@@ -6576,6 +6600,7 @@ function SS:build()
                 end
                 if self.page == "bookmarks" then
                     setSetting("bm_line_size", nil); setSetting("bm_spacing", nil); setSetting("bm_date", nil)
+                    setSetting("bm_note_icon", nil); setSetting("bm_font", nil)
                 end
                 if self.page == "text" then
                     setSetting("title_font", nil); setSetting("info_font", nil); setSetting("content_font", nil)
