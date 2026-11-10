@@ -897,7 +897,7 @@ local function getHeaderLayout(title_text, author_text, title_face, info_face, c
     return title_w, author_w, title_h + HEADER_LINE_GAP + Size.line.thin
 end
 
-local NOTE_ICON_CHAR = "\u{F040}"
+local NOTE_ICON_CHAR = "\u{EAEA}" -- pencil (Material Design, in KOReader's symbol font)
 
 -- Height NoteItemWidget:init() would produce for these params, computed without building
 -- any widgets. Must mirror the layout in NoteItemWidget:init().
@@ -952,7 +952,7 @@ end
 -- ribbon and chapter on the left, "Page 34 · 8 Jan" on the right. Under a chapter heading (one
 -- book) the chapter is left out and the page moves to the left. The date only shows when the
 -- order goes by date. Bookmarks keep no text from the page, so this line and the note are all.
-NoteItemWidget.BOOKMARK_CHAR = "\u{F097}" -- KOReader's own bookmark mark (same font as the note pencil)
+NoteItemWidget.BOOKMARK_CHAR = "\u{F097}" -- KOReader's own bookmark mark (same font as the note icon)
 function NoteItemWidget.pageText(note)
     local label = note.page_label
     if label == nil and type(note.page) == "number" and note.page > 0 then label = note.page end
@@ -975,8 +975,8 @@ end
 function NoteItemWidget.bookmarkIndent()
     return TextWidget:new{ text = NoteItemWidget.BOOKMARK_CHAR, face = NoteItemWidget.bookmarkFace() }:getSize().w + Screen:scaleBySize(8)
 end
--- A bookmark's note: without the pencil (default) it lines up with the chapter text; with it, the
--- pencil sits under the ribbon as on an annotation.
+-- A bookmark's note: without the note icon (default) it lines up with the chapter text; with it,
+-- the icon sits under the ribbon as on an annotation.
 function NoteItemWidget.bmNoteIcon() return getSetting("bm_note_icon", false) == true end
 -- "sort" (only when the order goes by date), "always" or "never"
 function NoteItemWidget.bmDate() return getSetting("bm_date", "sort") end
@@ -1359,7 +1359,7 @@ function NoteItemWidget:init()
         local icon_size = note_icon:getSize().w
 
         local note_text_width = line_width - icon_size - icon_margin - NoteItemWidget.noteIndent()
-        -- a bookmark's note has no pencil: the ribbon above marks it, and the note lines up with
+        -- a bookmark's note has no icon (unless the setting adds it): the ribbon above marks it, and the note lines up with
         -- the chapter text next to the ribbon
         local note_x = h_padding + text_margin + NoteItemWidget.noteIndent()
         local bm_pencil = is_bookmark and NoteItemWidget.bmNoteIcon()
@@ -6524,7 +6524,7 @@ function SS:build()
         add(segment(_("Date"), { { "sort", _("When sorted by date") }, { "always", _("Always") }, { "never", _("Never") } },
             NoteItemWidget.bmDate(), function(v) setSetting("bm_date", v); self:changed() end))
         add(sectionBar(_("NOTE")))
-        add(toggle(_("Pencil before the note"), nil, "bm_note_icon", NoteItemWidget.bmNoteIcon))
+        add(toggle(_("Icon before the note"), nil, "bm_note_icon", NoteItemWidget.bmNoteIcon))
         add(sectionBar(_("SPACING")))
         add(stepper(_("Between bookmarks"), nil, "bm_spacing",
             getSetting("bm_spacing", NoteItemWidget.DEFAULT_BM_SPACING), 0, 100, 2, NoteItemWidget.DEFAULT_BM_SPACING))
