@@ -256,5 +256,20 @@ pw.active_filter = { books = { B = true } }
 local kept = pw:pickerItems({ { key = "A", count = 2 }, { key = "B", count = 0 }, { key = "C", count = 0 } }, "books", "books_exclude")
 check("picker keeps counted and ticked items", #kept == 2 and kept[1].key == "A" and kept[2].key == "B")
 
+-- dates: year and time each shown always, never or only when they matter
+local NIW = T.NoteItemWidget
+local function fd(dt, year, time) return NIW:formatDate(dt, { year = year, time = time }) or "" end
+local feb = os.date("%b", os.time({ year = 2024, month = 2, day = 3 }))
+check("date: another year keeps its year", fd("2024-02-03 14:05:09", "relevant", "never") == "3 " .. feb .. " 2024")
+check("date: year always", fd("2024-02-03 14:05:09", "always", "never") == "3 " .. feb .. " 2024")
+check("date: time always", fd("2024-02-03 14:05:09", "always", "always") == "3 " .. feb .. " 2024, 14:05")
+check("date: time only when recent (old date)", fd("2024-02-03 14:05:09", "relevant", "recent") == "3 " .. feb .. " 2024")
+check("date: time only when recent (today)", fd(os.date("%Y-%m-%d 09:30:00"), "relevant", "recent") == "Today, 09:30")
+check("date: this year without year", fd(os.date("%Y-01-01 08:00:00"), "relevant", "never"):match("%d%d%d%d") == nil or os.date("%m-%d") <= "01-02")
+check("month: English name when KOReader's translation is missing", NIW.monthName(os.time({ year = 2024, month = 2, day = 3 }), true) == os.date("%B", os.time({ year = 2024, month = 2, day = 3 })))
+check("clock: 24 hours stays as stored", NIW.twelveHour() ~= true and NIW.clockText("14:05") == "14:05")
+check("clock: 12 hours", NIW.clockText("14:05", true) == "2:05 PM" and NIW.clockText("00:30", true) == "12:30 AM")
+check("date: no time stored", fd("2024-02-03", "always", "always"):match(",") == nil)
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

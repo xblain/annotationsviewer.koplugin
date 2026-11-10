@@ -13,12 +13,10 @@ local OverlapGroup = require("ui/widget/overlapgroup")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local TextWidget = require("ui/widget/textwidget")
-local Button = require("ui/widget/button")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local GestureRange = require("ui/gesturerange")
 local UIManager = require("ui/uimanager")
 local InfoMessage = require("ui/widget/infomessage")
-local ButtonDialogTitle = require("ui/widget/buttondialogtitle")
 local TextViewer = require("ui/widget/textviewer")
 local SpinWidget = require("ui/widget/spinwidget")
 local IconButton = require("ui/widget/iconbutton")
@@ -173,21 +171,6 @@ local function getFaceOr(font_name, size, fallback)
         or Font:getFace(fallback, size) or Font:getFace("cfont", size)
 end
 
-getNoteInfoKey = function(note, fields_setting)
-    local parts = {}
-    local fields = {}
-    for f in fields_setting:gmatch("[^,]+") do fields[f] = true end
-    if fields["date"] then
-        table.insert(parts, note.datetime and note.datetime:match("^(%d+-%d+-%d+)") or "")
-    end
-    if fields["author"] then
-        table.insert(parts, note.book_authors or "")
-    end
-    if fields["chapter"] then
-        table.insert(parts, note.chapter or "")
-    end
-    return table.concat(parts, "|")
-end
 
 local SORT_MODES = {
     date_newest = { label = _("Newest First") },
@@ -206,14 +189,6 @@ local SORT_MODES = {
     filename_location_desc = { label = _("Location: End to Begin") },
     opened_recent = { label = _("Last opened book first") },
     opened_oldest = { label = _("Longest unopened book first") },
-}
-
-local SORT_CATEGORIES = {
-    date = { "date_newest", "date_oldest" },
-    author = { "author_asc", "author_desc", "author_location_asc", "author_location_desc" },
-    book = { "book_asc", "book_desc", "book_location_asc", "book_location_desc" },
-    filename = { "filename_asc", "filename_desc", "filename_location_asc", "filename_location_desc" },
-    opened = { "opened_recent", "opened_oldest" },
 }
 
 local SPIN_MENUS = {
@@ -350,11 +325,6 @@ function SortState.get(single)
 end
 function SortState.set(single, mode)
     setSetting((single and "sort_mode_book" or "sort_mode") .. (SortState.bm_tab and "_bm" or ""), mode)
-end
--- The same order can be written as an old name or as a rule: compare them through this.
-function SortState.norm(mode)
-    local levels = SortState.parse(mode)
-    return levels and SortState.encode(levels) or tostring(mode)
 end
 function SortState.encode(levels)
     local parts = {}
@@ -818,8 +788,7 @@ local function buildInfoText(note, note_wrapper, skip_title, hide_chapter) -- lu
         table.insert(info_parts, NoteItemWidget.chapterLabel(note.chapter))
     end
     -- the date: always, or (setting) only when the order goes by date
-    local show_date = info_fields["date"] and (getSetting("info_date_when", "always") ~= "sort"
-        or NoteItemWidget.sortUsesDate(NoteItemWidget.list_single))
+    local show_date = info_fields["date"] and NoteItemWidget.infoShowsDate()
     local date_text = show_date and NoteItemWidget:formatDate(note.datetime) or ""
     if date_text ~= "" then table.insert(info_parts, date_text) end
     return NoteItemWidget.infoText(table.concat(info_parts, " · "))
@@ -994,6 +963,36 @@ function NoteItemWidget.bmDate() return getSetting("bm_date", "sort") end
 function NoteItemWidget.gapAbove(note, skip_title)
     return (note and note.bookmark and NoteItemWidget.bmSpacing() or getNoteSpacing()) + (skip_title and 0 or BOOK_GAP)
 end
+-- Whether the info row above a highlight shows the date: the Date field is on and, with the
+-- "when sorted by date" setting, the order goes by date.
+function NoteItemWidget.infoShowsDate()
+    local single = NoteItemWidget.list_single
+    local key = getInfoFields() .. "|" .. getSetting("info_date_when", "always") .. "|" .. SortState.get(single) .. tostring(single)
+    if NoteItemWidget._isd_key ~= key then -- asked once per annotation when paging: worked out once
+        local on = false
+        for f in getInfoFields():gmatch("[^,]+") do if f == "date" then on = true end end
+        NoteItemWidget._isd_key = key
+        NoteItemWidget._isd = on and (getSetting("info_date_when", "always") ~= "sort" or NoteItemWidget.sortUsesDate(single))
+    end
+    return NoteItemWidget._isd
+end
+-- What makes two info rows "the same" for "Hide duplicate info header". A date that is not shown
+-- does not count, or rows that look the same would both be drawn.
+getNoteInfoKey = function(note, fields_setting)
+    local parts = {}
+    local fields = {}
+    for f in fields_setting:gmatch("[^,]+") do fields[f] = true end
+    if fields["date"] and NoteItemWidget.infoShowsDate() then
+        table.insert(parts, note.datetime and note.datetime:match("^(%d+-%d+-%d+)") or "")
+    end
+    if fields["author"] then
+        table.insert(parts, note.book_authors or "")
+    end
+    if fields["chapter"] then
+        table.insert(parts, note.chapter or "")
+    end
+    return table.concat(parts, "|")
+end
 -- Whether the open order uses the date (then a bookmark shows its date).
 function NoteItemWidget.sortUsesDate(single)
     for _, l in ipairs(SortState.view(SortState.get(single), single)) do
@@ -1024,7 +1023,7 @@ function NoteItemWidget.bookmarkRow(note, content_width, hide_chapter, single)
     local col = NoteItemWidget.bookmarkColumn()
     local icon_gap = NoteItemWidget.bookmarkIndent() - col
     local label = TextWidget:new{ text = NoteItemWidget.infoText(left_text), face = info_face,
-        max_width = math.max(Screen:scaleBySize(24), content_width - icon:getSize().w - icon_gap - right_w - gap) }
+        max_width = math.max(Screen:scaleBySize(24), content_width - col - icon_gap - right_w - gap) }
     local h = math.max(label:getSize().h, icon:getSize().h)
     -- the mark is centred on the height of the text next to it
     local left = HorizontalGroup:new{ align = "center",
@@ -1127,7 +1126,6 @@ end
 function NoteItemWidget:init()
     local h_margin = getHMargin()
     local text_margin = getTextMargin()
-    local note_spacing = getNoteSpacing()
     local title_margin = getTitleMargin()
     local info_margin = getInfoMargin()
     local inner_width = self.width - h_margin * 2
@@ -1455,10 +1453,18 @@ function NoteItemWidget.twelveHour()
     local ko = rawget(_G, "G_reader_settings") -- KOReader's own settings (this file shadows the name)
     return ko and type(ko.isTrue) == "function" and ko:isTrue("twelve_hour_clock") or false
 end
-function NoteItemWidget.clockText(hm)
-    if not NoteItemWidget.twelveHour() then return hm end
+-- twelve: force the 12-hour clock (nil: as set). The 12-hour time comes from KOReader, in its
+-- language ("2:05 PM" or its translation); the plain one below is only used without KOReader.
+function NoteItemWidget.clockText(hm, twelve)
+    if twelve == nil then twelve = NoteItemWidget.twelveHour() end
+    if not twelve then return hm end
     local h, m = hm:match("(%d+):(%d+)")
     h = tonumber(h)
+    local ok, dt = pcall(require, "datetime")
+    if ok and type(dt) == "table" and type(dt.secondsToHour) == "function" then
+        local r = dt.secondsToHour(os.time({ year = 2000, month = 1, day = 1, hour = h, min = tonumber(m) }), true)
+        if type(r) == "string" then return r end
+    end
     local suffix = h < 12 and "AM" or "PM"
     h = h % 12
     if h == 0 then h = 12 end
@@ -2950,129 +2956,6 @@ function NotesListWidget:showSettingsMenu()
     self.settings_screen = NotesListWidget.SettingsScreen:new{ list = self }
     UIManager:show(self.settings_screen, "flashui")
 end
-function NotesListWidget:showPaginationStyleMenu()
-    local current = getPaginationStyle()
-    local function check(v) return current == v and "\u{2713} " or "  " end
-    local function apply(v)
-        setSetting("pagination_style", v)
-        UIManager:close(self.pagination_style_dialog)
-        self:refresh()
-        self:showSettingsMenu()
-    end
-    local buttons = {
-        {{ text = check("default")   .. _("Prev / Next Buttons"), callback = function() apply("default")   end }},
-        {{ text = check("scrollbar") .. _("Scrollbar"),                           callback = function() apply("scrollbar") end }},
-        {{ text = check("scrollbar_chevrons") .. _("Scrollbar + Buttons"),        callback = function() apply("scrollbar_chevrons") end }},
-        {{ text = _("Back"), callback = function()
-            UIManager:close(self.pagination_style_dialog)
-            self:showSettingsMenu()
-        end }},
-    }
-    self.pagination_style_dialog = ButtonDialogTitle:new{ title = _("Pagination Style"), buttons = buttons }
-    NotesListWidget.showDialog(self.pagination_style_dialog)
-end
-function NotesListWidget:showSwipeSettingMenu()
-    local current = getSwipeSetting()
-    local function check(v) return current == v and "\u{2713} " or "  " end
-    local function apply(v)
-        setSetting("swipe_direction", v)
-        UIManager:close(self.swipe_dialog)
-        self:refresh()
-        self:showSettingsMenu()
-    end
-    local buttons = {
-        {{ text = check("both")       .. _("Both (horizontal + vertical)"), callback = function() apply("both")       end }},
-        {{ text = check("horizontal") .. _("Horizontal only"),              callback = function() apply("horizontal") end }},
-        {{ text = check("vertical")   .. _("Vertical only"),                callback = function() apply("vertical")   end }},
-        {{ text = check("disabled")   .. _("Disabled"),                     callback = function() apply("disabled")   end }},
-        {{ text = _("Back"), callback = function()
-            UIManager:close(self.swipe_dialog)
-            self:showSettingsMenu()
-        end }},
-    }
-    self.swipe_dialog = ButtonDialogTitle:new{ title = _("Swipe Gestures"), buttons = buttons }
-    NotesListWidget.showDialog(self.swipe_dialog)
-end
-function NotesListWidget:showInfoFieldsMenu()
-    local fields_setting = getInfoFields()
-    local active = {}
-    for f in fields_setting:gmatch("[^,]+") do active[f] = true end
-
-    local function toggleField(field)
-        if active[field] then active[field] = nil else active[field] = true end
-        local parts = {}
-        for _, f in ipairs({"date", "author", "chapter"}) do
-            if active[f] then table.insert(parts, f) end
-        end
-        local new_val = #parts > 0 and table.concat(parts, ",") or "date"
-        setSetting("info_fields", new_val)
-        fields_setting = new_val
-        active = {}
-        for f in new_val:gmatch("[^,]+") do active[f] = true end
-        self:refresh()
-        UIManager:close(self.info_fields_dialog)
-        self:showInfoFieldsMenu()
-    end
-
-    local function check(field) return active[field] and "\u{2713} " or "  " end
-    local buttons = {
-        {{ text = check("date")    .. _("Date"),    callback = function() toggleField("date")    end }},
-        {{ text = check("author")  .. _("Author"),  callback = function() toggleField("author")  end }},
-        {{ text = check("chapter") .. _("Chapter"), callback = function() toggleField("chapter") end }},
-        {{ text = _("Back"), callback = function()
-            UIManager:close(self.info_fields_dialog)
-            self:showSettingsMenu()
-        end }},
-    }
-    self.info_fields_dialog = ButtonDialogTitle:new{ title = _("Show Info Header: Fields"), buttons = buttons }
-    NotesListWidget.showDialog(self.info_fields_dialog)
-end
-function NotesListWidget:showDedupInfoFieldsMenu()
-    local fields_setting = getDedupInfoFields()
-    local active = {}
-    for f in fields_setting:gmatch("[^,]+") do active[f] = true end
-
-    local function toggleField(field)
-        if active[field] then active[field] = nil else active[field] = true end
-        local parts = {}
-        for _, f in ipairs({"date", "author", "chapter"}) do
-            if active[f] then table.insert(parts, f) end
-        end
-        local new_val = #parts > 0 and table.concat(parts, ",") or "date"
-        setSetting("dedup_info_fields", new_val)
-        fields_setting = new_val
-        active = {}
-        for f in new_val:gmatch("[^,]+") do active[f] = true end
-        self:refresh()
-        UIManager:close(self.dedup_fields_dialog)
-        self:showDedupInfoFieldsMenu()
-    end
-
-    local function check(field) return active[field] and "✓ " or "  " end
-    local buttons = {
-        {{ text = check("date")    .. _("Date"),    callback = function() toggleField("date")    end }},
-        {{ text = check("author")  .. _("Author"),  callback = function() toggleField("author")  end }},
-        {{ text = check("chapter") .. _("Chapter"), callback = function() toggleField("chapter") end }},
-        {{ text = _("Back"), callback = function()
-            UIManager:close(self.dedup_fields_dialog)
-            self:showSettingsMenu()
-        end }},
-    }
-    self.dedup_fields_dialog = ButtonDialogTitle:new{ title = _("Hide Repeat Info: Match By"), buttons = buttons }
-    NotesListWidget.showDialog(self.dedup_fields_dialog)
-end
-function NotesListWidget:showFontSizeMenu()
-    self:showSpinMenu("font_size", function() self:showSettingsMenu() end)
-end
-function NotesListWidget:showFontsMenu()
-    self:showSettingsMenu() -- the fonts are rows on the Settings page now
-end
-function NotesListWidget:showSectionMarginMenu()
-    self:showSpinMenu("section_margin", function() self:showSettingsMenu() end)
-end
-function NotesListWidget:showMarginMenu()
-    self:showSpinMenu("margins", function() self:showSettingsMenu() end)
-end
 function NotesListWidget:showSpinSetting(title, key, default, min, max, step, back_callback)
     NotesListWidget.showDialog(SpinWidget:new{
         title_text = title,
@@ -3089,9 +2972,6 @@ function NotesListWidget:showSpinSetting(title, key, default, min, max, step, ba
     })
 end
 function NotesListWidget:showFilterMenu(show_back)
-    local ButtonDialog = require("ui/widget/buttondialog")
-    local RadioButtonWidget = require("ui/widget/radiobuttonwidget")
-    
     local function ensureFilter()
         if not self.active_filter or type(self.active_filter) ~= "table" then
             self.active_filter = {}
@@ -3099,179 +2979,6 @@ function NotesListWidget:showFilterMenu(show_back)
     end
 
     local showFilterMenu  -- forward reference
-
-    local function showToggleFilter(config, restore_offset)
-        local data = config.collector(self.notes_list)
-        local keys = {}
-        for key in pairs(data) do table.insert(keys, key) end
-        table.sort(keys)
-
-        local function getState(key)
-            local inc = (self.active_filter and self.active_filter[config.filter_key]) or {}
-            local exc = (self.active_filter and self.active_filter[config.exclude_filter_key]) or {}
-            if inc[key] then return "include"
-            elseif exc[key] then return "exclude"
-            else return "none" end
-        end
-
-        local function cycleState(key)
-            ensureFilter()
-            local inc = self.active_filter[config.filter_key] or {}
-            local exc = self.active_filter[config.exclude_filter_key] or {}
-            local state = getState(key)
-            if state == "none" then
-                inc[key] = true
-            elseif state == "include" then
-                inc[key] = nil
-                exc[key] = true
-            else
-                exc[key] = nil
-            end
-            self.active_filter[config.filter_key] = next(inc) and inc or nil
-            self.active_filter[config.exclude_filter_key] = next(exc) and exc or nil
-        end
-
-        local dialog
-        local buttons = {}
-
-        -- Determine column count
-        local ncols
-        if config.columns == "auto" then
-            ncols = #keys > 20 and 3 or #keys > 10 and 2 or 1
-        elseif config.columns == "auto2" then
-            ncols = #keys > 10 and 2 or 1
-        else
-            ncols = config.columns or 1
-        end
-
-        -- Build item button definitions first, then pack into rows
-        local item_btns = {}
-        for _, key in ipairs(keys) do
-            local state = getState(key)
-            local mark = state == "include" and "[+] " or state == "exclude" and "[-] " or "[ ] "
-            local display_text = config.formatter(key, data[key])
-            local k = key
-            table.insert(item_btns, {
-                text = mark .. display_text,
-                callback = function()
-                    local offset = dialog:getScrolledOffset()
-                    cycleState(k)
-                    UIManager:close(dialog)
-                    showToggleFilter(config, offset)
-                end,
-            })
-        end
-        local i = 1
-        while i <= #item_btns do
-            local row = {}
-            for c = 1, ncols do
-                if item_btns[i] then
-                    table.insert(row, item_btns[i])
-                    i = i + 1
-                end
-            end
-            table.insert(buttons, row)
-        end
-        table.insert(buttons, {
-            { text = _(config.apply_label), callback = function()
-                UIManager:close(dialog)
-                self:refresh()
-                showFilterMenu(show_back)
-            end },
-        })
-        table.insert(buttons, {
-            { text = _(config.clear_label), callback = function()
-                ensureFilter()
-                self.active_filter[config.filter_key] = nil
-                self.active_filter[config.exclude_filter_key] = nil
-                UIManager:close(dialog)
-                self:refresh()
-                showFilterMenu(show_back)
-            end },
-        })
-        dialog = ButtonDialog:new{
-            title = _(config.dialog_title),
-            buttons = buttons,
-            width_factor = 0.7,
-        }
-        NotesListWidget.showDialog(dialog)
-        if restore_offset then
-            dialog:setScrolledOffset(restore_offset)
-        end
-    end
-    
-    local FILTER_CONFIGS = {
-        book = {
-            filter_key = "books",
-            exclude_filter_key = "books_exclude",
-            dialog_title = "Filter by Book",
-            apply_label = "Apply Book Filter",
-            columns = "auto2",
-            collector = function(notes_list)
-                local books = {}
-                for _, note in ipairs(notes_list) do
-                    if note.book_title then 
-                        books[note.book_title] = note.book_authors or "Unknown"
-                    end
-                end
-                return books
-            end,
-            formatter = function(title, author)
-                local display_author = author
-                if author and author ~= "Unknown" and author:find("\n") then
-                    local first_author = author:match("^([^\n]+)")
-                    if first_author then
-                        first_author = first_author:match("^%s*(.-)%s*$")
-                        display_author = first_author .. " et al."
-                    end
-                end
-                return display_author ~= "Unknown" and (display_author .. " - " .. title) or title
-            end,
-        },
-        tags = {
-            filter_key = "tags",
-            exclude_filter_key = "tags_exclude",
-            dialog_title = "Filter by Tags",
-            apply_label = "Apply Tags Filter",
-            clear_label = "Clear Tags Filter",
-            columns = "auto",
-            collector = function(notes_list)
-                local tags = {}
-                local book_filter = self.active_filter and self.active_filter.books
-                for _, note in ipairs(notes_list) do
-                    if not book_filter or not next(book_filter) or book_filter[note.book_title] then
-                        local note_wrapper = NoteWrapper:new(note)
-                        local note_tags = note_wrapper:getTags()
-                        for _, tag in ipairs(note_tags) do
-                            if tag ~= "" then tags[tag] = true end
-                        end
-                    end
-                end
-                return tags
-            end,
-            formatter = function(tag, _) return tag end,
-        },
-        chapter = {
-            filter_key = "chapters",
-            exclude_filter_key = "chapters_exclude",
-            dialog_title = "Filter by Chapter",
-            apply_label = "Apply Chapter Filter",
-            columns = "auto2",
-            collector = function(notes_list)
-                local chapters = {}
-                local book_filter = self.active_filter and self.active_filter.books
-                for _, note in ipairs(notes_list) do
-                    if not book_filter or not next(book_filter) or book_filter[note.book_title] then
-                        if note.chapter and note.chapter ~= "" then
-                            chapters[note.chapter] = true
-                        end
-                    end
-                end
-                return chapters
-            end,
-            formatter = function(ch, _) return ch end,
-        },
-    }
 
     -- Single-book context: launched from the reader (current book only),
     -- or the book filter is narrowed to exactly one book.
@@ -3284,87 +2991,6 @@ function NotesListWidget:showFilterMenu(show_back)
             if count == 1 then return true end
         end
         return false
-    end
-    
-    local function showBookFilter()
-        showToggleFilter(FILTER_CONFIGS.book)
-    end
-
-    local function showTagsFilter()
-        showToggleFilter(FILTER_CONFIGS.tags)
-    end
-
-    local function showColorStyleFilter(is_exclude)
-        local type_key  = is_exclude and "type_exclude"  or "type"
-        local value_key = is_exclude and "value_exclude" or "value"
-        local colors, styles = {}, {}
-        for _, note in ipairs(self.notes_list) do
-            local note_wrapper = NoteWrapper:new(note)
-            local color = note_wrapper:getNormalizedColor()
-            if color then colors[color] = true end
-            local drawer = note_wrapper:getNormalizedDrawer()
-            if drawer then styles[drawer] = true end
-        end
-        local curr_type = self.active_filter and self.active_filter[type_key] or nil
-        local curr_val  = self.active_filter and self.active_filter[value_key] or nil
-        local radio_buttons = {}
-        for style, _ in pairs(styles) do
-            local name = style:sub(1,1):upper() .. style:sub(2)
-            local button = { text = name or style, checked = curr_type == "style" and curr_val == style,
-                             provider = { type = "style", value = style } }
-            if style == "invert" then
-                button.fgcolor = BlitBuffer.COLOR_WHITE
-                button.bgcolor = BlitBuffer.COLOR_BLACK
-            end
-            table.insert(radio_buttons, { button })
-        end
-        for _, v in ipairs(ReaderHighlight.highlight_colors) do
-            local name, color_key = v[1], v[2]
-            if colors[color_key] then
-                local color_value = HIGHLIGHT_COLORS[color_key]
-                if color_value then
-                    table.insert(radio_buttons, {
-                        { text = name, checked = curr_type == "color" and curr_val == color_key,
-                          bgcolor = BlitBuffer.colorFromString(color_value),
-                          provider = { type = "color", value = color_key } },
-                    })
-                end
-            end
-        end
-        if colors["gray"] then
-            table.insert(radio_buttons, {
-                { text = _("Gray"), checked = curr_type == "color" and curr_val == "gray",
-                  bgcolor = BlitBuffer.COLOR_GRAY,
-                  provider = { type = "color", value = "gray" } },
-            })
-        end
-        table.insert(radio_buttons, {
-            { text = _( "Clear Filter" ), checked = curr_type == nil, provider = nil },
-        })
-        NotesListWidget.showDialog(RadioButtonWidget:new{
-            title_text = is_exclude and _("Exclude Color/Style") or _("Filter by Color/Style"),
-            width_factor = 0.6,
-            radio_buttons = radio_buttons,
-            callback = function(radio)
-                self.active_filter = self.active_filter or {}
-                -- clear the opposite side so only one is ever active
-                local opp_type  = is_exclude and "type"  or "type_exclude"
-                local opp_value = is_exclude and "value" or "value_exclude"
-                self.active_filter[opp_type]  = nil
-                self.active_filter[opp_value] = nil
-                if radio.provider then
-                    self.active_filter[type_key]  = radio.provider.type
-                    self.active_filter[value_key] = radio.provider.value
-                else
-                    self.active_filter[type_key]  = nil
-                    self.active_filter[value_key] = nil
-                end
-                self:refresh()
-                showFilterMenu(show_back)
-            end,
-            colorful = true,
-            dithered = true,
-        })
     end
 
     local function showTextSearchFilter(field_key, dialog_title, hint, is_exclude)
@@ -3441,179 +3067,8 @@ function NotesListWidget:showFilterMenu(show_back)
         rebuildDialog(init_query)
     end
 
-    -- cs_exclude tracks whether the Color/Style row acts as Filter or Exclude
-    -- initialise to exclude if an exclude is already active but no include is
-    local cs_exclude = false
-    if self.active_filter then
-        local has_inc = self.active_filter.type ~= nil
-        local has_exc = self.active_filter.type_exclude ~= nil
-        if has_exc and not has_inc then cs_exclude = true end
-    end
-
-    local function isActive(keys)
-        if not self.active_filter then return false end
-        for _, k in ipairs(keys) do
-            local v = self.active_filter[k]
-            if type(v) == "table" and next(v) then return true end
-            if type(v) == "string" and v ~= "" then return true end
-        end
-        return false
-    end
-
-    local function mark(keys, label)
-        return (isActive(keys) and "✓ " or "") .. label
-    end
-
-    showFilterMenu = function(show_back)
-        if self.filter_dialog then UIManager:close(self.filter_dialog) end
-        local af = self.active_filter or {}
-        local main_buttons = {}
-
-        -- Group 1: Scope
-        if not self.single_book then
-            table.insert(main_buttons, {
-                { text = mark({"books","books_exclude"}, _("Filter by Book")), callback = function()
-                    showBookFilter()
-                end },
-            })
-        end
-        if isSingleBookContext() then
-            table.insert(main_buttons, {
-                { text = mark({"chapters","chapters_exclude"}, _("Filter by Chapter")), callback = function()
-                    UIManager:close(self.filter_dialog)
-                    showToggleFilter(FILTER_CONFIGS.chapter)
-                end },
-            })
-        end
-        table.insert(main_buttons, {
-            { text = mark({"tags","tags_exclude"}, _("Filter by Tags")), callback = function()
-                showTagsFilter()
-            end },
-        })
-
-        -- Group 2: Color / Style
-        table.insert(main_buttons, {})
-        local cs_action_label = cs_exclude and _("Exclude Color/Style") or _("Filter by Color/Style")
-        local cs_active = isActive({"type","value","type_exclude","value_exclude"})
-        local cs_toggle_label = cs_exclude and _("Mode: Exclude") or _("Mode: Filter")
-        table.insert(main_buttons, {
-            { text = (cs_active and "\u{2713} " or "") .. cs_action_label, callback = function()
-                showColorStyleFilter(cs_exclude)
-            end },
-            { text = cs_toggle_label, callback = function()
-                cs_exclude = not cs_exclude
-                ensureFilter()
-                if cs_exclude then
-                    self.active_filter.type  = nil
-                    self.active_filter.value = nil
-                else
-                    self.active_filter.type_exclude  = nil
-                    self.active_filter.value_exclude = nil
-                end
-                self:refresh()
-                showFilterMenu(show_back)
-            end },
-        })
-
-        -- Group 3: Text search
-        table.insert(main_buttons, {})
-        -- the search box from the top bar (highlights and notes together)
-        if af.search_any and af.search_any ~= "" then
-            table.insert(main_buttons, {
-                { text = "✓ " .. _("Search: ") .. "\"" .. af.search_any .. "\"", callback = function()
-                    UIManager:close(self.filter_dialog)
-                    self:showSearchDialog()
-                end },
-                { text = _("Clear Search"), callback = function()
-                    self.active_filter.search_any = nil
-                    self:refresh()
-                    showFilterMenu(show_back)
-                end },
-            })
-        else
-            table.insert(main_buttons, {
-                { text = _("Search Highlights and Notes…"), callback = function()
-                    UIManager:close(self.filter_dialog)
-                    self:showSearchDialog()
-                end },
-            })
-        end
-        table.insert(main_buttons, {
-            { text = mark({"search_highlight"}, _("Filter by Highlight Text")), callback = function()
-                UIManager:close(self.filter_dialog)
-                showTextSearchFilter("search_highlight", "Filter by Highlight Text", _("Words in highlighted text…"), false)
-            end },
-            { text = mark({"search_highlight_exclude"}, _("Exclude by Highlight Text")), callback = function()
-                UIManager:close(self.filter_dialog)
-                showTextSearchFilter("search_highlight", "Exclude Highlight Text", _("Words to hide highlighted text…"), true)
-            end },
-        })
-        table.insert(main_buttons, {
-            { text = mark({"search_note"}, _("Filter by Note Text")), callback = function()
-                UIManager:close(self.filter_dialog)
-                showTextSearchFilter("search_note", "Filter by Note Text", _("Words in annotation notes…"), false)
-            end },
-            { text = mark({"search_note_exclude"}, _("Exclude by Note Text")), callback = function()
-                UIManager:close(self.filter_dialog)
-                showTextSearchFilter("search_note", "Exclude Note Text", _("Words to hide annotation notes…"), true)
-            end },
-        })
-
-        -- Group 4: Notes presence (3-state cycle)
-        table.insert(main_buttons, {})
-        local np = af.notes_presence
-        local np_label
-        if np == "only" then
-            np_label = "\u{2713} " .. _("With Notes Only")
-        elseif np == "exclude" then
-            np_label = "\u{2713} " .. _("Highlights Only (no notes)")
-        else
-            np_label = _("Notes: All")
-        end
-        table.insert(main_buttons, {
-            { text = np_label, callback = function()
-                ensureFilter()
-                if np == nil then
-                    self.active_filter.notes_presence = "only"
-                elseif np == "only" then
-                    self.active_filter.notes_presence = "exclude"
-                else
-                    self.active_filter.notes_presence = nil
-                end
-                self:refresh()
-                showFilterMenu(show_back)
-            end },
-        })
-
-        -- Group 5: Clear / Back
-        table.insert(main_buttons, {})
-        table.insert(main_buttons, {
-            { text = _("Clear All Filters"), callback = function()
-                self.active_filter = {}
-                cs_exclude = false
-                self:refresh()
-                showFilterMenu(show_back)
-            end },
-        })
-        if show_back then
-            table.insert(main_buttons, {
-                { text = _("Back"), callback = function()
-                    if self.filter_dialog then UIManager:close(self.filter_dialog) end
-                    self:showMainMenu()
-                end },
-            })
-        end
-
-        self.filter_dialog = ButtonDialog:new{
-            title = _("Annotation Filters"),
-            buttons = main_buttons,
-            width_factor = 0.7,
-        }
-        NotesListWidget.showDialog(self.filter_dialog)
-    end
-    -- The full-screen "Filter & sort" screen replaces the old menu above. The pickers it opens
-    -- (books, tags, chapters, text) are the ones defined here; when they finish they call
-    -- showFilterMenu(), which now just redraws that screen.
+    -- The full-screen "Filter & sort" screen. The pickers it opens (books, tags, chapters, text)
+    -- call showFilterMenu() when they finish, which just redraws that screen.
     showFilterMenu = function()
         if self.filter_screen then self.filter_screen:rebuild() end
     end
@@ -4042,10 +3497,42 @@ function AllNotesViewer:init()
         title = _("Show current book annotations"),
         reader = true,
     })
+    -- the same lists, opened on the Bookmarks tab
+    Dispatcher:registerAction("show_all_bookmarks", {
+        category = "none",
+        event = "ShowAllBookmarksList",
+        title = _("Show all bookmarks"),
+        filemanager = true,
+    })
+    Dispatcher:registerAction("show_current_book_bookmarks", {
+        category = "none",
+        event = "ShowCurrentBookBookmarksList",
+        title = _("Show current book bookmarks"),
+        reader = true,
+    })
     if not self.ui.document then
         self.ui.menu:registerToMainMenu(self)
     else
         self.ui.menu:registerToMainMenu(self)
+        self:takeOverBookmarkList()
+    end
+end
+-- Setting "Bookmarks in a book" (Settings → KOReader): KOReader's own Bookmarks list (its gesture,
+-- menu entry and key) opens this book's list here instead, on the All or the Bookmarks tab. Off by
+-- default. The book's ReaderBookmark gets a wrapper that looks at the setting each time, so turning
+-- it off works straight away.
+function AllNotesViewer:takeOverBookmarkList()
+    local bm = self.ui and self.ui.bookmark
+    if not bm or bm._av_show_bookmark or type(bm.onShowBookmark) ~= "function" then return end
+    bm._av_show_bookmark = bm.onShowBookmark
+    local viewer = self
+    bm.onShowBookmark = function(this, ...)
+        local mode = getSetting("take_over_bookmarks", "off")
+        if mode == "all" or mode == "bookmarks" then
+            viewer:showCurrentBookNotes(mode == "bookmarks" and "bookmarks" or nil)
+            return true
+        end
+        return this._av_show_bookmark(this, ...)
     end
 end
 function AllNotesViewer:onShowAllAnnotations()
@@ -4054,7 +3541,14 @@ end
 function AllNotesViewer:onShowCurrentBookAnnotations()
     self:showCurrentBookNotes()
 end
-function AllNotesViewer:showCurrentBookNotes()
+function AllNotesViewer:onShowAllBookmarksList()
+    self:showAllNotes("bookmarks")
+end
+function AllNotesViewer:onShowCurrentBookBookmarksList()
+    self:showCurrentBookNotes("bookmarks")
+end
+-- tab: "bookmarks" opens the list on the Bookmarks tab; nil on All
+function AllNotesViewer:showCurrentBookNotes(tab)
     local ReaderUI = require("apps/reader/readerui")
     local ui = self.ui or (ReaderUI and ReaderUI.instance)
     if not ui or not ui.document then return end
@@ -4072,7 +3566,7 @@ function AllNotesViewer:showCurrentBookNotes()
     end
     local book_info = self:getBookInfo(book_path)
     local book_title = book_info and book_info.title or (book_path:match("([^/\\]+)$") or book_path)
-    self:showNotesForBook(book_path, book_title, annotations)
+    self:showNotesForBook(book_path, book_title, annotations, tab)
 end
 function AllNotesViewer:addToMainMenu(menu_items)
     if self.ui and self.ui.document then
@@ -4320,7 +3814,7 @@ function AllNotesViewer:findAllNotes()
     savePersistentCache(scanned)
     return notes_data
 end
-function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations)
+function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations, tab)
     local book_info = self:getBookInfo(book_path)
     local notes_list = {}
     local function split_tags(val)
@@ -4359,9 +3853,10 @@ function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations)
     end
     SortState.bm_tab = nil -- a new list starts sorted for the annotation tabs (see syncSortTab)
     NotesListWidget:sortNotesList(notes_list, SortState.get(true), true)
-    UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self, single_book = true, book_title = book_title })
+    UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self, single_book = true, book_title = book_title,
+        active_filter = tab and { notes_presence = tab } or nil })
 end
-function AllNotesViewer:showAllNotes()
+function AllNotesViewer:showAllNotes(tab)
     -- The first open after starting KOReader may have to read many books: say so
     local loading
     if not _persist then
@@ -4408,7 +3903,7 @@ function AllNotesViewer:showAllNotes()
     end
     SortState.bm_tab = nil -- a new list starts sorted for the annotation tabs (see syncSortTab)
     NotesListWidget:sortNotesList(notes_list, SortState.get(false), false)
-    local widget = NotesListWidget:new{ notes_list = notes_list, viewer = self }
+    local widget = NotesListWidget:new{ notes_list = notes_list, viewer = self, active_filter = tab and { notes_presence = tab } or nil }
     if loading then UIManager:close(loading) end
     UIManager:show(widget)
 end
@@ -5956,7 +5451,6 @@ function FilterScreen:build()
     local P = Screen:scaleBySize(24)
     local inner = W - P * 2 - (self.narrow and Page.SCROLL_EXTRA or 0)
     local thin = Size.border.button
-    local LIGHT = COLORS.line_light   -- row lines
     local MUTED = COLORS.muted
     local face15 = Font:getFace("cfont", 15)
     local face14 = Font:getFace("cfont", 14)
@@ -6089,8 +5583,9 @@ function FilterScreen:build()
     -- filters apply to every tab, so there is no "Notes" row here.)
 
     -- colour & style: chips for all colours and styles; "Hide these instead" flips
-    -- between showing only these and hiding these
-    do
+    -- between showing only these and hiding these. Not on the Bookmarks tab: bookmarks have no
+    -- colour or style, so these would do nothing there.
+    if list:tabKey() ~= "bookmarks" then
         local items = {}
         -- setting: only offer colours/styles that some highlight uses (off = offer all)
         local only_used = getSetting("hide_unused_cs", false) == true
@@ -6184,13 +5679,18 @@ function FilterScreen:build()
             return true
         end
         local chips = {}
+        -- A saved sort order belongs to the kind of tab it was saved on: the Bookmarks tab has its
+        -- own order, so an order saved there is only used there, and one saved on the annotation
+        -- tabs only there. The filters themselves apply on every tab.
+        local function sortHere(p) return p.sort and ((p.bm and true or false) == (SortState.bm_tab and true or false)) end
         for i, p in ipairs(presets) do
-            local on = same(p.filter or {}, list.active_filter or {}) and SortState.normView(p.sort or "", list.single_book) == SortState.normView(SortState.get(list.single_book), list.single_book)
+            local on = same(p.filter or {}, list.active_filter or {}) and (not sortHere(p)
+                or SortState.normView(p.sort, list.single_book) == SortState.normView(SortState.get(list.single_book), list.single_book))
             table.insert(chips, chip(p.name, on, function()
                 local presence = list.active_filter and list.active_filter.notes_presence
                 list.active_filter = deepCopy(p.filter) or {}
                 list.active_filter.notes_presence = presence
-                if p.sort and SortState.normView(p.sort, list.single_book) ~= SortState.normView(SortState.get(list.single_book), list.single_book) then
+                if sortHere(p) and SortState.normView(p.sort, list.single_book) ~= SortState.normView(SortState.get(list.single_book), list.single_book) then
                     SortState.set(list.single_book, p.sort)
                     list:applySort()
                 end
@@ -6226,7 +5726,8 @@ function FilterScreen:build()
                     if name == "" then name = string.format(_("Filter %d"), #presets + 1) end
                     local copy = deepCopy(list.active_filter) or {}
                     copy.notes_presence = nil
-                    table.insert(presets, { name = name, filter = copy, sort = SortState.get(list.single_book) })
+                    table.insert(presets, { name = name, filter = copy, sort = SortState.get(list.single_book),
+                        bm = SortState.bm_tab and true or nil })
                     setSetting("filter_presets", presets)
                     UIManager:close(dlg)
                     self:rebuild()
@@ -6482,7 +5983,6 @@ function SS:build()
         return row(label, sub, chips)
     end
     local list = self.list
-    local function back() self:rebuild() end
 
     local body = VerticalGroup:new{ align = "left" }
     local function add(w) table.insert(body, w) end
@@ -6569,21 +6069,9 @@ function SS:build()
         add(sectionBar(_("SPACING")))
         add(stepper(_("Between bookmarks"), nil, "bm_spacing",
             getSetting("bm_spacing", NoteItemWidget.DEFAULT_BM_SPACING), 0, 100, 2, NoteItemWidget.DEFAULT_BM_SPACING))
-    elseif self.page == "info" then
-        add(sectionBar(_("INFO ROW")))
-        add(toggle(_("Show book / info row"), nil, "show_info", getShowInfo))
-        add(fieldChips(_("Info row shows"), nil, getInfoFields, "info_fields"))
-        add(segment(_("Date"), { { "sort", _("When sorted by date") }, { "always", _("Always") } },
-            getSetting("info_date_when", "always"), function(v) setSetting("info_date_when", v); self:changed() end))
-        add(toggle(_("Title on each page"), nil, "repeat_title_on_page", getRepeatTitleOnPage))
-        add(toggle(_("Chapter headings in one book"), _("Heading above each chapter when you open a single book"), "chapter_headings", NoteItemWidget.showHeadings))
-        add(toggle(_("Chapter heading on each page"), nil, "repeat_chapter_on_page", NoteItemWidget.repeatChapter))
-        add(toggle(_("Chapter / date on each page"), nil, "repeat_info_on_page", getRepeatInfoOnPage))
-        add(toggle(_("Hide duplicate book header"), nil, "hide_dup_title", getHideDupTitle))
-        add(toggle(_("Hide duplicate info header"), nil, "hide_dup_info", getHideDupInfo))
-        add(fieldChips(_("Duplicate check"), _("Repeated info is hidden when these match"), getDedupInfoFields, "dedup_info_fields"))
-        -- how dates are written: in the list and on the annotation sheet, each its own year and time
-        -- month and clock: one choice for every date
+    elseif self.page == "dates" then
+        -- how dates are written: month and clock for every date, then year and time for the list
+        -- and for the annotation sheet, each its own
         add(sectionBar(_("DATE FORMAT")))
         local sample_t = os.time({ year = 2026, month = 9, day = 3, hour = 14 })
         add(segment(_("Month"), { { "short", "3 " .. NoteItemWidget.monthName(sample_t, false) },
@@ -6591,10 +6079,15 @@ function SS:build()
             function(v) setSetting("date_month", v); self:changed() end))
         local ko = rawget(_G, "G_reader_settings")
         local ko12 = ko and type(ko.isTrue) == "function" and ko:isTrue("twelve_hour_clock")
-        add(segment(_("Clock"), { { "koreader", ko12 and _("As KOReader (2:05 PM)") or _("As KOReader (14:05)") },
-                { "24", "14:05" }, { "12", "2:05 PM" } }, getSetting("date_clock", "koreader"),
+        local pm = NoteItemWidget.clockText("14:05", true)
+        add(segment(_("Clock"), { { "koreader", string.format(_("As KOReader (%s)"), ko12 and pm or "14:05") },
+                { "24", "14:05" }, { "12", pm } }, getSetting("date_clock", "koreader"),
             function(v) setSetting("date_clock", v); self:changed() end))
-        local places = { { "list", _("DATES IN THE LIST") }, { "sheet", _("DATES ON THE ANNOTATION SHEET") } }
+        -- above a highlight: always, or only when the order goes by date (bookmarks: Bookmarks page)
+        add(sectionBar(_("ABOVE HIGHLIGHTS")))
+        add(segment(_("Show the date"), { { "sort", _("When sorted by date") }, { "always", _("Always") } },
+            getSetting("info_date_when", "always"), function(v) setSetting("info_date_when", v); self:changed() end))
+        local places = { { "list", _("IN THE LIST") }, { "sheet", _("ON THE ANNOTATION SHEET") } }
         for n = 1, #places do
             local place = places[n]
             local where = place[1]
@@ -6605,6 +6098,17 @@ function SS:build()
             add(segment(_("Time"), { { "never", _("Never") }, { "recent", _("Today and yesterday") }, { "always", _("Always") } }, st.time,
                 function(v) setSetting("date_time_" .. where, v); self:changed() end))
         end
+    elseif self.page == "info" then
+        add(sectionBar(_("INFO ROW")))
+        add(toggle(_("Show book / info row"), nil, "show_info", getShowInfo))
+        add(fieldChips(_("Info row shows"), nil, getInfoFields, "info_fields"))
+        add(toggle(_("Title on each page"), nil, "repeat_title_on_page", getRepeatTitleOnPage))
+        add(toggle(_("Chapter headings in one book"), _("Heading above each chapter when you open a single book"), "chapter_headings", NoteItemWidget.showHeadings))
+        add(toggle(_("Chapter heading on each page"), nil, "repeat_chapter_on_page", NoteItemWidget.repeatChapter))
+        add(toggle(_("Chapter / date on each page"), nil, "repeat_info_on_page", getRepeatInfoOnPage))
+        add(toggle(_("Hide duplicate book header"), nil, "hide_dup_title", getHideDupTitle))
+        add(toggle(_("Hide duplicate info header"), nil, "hide_dup_info", getHideDupInfo))
+        add(fieldChips(_("Duplicate check"), _("Repeated info is hidden when these match"), getDedupInfoFields, "dedup_info_fields"))
     else
         add(sectionBar(_("LIST")))
         add(navRow(_("Text"), _("Fonts, sizes, capitals"),
@@ -6621,6 +6125,8 @@ function SS:build()
             add(navRow(_("Info row and repeats"), getShowInfo() and table.concat(names, " · ") or _("Off"),
                 function() UIManager:show(SS:new{ list = list, page = "info", parent_screen = self }, "flashui") end))
         end
+        add(navRow(_("Dates"), NoteItemWidget:formatDate(os.date("%Y-%m-%d 14:05:00", os.time() - 40 * 86400)) or "",
+            function() UIManager:show(SS:new{ list = list, page = "dates", parent_screen = self }, "flashui") end))
         add(navRow(_("Bookmarks"), _("Line size, date, spacing"),
             function() UIManager:show(SS:new{ list = list, page = "bookmarks", parent_screen = self }, "flashui") end))
         add(toggle(_("Counts on tabs"), nil, "show_total", getShowTotalNotes))
@@ -6634,12 +6140,17 @@ function SS:build()
             { "vertical", _("Vertical") }, { "disabled", _("Off") } }, getSwipeSetting(),
             function(v) setSetting("swipe_direction", v); self:changed() end))
 
+        add(sectionBar(_("KOREADER")))
+        add(segment(_("KOReader's Bookmarks list in a book"), { { "off", _("Keep KOReader's") }, { "all", _("Open here: All") },
+                { "bookmarks", _("Open here: Bookmarks") } }, getSetting("take_over_bookmarks", "off"),
+            function(v) setSetting("take_over_bookmarks", v); self:changed() end))
+
         add(sectionBar(_("FILTER")))
         add(toggle(_("Only offer used colours and styles"), nil, "hide_unused_cs",
             function() return getSetting("hide_unused_cs", false) == true end))
     end
 
-    local titles = { text = _("Text"), spacing = _("Spacing"), info = _("Info row and repeats"), bookmarks = _("Bookmarks") }
+    local titles = { text = _("Text"), spacing = _("Spacing"), info = _("Info row and repeats"), bookmarks = _("Bookmarks"), dates = _("Dates") }
     local right_items
     if self.page == "text" or self.page == "spacing" or self.page == "bookmarks" then
         local keys = ({ text = { "font_size" }, spacing = { "margins", "section_margin" } })[self.page] or {}
@@ -6670,7 +6181,7 @@ function SS:build()
     local header = Page.header(self, titles[self.page] or _("Settings"), function() self:onClose() end, right_items,
         not self.page, function() Page.exitAll(self) end)
     local top_group = VerticalGroup:new{ align = "left", header }
-    if self.page == "text" or self.page == "spacing" or self.page == "bookmarks" then
+    if self.page == "text" or self.page == "spacing" or self.page == "bookmarks" or self.page == "dates" then
         table.insert(top_group, Page.preview(self.list, math.floor(H * 0.26), self.page == "spacing", self.page == "bookmarks"))
     end
     local avail = H - top_group:getSize().h
@@ -7214,31 +6725,6 @@ function AllNotesViewer:showColorPicker(note, parent_widget)
     })
 end
 
-function AllNotesViewer:showStyleMenu(note, parent_widget)
-    local ButtonDialog = require("ui/widget/buttondialog")
-    local dialog
-    dialog = ButtonDialog:new{
-        title = _("Highlight Style"),
-        buttons = {
-            {
-                { text = _("Change Style"), callback = function()
-                    UIManager:close(dialog)
-                    self:showStylePicker(note, parent_widget)
-                end },
-            },
-            {
-                { text = _("Change Color"), callback = function()
-                    UIManager:close(dialog)
-                    self:showColorPicker(note, parent_widget)
-                end },
-            },
-            {
-                { text = _("Cancel"), callback = function() UIManager:close(dialog) end },
-            },
-        },
-    }
-    NotesListWidget.showDialog(dialog)
-end
 
 function AllNotesViewer:showStylePicker(note, parent_widget)
     local ButtonDialog = require("ui/widget/buttondialog")
