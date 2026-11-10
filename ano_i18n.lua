@@ -24,8 +24,10 @@ local function parsePO(path)
         entry_fuzzy = false
     end
 
+    -- one pass, so an escaped backslash before "n" stays a backslash and an "n"
+    local ESC = { n = "\n", t = "\t", ['"'] = '"', ["\\"] = "\\" }
     local function unescape(s)
-        return s:gsub("\\n", "\n"):gsub("\\t", "\t"):gsub('\\"', '"'):gsub("\\\\", "\\")
+        return (s:gsub("\\(.)", ESC))
     end
 
     for raw_line in f:lines() do

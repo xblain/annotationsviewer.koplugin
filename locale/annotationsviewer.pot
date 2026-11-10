@@ -1,1485 +1,1484 @@
 # Annotations Viewer — KOReader plugin
 # Translation template
 #
+#, fuzzy
 msgid ""
 msgstr ""
 "Project-Id-Version: annotationsviewer\n"
-"POT-Creation-Date: 2026-11-10 11:01+0800\n"
+"POT-Creation-Date: 2026-11-11 00:15+0100\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: _meta.lua:5
+#: _meta.lua:4
 msgid "Annotations Viewer"
 msgstr ""
 
-#: _meta.lua:6
+#: _meta.lua:5
 msgid ""
 "View all your notes and highlights from all books in a unified interface."
 msgstr ""
 
-#: main.lua:193
+#: main.lua:176
 msgid "Newest First"
 msgstr ""
 
-#: main.lua:194
+#: main.lua:177
 msgid "Oldest First"
 msgstr ""
 
-#: main.lua:195 main.lua:199 main.lua:203
+#: main.lua:178 main.lua:182 main.lua:186
 msgid "A to Z (by Date)"
 msgstr ""
 
-#: main.lua:196 main.lua:200 main.lua:204
+#: main.lua:179 main.lua:183 main.lua:187
 msgid "Z to A (by Date)"
 msgstr ""
 
-#: main.lua:197 main.lua:201 main.lua:205
+#: main.lua:180 main.lua:184 main.lua:188
 msgid "Location: Begin to End"
 msgstr ""
 
-#: main.lua:198 main.lua:202 main.lua:206
+#: main.lua:181 main.lua:185 main.lua:189
 msgid "Location: End to Begin"
 msgstr ""
 
-#: main.lua:207
+#: main.lua:190
 msgid "Last opened book first"
 msgstr ""
 
-#: main.lua:208
+#: main.lua:191
 msgid "Longest unopened book first"
 msgstr ""
 
-#: main.lua:222
+#: main.lua:197
 msgid "Font sizes"
 msgstr ""
 
-#: main.lua:224
+#: main.lua:199
 msgid "Title size: "
 msgstr ""
 
-#: main.lua:225
+#: main.lua:200
 msgid "Info size: "
 msgstr ""
 
-#: main.lua:226
+#: main.lua:201
 msgid "Content size: "
 msgstr ""
 
-#: main.lua:231
+#: main.lua:206
 msgid "Space between notes"
 msgstr ""
 
-#: main.lua:233
+#: main.lua:208
 msgid "Below the book title: "
 msgstr ""
 
-#: main.lua:234
+#: main.lua:209
 msgid "Below the chapter · date line: "
 msgstr ""
 
-#: main.lua:239
+#: main.lua:214
 msgid "Page margins"
 msgstr ""
 
-#: main.lua:241
+#: main.lua:216
 msgid "Top padding: "
 msgstr ""
 
-#: main.lua:242
+#: main.lua:217
 msgid "Horizontal margin: "
 msgstr ""
 
-#: main.lua:243
+#: main.lua:218
 msgid "Landscape width (%): "
 msgstr ""
 
-#: main.lua:244
+#: main.lua:219
 msgid "Between annotations: "
 msgstr ""
 
-#: main.lua:245
+#: main.lua:220
 msgid "Space above the note: "
 msgstr ""
 
-#: main.lua:246
+#: main.lua:221
 msgid "Extra indent for the note: "
 msgstr ""
 
-#: main.lua:247
+#: main.lua:222
 msgid "Line spacing: "
 msgstr ""
 
-#: main.lua:248
+#: main.lua:223
 msgid "Text indent: "
 msgstr ""
 
-#: main.lua:822 main.lua:1925 main.lua:2058 main.lua:2760 main.lua:2794
-#: main.lua:6177 main.lua:6290
+#: main.lua:803 main.lua:2165 main.lua:2294 main.lua:6093 main.lua:6251
 msgid "Chapter"
 msgstr ""
 
-#: main.lua:1307
+#: main.lua:935
+msgid "Page"
+msgstr ""
+
+#: main.lua:1017 main.lua:2856
+msgid "Bookmark"
+msgstr ""
+
+#: main.lua:1489
 msgid "Today"
 msgstr ""
 
-#: main.lua:1308
+#: main.lua:1490
 msgid "Yesterday"
 msgstr ""
 
-#: main.lua:1400 main.lua:3262
+#: main.lua:1582
 msgid "Search: "
 msgstr ""
 
-#: main.lua:1405
+#: main.lua:1587
 msgid "Notes only"
 msgstr ""
 
-#: main.lua:1407
+#: main.lua:1589
 msgid "Without notes"
 msgstr ""
 
-#: main.lua:1892 main.lua:4991
+#: main.lua:1591 main.lua:2553 main.lua:6259 main.lua:6281
+msgid "Bookmarks"
+msgstr ""
+
+#: main.lua:2028
 msgid "Prev"
 msgstr ""
 
-#: main.lua:1897 main.lua:4994
+#: main.lua:2031
 msgid "Next"
 msgstr ""
 
-#: main.lua:1916 main.lua:1924 main.lua:2759 main.lua:2793 main.lua:6177
-#: main.lua:6290
+#: main.lua:2156 main.lua:2164 main.lua:6093 main.lua:6251
 msgid "Author"
 msgstr ""
 
-#: main.lua:1916 main.lua:1924
+#: main.lua:2156 main.lua:2164
 msgid "Book"
 msgstr ""
 
-#: main.lua:1916 main.lua:1925
+#: main.lua:2156 main.lua:2165
 msgid "Filename"
 msgstr ""
 
-#: main.lua:1918 main.lua:1927
+#: main.lua:2158 main.lua:2167
 msgid "Newest first"
 msgstr ""
 
-#: main.lua:1918 main.lua:1927
+#: main.lua:2158 main.lua:2167
 msgid "Oldest first"
 msgstr ""
 
-#: main.lua:1919
+#: main.lua:2159
 msgid "A–Z"
 msgstr ""
 
-#: main.lua:1919
+#: main.lua:2159
 msgid "Z–A"
 msgstr ""
 
-#: main.lua:1920
-msgid "start to end"
-msgstr ""
-
-#: main.lua:1920
+#: main.lua:2160
 msgid "end to start"
 msgstr ""
 
-#: main.lua:1921
+#: main.lua:2160
+msgid "start to end"
+msgstr ""
+
+#: main.lua:2161
 msgid "Last opened first"
 msgstr ""
 
-#: main.lua:1921
+#: main.lua:2161
 msgid "Longest unopened first"
 msgstr ""
 
-#: main.lua:1924 main.lua:2758 main.lua:2792 main.lua:6177 main.lua:6290
+#: main.lua:2164 main.lua:6093 main.lua:6194 main.lua:6251
 msgid "Date"
 msgstr ""
 
-#: main.lua:1924 main.lua:5279 main.lua:5491
+#: main.lua:2164 main.lua:5305
 msgid "Last opened book"
 msgstr ""
 
-#: main.lua:1925
+#: main.lua:2165
 msgid "Place in book"
 msgstr ""
 
-#: main.lua:1928
+#: main.lua:2168
 msgid "Longest ago first"
 msgstr ""
 
-#: main.lua:1928
+#: main.lua:2168
 msgid "Most recent first"
 msgstr ""
 
-#: main.lua:1929
+#: main.lua:2169
 msgid "Author A to Z"
 msgstr ""
 
-#: main.lua:1929
+#: main.lua:2169
 msgid "Author Z to A"
 msgstr ""
 
-#: main.lua:1930
+#: main.lua:2170
 msgid "Title A to Z"
 msgstr ""
 
-#: main.lua:1930
+#: main.lua:2170
 msgid "Title Z to A"
 msgstr ""
 
-#: main.lua:1931
+#: main.lua:2171
 msgid "Filename A to Z"
 msgstr ""
 
-#: main.lua:1931
+#: main.lua:2171
 msgid "Filename Z to A"
 msgstr ""
 
-#: main.lua:1932
-msgid "Start of book first"
-msgstr ""
-
-#: main.lua:1932
+#: main.lua:2172
 msgid "End of book first"
 msgstr ""
 
-#: main.lua:1933 main.lua:1949
-msgid "From the start"
+#: main.lua:2172
+msgid "Start of book first"
 msgstr ""
 
-#: main.lua:1933 main.lua:1949
+#: main.lua:2173 main.lua:2185
 msgid "From the end"
 msgstr ""
 
-#: main.lua:1936 main.lua:1940 main.lua:1953 main.lua:5278 main.lua:5490
-#: main.lua:5602
+#: main.lua:2173 main.lua:2185
+msgid "From the start"
+msgstr ""
+
+#: main.lua:2176 main.lua:2189 main.lua:5304
 msgid "Newest"
 msgstr ""
 
-#: main.lua:1936 main.lua:1940 main.lua:1953 main.lua:5278 main.lua:5490
-#: main.lua:5602
+#: main.lua:2176 main.lua:2189 main.lua:5304
 msgid "Oldest"
 msgstr ""
 
-#: main.lua:1937 main.lua:1941 main.lua:1945 main.lua:2061
+#: main.lua:2177 main.lua:2181 main.lua:2297
 msgid "Position"
 msgstr ""
 
-#: main.lua:1937 main.lua:1941 main.lua:2061
+#: main.lua:2177 main.lua:2297
 msgid "Reverse position"
 msgstr ""
 
-#: main.lua:1942
+#: main.lua:2178
 msgid "Chapter, newest first"
 msgstr ""
 
-#: main.lua:1942
+#: main.lua:2178
 msgid "Chapter, oldest first"
 msgstr ""
 
-#: main.lua:1954
+#: main.lua:2190
 msgid "Opened long ago"
 msgstr ""
 
-#: main.lua:1954
+#: main.lua:2190
 msgid "Opened recently"
 msgstr ""
 
-#: main.lua:1955
+#: main.lua:2191
 msgid "Authors A–Z"
 msgstr ""
 
-#: main.lua:1955
+#: main.lua:2191
 msgid "Authors Z–A"
 msgstr ""
 
-#: main.lua:1956
+#: main.lua:2192
 msgid "Titles A–Z"
 msgstr ""
 
-#: main.lua:1956
+#: main.lua:2192
 msgid "Titles Z–A"
 msgstr ""
 
-#: main.lua:1957
+#: main.lua:2193
 msgid "Filenames A–Z"
 msgstr ""
 
-#: main.lua:1957
+#: main.lua:2193
 msgid "Filenames Z–A"
 msgstr ""
 
-#: main.lua:1958
-msgid "Start to end"
-msgstr ""
-
-#: main.lua:1958
+#: main.lua:2194
 msgid "End to start"
 msgstr ""
 
-#: main.lua:1959
-msgid "Chapters start to end"
+#: main.lua:2194
+msgid "Start to end"
 msgstr ""
 
-#: main.lua:1959
+#: main.lua:2195
 msgid "Chapters end to start"
 msgstr ""
 
-#: main.lua:1979
-msgid "in book order"
+#: main.lua:2195
+msgid "Chapters start to end"
 msgstr ""
 
-#: main.lua:1979
+#: main.lua:2215
 msgid "from the end of the book"
 msgstr ""
 
-#: main.lua:1983
+#: main.lua:2215
+msgid "in book order"
+msgstr ""
+
+#: main.lua:2219
 msgid "Chapters from the start of the book"
 msgstr ""
 
-#: main.lua:1984
+#: main.lua:2220
 msgid "Chapters from the end of the book"
 msgstr ""
 
-#: main.lua:1987
+#: main.lua:2223
 msgid ", highlights in book order within each chapter."
 msgstr ""
 
-#: main.lua:1988
+#: main.lua:2224
 msgid ", highlights from the end of each chapter."
 msgstr ""
 
-#: main.lua:1990
+#: main.lua:2226
 msgid ", newest days first within each chapter"
 msgstr ""
 
-#: main.lua:1991
+#: main.lua:2227
 msgid ", oldest days first within each chapter"
 msgstr ""
 
-#: main.lua:1992 main.lua:2000
+#: main.lua:2228 main.lua:2236
 msgid "the same day "
 msgstr ""
 
-#: main.lua:1996
+#: main.lua:2232
 msgid "Highlights by position in the book, from the start."
 msgstr ""
 
-#: main.lua:1997
+#: main.lua:2233
 msgid "Highlights by position in the book, from the end."
 msgstr ""
 
-#: main.lua:1999
+#: main.lua:2235
 msgid "Newest highlights first"
 msgstr ""
 
-#: main.lua:1999
+#: main.lua:2235
 msgid "Oldest highlights first"
 msgstr ""
 
-#: main.lua:2027
-msgid "Within an author, "
-msgstr ""
-
-#: main.lua:2027
-msgid "Within a day, "
-msgstr ""
-
-#: main.lua:2027
+#: main.lua:2263
 msgid "Within a book, "
 msgstr ""
 
-#: main.lua:2031
+#: main.lua:2263
+msgid "Within a day, "
+msgstr ""
+
+#: main.lua:2263
+msgid "Within an author, "
+msgstr ""
+
+#: main.lua:2267
 msgid "newest highlights first"
 msgstr ""
 
-#: main.lua:2031
+#: main.lua:2267
 msgid "oldest highlights first"
 msgstr ""
 
-#: main.lua:2032
+#: main.lua:2268
 msgid "Newest days first"
 msgstr ""
 
-#: main.lua:2032
+#: main.lua:2268
 msgid "Oldest days first"
 msgstr ""
 
-#: main.lua:2033
+#: main.lua:2269
 msgid "Newest highlights first, across all books"
 msgstr ""
 
-#: main.lua:2033
+#: main.lua:2269
 msgid "Oldest highlights first, across all books"
 msgstr ""
 
-#: main.lua:2035
-msgid "from the start to the end"
-msgstr ""
-
-#: main.lua:2035
+#: main.lua:2271
 msgid "from the end to the start"
 msgstr ""
 
-#: main.lua:2038
+#: main.lua:2271
+msgid "from the start to the end"
+msgstr ""
+
+#: main.lua:2274
 msgid "authors A to Z"
 msgstr ""
 
-#: main.lua:2038
+#: main.lua:2274
 msgid "authors Z to A"
 msgstr ""
 
-#: main.lua:2039
-msgid "books opened most recently first"
-msgstr ""
-
-#: main.lua:2039
+#: main.lua:2275
 msgid "books opened longest ago first"
 msgstr ""
 
-#: main.lua:2040
+#: main.lua:2275
+msgid "books opened most recently first"
+msgstr ""
+
+#: main.lua:2276
 msgid "books by title A to Z"
 msgstr ""
 
-#: main.lua:2040
+#: main.lua:2276
 msgid "books by title Z to A"
 msgstr ""
 
-#: main.lua:2041
+#: main.lua:2277
 msgid "books by filename A to Z"
 msgstr ""
 
-#: main.lua:2041
+#: main.lua:2277
 msgid "books by filename Z to A"
 msgstr ""
 
-#: main.lua:2045
+#: main.lua:2281
 msgid "Books by title A to Z. Within a book, "
 msgstr ""
 
-#: main.lua:2055
+#: main.lua:2291
 msgid "Newest · position"
 msgstr ""
 
-#: main.lua:2055
+#: main.lua:2291
 msgid "Oldest · position"
 msgstr ""
 
-#: main.lua:2058
+#: main.lua:2294
 msgid "Reverse chapter"
 msgstr ""
 
-#: main.lua:2059
+#: main.lua:2295
 msgid "Chapter · newest"
 msgstr ""
 
-#: main.lua:2059
+#: main.lua:2295
 msgid "Chapter · oldest"
 msgstr ""
 
-#: main.lua:2081 main.lua:4150 main.lua:6803
-msgid "Lighten"
-msgstr ""
-
-#: main.lua:2081 main.lua:4150 main.lua:6804
-msgid "Underline"
-msgstr ""
-
-#: main.lua:2081 main.lua:4151
-msgid "Strikeout"
-msgstr ""
-
-#: main.lua:2081 main.lua:4151 main.lua:6806
+#: main.lua:2317 main.lua:4037 main.lua:6863
 msgid "Invert"
 msgstr ""
 
-#: main.lua:2111 main.lua:2124 main.lua:2128 main.lua:2132
+#: main.lua:2317 main.lua:4036 main.lua:6860
+msgid "Lighten"
+msgstr ""
+
+#: main.lua:2317 main.lua:4037
+msgid "Strikeout"
+msgstr ""
+
+#: main.lua:2317 main.lua:4036 main.lua:6861
+msgid "Underline"
+msgstr ""
+
+#: main.lua:2347 main.lua:2360 main.lua:2364 main.lua:2368
 msgid "Hide"
 msgstr ""
 
-#: main.lua:2122 main.lua:2124
+#: main.lua:2358 main.lua:2360
 #, lua-format
 msgid "%d books"
 msgstr ""
 
-#: main.lua:2126 main.lua:2128
+#: main.lua:2362 main.lua:2364
 #, lua-format
 msgid "%d chapters"
 msgstr ""
 
-#: main.lua:2130 main.lua:2132
+#: main.lua:2366 main.lua:2368
 #, lua-format
 msgid "%d tags"
 msgstr ""
 
-#: main.lua:2136
+#: main.lua:2372
 msgid "Highlight:"
 msgstr ""
 
-#: main.lua:2139
+#: main.lua:2375
 msgid "Highlight not:"
 msgstr ""
 
-#: main.lua:2142
+#: main.lua:2378
 msgid "Note:"
 msgstr ""
 
-#: main.lua:2145
+#: main.lua:2381
 msgid "Note not:"
 msgstr ""
 
-#: main.lua:2157 main.lua:2214 main.lua:5720
+#: main.lua:2393 main.lua:2450 main.lua:5655
 #, lua-format
 msgid "%d of %d"
 msgstr ""
 
-#: main.lua:2188
+#: main.lua:2424 main.lua:2742
 msgid "Clear all"
 msgstr ""
 
-#: main.lua:2247 main.lua:2265 main.lua:2583 main.lua:3821
+#: main.lua:2484 main.lua:2500 main.lua:2841 main.lua:3497 main.lua:3559
+#: main.lua:3678 main.lua:3693
 msgid "Annotations"
 msgstr ""
 
-#: main.lua:2250
-msgid "1 annotation"
-msgstr ""
-
-#: main.lua:2250
-#, lua-format
-msgid "%d annotations"
-msgstr ""
-
-#: main.lua:2312 main.lua:5772 main.lua:6589
+#: main.lua:2548 main.lua:6558
 msgid "All"
 msgstr ""
 
-#: main.lua:2313
+#: main.lua:2549
 msgid "Highlights"
 msgstr ""
 
-#: main.lua:2314 main.lua:5788
+#: main.lua:2550
 msgid "Notes"
 msgstr ""
 
-#: main.lua:2390 main.lua:3153 main.lua:4757 main.lua:5160 main.lua:5953
-#: main.lua:6653 main.lua:6793 main.lua:6819 main.lua:6937
+#: main.lua:2644 main.lua:3037 main.lua:4673 main.lua:5081 main.lua:5867
+#: main.lua:6622 main.lua:6876 main.lua:7005
 msgid "Cancel"
 msgstr ""
 
-#: main.lua:2391 main.lua:3154 main.lua:6561 main.lua:6654
+#: main.lua:2645 main.lua:3038 main.lua:6530 main.lua:6623
 msgid "Clear"
 msgstr ""
 
-#: main.lua:2392 main.lua:3164 main.lua:6655
+#: main.lua:2646 main.lua:3048 main.lua:6624
 msgid "Search"
 msgstr ""
 
-#: main.lua:2395
+#: main.lua:2649
 msgid "Search annotations"
 msgstr ""
 
-#: main.lua:2397
+#: main.lua:2651
 msgid "Words in highlights or notes"
 msgstr ""
 
-#: main.lua:2482
-#, lua-format
-msgid "1 more annotation is hidden by filters"
-msgstr ""
-
-#: main.lua:2482
+#: main.lua:2736
 #, lua-format
 msgid "%d more annotations are hidden by filters"
 msgstr ""
 
-#: main.lua:2484
-msgid "Show all"
+#: main.lua:2736
+msgid "1 more annotation is hidden by filters"
 msgstr ""
 
-#: main.lua:2585
+#: main.lua:2738
+#, lua-format
+msgid "%d more bookmarks are hidden by filters"
+msgstr ""
+
+#: main.lua:2738
+msgid "1 more bookmark is hidden by filters"
+msgstr ""
+
+#: main.lua:2843
 msgid "Filter"
 msgstr ""
 
-#: main.lua:2600 main.lua:4388
+#: main.lua:2862 main.lua:4275
 msgid "page"
 msgstr ""
 
-#: main.lua:2611
+#: main.lua:2873
 msgid "Note"
 msgstr ""
 
-#: main.lua:2623
+#: main.lua:2885
 msgid "Nothing to export."
 msgstr ""
 
-#: main.lua:2632
+#: main.lua:2894
 msgid "Export failed:"
 msgstr ""
 
-#: main.lua:2702
-msgid "Prev / Next Buttons"
-msgstr ""
-
-#: main.lua:2703 main.lua:6299
-msgid "Scrollbar"
-msgstr ""
-
-#: main.lua:2704
-msgid "Scrollbar + Buttons"
-msgstr ""
-
-#: main.lua:2705 main.lua:2727 main.lua:2761 main.lua:2795 main.lua:3339
-msgid "Back"
-msgstr ""
-
-#: main.lua:2710
-msgid "Pagination Style"
-msgstr ""
-
-#: main.lua:2723
-msgid "Both (horizontal + vertical)"
-msgstr ""
-
-#: main.lua:2724
-msgid "Horizontal only"
-msgstr ""
-
-#: main.lua:2725
-msgid "Vertical only"
-msgstr ""
-
-#: main.lua:2726
-msgid "Disabled"
-msgstr ""
-
-#: main.lua:2732
-msgid "Swipe Gestures"
-msgstr ""
-
-#: main.lua:2766
-msgid "Show Info Header: Fields"
-msgstr ""
-
-#: main.lua:2800
-msgid "Hide Repeat Info: Match By"
-msgstr ""
-
-#: main.lua:2819
+#: main.lua:2960
 msgid "Set"
 msgstr ""
 
-#: main.lua:3075 main.lua:6754
-msgid "Gray"
-msgstr ""
-
-#: main.lua:3081
-msgid "Clear Filter"
-msgstr ""
-
-#: main.lua:3084 main.lua:3235
-msgid "Exclude Color/Style"
-msgstr ""
-
-#: main.lua:3084 main.lua:3235
-msgid "Filter by Color/Style"
-msgstr ""
-
-#: main.lua:3138
+#: main.lua:3022
 msgid "All Words"
 msgstr ""
 
-#: main.lua:3139
+#: main.lua:3023
 msgid "Any Word"
 msgstr ""
 
-#: main.lua:3140
+#: main.lua:3024
 msgid "Exact Phrase"
 msgstr ""
 
-#: main.lua:3144
-msgid "Case-Sensitive: On"
-msgstr ""
-
-#: main.lua:3144
+#: main.lua:3028
 msgid "Case-Sensitive: Off"
 msgstr ""
 
-#: main.lua:3164
+#: main.lua:3028
+msgid "Case-Sensitive: On"
+msgstr ""
+
+#: main.lua:3048
 msgid "Exclude"
 msgstr ""
 
-#: main.lua:3214
-msgid "Filter by Book"
+#: main.lua:3498 main.lua:3686 main.lua:3699
+msgid "Annotations: Bookmarks"
 msgstr ""
 
-#: main.lua:3221
-msgid "Filter by Chapter"
+#: main.lua:3526
+msgid "Annotations (this book, old)"
 msgstr ""
 
-#: main.lua:3228
-msgid "Filter by Tags"
-msgstr ""
-
-#: main.lua:3237
-msgid "Mode: Exclude"
-msgstr ""
-
-#: main.lua:3237
-msgid "Mode: Filter"
-msgstr ""
-
-#: main.lua:3266
-msgid "Clear Search"
-msgstr ""
-
-#: main.lua:3274
-msgid "Search Highlights and Notes…"
-msgstr ""
-
-#: main.lua:3281
-msgid "Filter by Highlight Text"
-msgstr ""
-
-#: main.lua:3283 main.lua:5997 main.lua:5998
-msgid "Words in highlighted text…"
-msgstr ""
-
-#: main.lua:3285
-msgid "Exclude by Highlight Text"
-msgstr ""
-
-#: main.lua:3287
-msgid "Words to hide highlighted text…"
-msgstr ""
-
-#: main.lua:3291
-msgid "Filter by Note Text"
-msgstr ""
-
-#: main.lua:3293
-msgid "Words in annotation notes…"
-msgstr ""
-
-#: main.lua:3295
-msgid "Exclude by Note Text"
-msgstr ""
-
-#: main.lua:3297
-msgid "Words to hide annotation notes…"
-msgstr ""
-
-#: main.lua:3306
-msgid "With Notes Only"
-msgstr ""
-
-#: main.lua:3308
-msgid "Highlights Only (no notes)"
-msgstr ""
-
-#: main.lua:3310
-msgid "Notes: All"
-msgstr ""
-
-#: main.lua:3330
-msgid "Clear All Filters"
-msgstr ""
-
-#: main.lua:3347
-msgid "Annotation Filters"
-msgstr ""
-
-#: main.lua:3771
-msgid "Show all annotations"
-msgstr ""
-
-#: main.lua:3777
-msgid "Show current book annotations"
-msgstr ""
-
-#: main.lua:3815
-msgid "Book Annotations"
-msgstr ""
-
-#: main.lua:4390 main.lua:4434
+#: main.lua:4279 main.lua:4323
 msgid "Annotation"
 msgstr ""
 
-#: main.lua:4438
+#: main.lua:4327
 msgid "Tap the highlight to read all of it"
 msgstr ""
 
-#: main.lua:4446
-msgid "Edit"
-msgstr ""
-
-#: main.lua:4446 main.lua:6939
+#: main.lua:4335 main.lua:7007
 msgid "Add note"
 msgstr ""
 
-#: main.lua:4453 main.lua:6267
+#: main.lua:4335
+msgid "Edit"
+msgstr ""
+
+#: main.lua:4342 main.lua:6182
 msgid "YOUR NOTE"
 msgstr ""
 
-#: main.lua:4462
+#: main.lua:4351
 msgid "No note yet."
 msgstr ""
 
-#: main.lua:4468
+#: main.lua:4359
 msgid "STYLE"
 msgstr ""
 
-#: main.lua:4506
+#: main.lua:4397
 msgid "COLOUR"
 msgstr ""
 
-#: main.lua:4562
-msgid "Go to note"
-msgstr ""
-
-#: main.lua:4562
+#: main.lua:4454
 msgid "Go to highlight"
 msgstr ""
 
-#: main.lua:4569 main.lua:5162 main.lua:5918
+#: main.lua:4454
+msgid "Go to note"
+msgstr ""
+
+#: main.lua:4456
+msgid "Go to bookmark"
+msgstr ""
+
+#: main.lua:4456
+msgid "Go to page"
+msgstr ""
+
+#: main.lua:4465 main.lua:5083 main.lua:5831
 msgid "Delete"
 msgstr ""
 
-#: main.lua:5028
-msgid "Show 1 annotation"
+#: main.lua:4937
+#, lua-format
+msgid "Show %d bookmarks"
 msgstr ""
 
-#: main.lua:5028
+#: main.lua:4937
+msgid "Show 1 bookmark"
+msgstr ""
+
+#: main.lua:4939
 #, lua-format
 msgid "Show %d annotations"
 msgstr ""
 
-#: main.lua:5118
+#: main.lua:4939
+msgid "Show 1 annotation"
+msgstr ""
+
+#: main.lua:5029
 msgid "Loading annotations…"
 msgstr ""
 
-#: main.lua:5120
+#: main.lua:5031
 msgid "Reading your books. Only the first time after starting KOReader."
 msgstr ""
 
-#: main.lua:5135
-msgid "Delete this highlight?"
-msgstr ""
-
-#: main.lua:5135
+#: main.lua:5046
 msgid "Delete this annotation?"
 msgstr ""
 
-#: main.lua:5154
-msgid "Your note on it is deleted too. This can’t be undone."
+#: main.lua:5046
+msgid "Delete this highlight?"
 msgstr ""
 
-#: main.lua:5154
+#: main.lua:5047
+msgid "Delete this bookmark?"
+msgstr ""
+
+#: main.lua:5075
 msgid "This can’t be undone."
 msgstr ""
 
-#: main.lua:5181
-msgid "Exported 1 annotation"
+#: main.lua:5075
+msgid "Your note on it is deleted too. This can’t be undone."
 msgstr ""
 
-#: main.lua:5181
+#: main.lua:5102
 #, lua-format
 msgid "Exported %d annotations"
 msgstr ""
 
-#: main.lua:5205 main.lua:5756 main.lua:6696
+#: main.lua:5102
+msgid "Exported 1 annotation"
+msgstr ""
+
+#: main.lua:5104
+#, lua-format
+msgid "Exported %d bookmarks"
+msgstr ""
+
+#: main.lua:5104
+msgid "Exported 1 bookmark"
+msgstr ""
+
+#: main.lua:5129 main.lua:5690 main.lua:6776
 msgid "Books"
 msgstr ""
 
-#: main.lua:5206
-msgid "Filtered"
-msgstr ""
-
-#: main.lua:5206
+#: main.lua:5130
 #, lua-format
 msgid "All %d"
 msgstr ""
 
-#: main.lua:5210
+#: main.lua:5130
+msgid "Filtered"
+msgstr ""
+
+#: main.lua:5134
 msgid "Export to Markdown"
 msgstr ""
 
-#: main.lua:5211
+#: main.lua:5135
 #, lua-format
 msgid "%d shown"
 msgstr ""
 
-#: main.lua:5212
+#: main.lua:5136
 msgid "Reload annotations"
 msgstr ""
 
-#: main.lua:5215 main.lua:6336
+#: main.lua:5139 main.lua:6309
 msgid "Settings"
 msgstr ""
 
-#: main.lua:5278 main.lua:5490 main.lua:5603
-msgid "Book A–Z"
-msgstr ""
-
-#: main.lua:5279 main.lua:5491 main.lua:5603
-msgid "Author A–Z"
-msgstr ""
-
-#: main.lua:5280 main.lua:5492
-msgid "In book order"
-msgstr ""
-
-#: main.lua:5372 main.lua:5513 main.lua:5519
-msgid "Quick picks"
-msgstr ""
-
-#: main.lua:5385 main.lua:5521
-msgid "Sort by"
-msgstr ""
-
-#: main.lua:5385 main.lua:5521
-msgid "Then by"
-msgstr ""
-
-#: main.lua:5385 main.lua:5521
+#: main.lua:5265 main.lua:5461
 msgid "And then by"
 msgstr ""
 
-#: main.lua:5398 main.lua:5527 main.lua:5530
+#: main.lua:5265 main.lua:5461 main.lua:5785
+msgid "Sort by"
+msgstr ""
+
+#: main.lua:5265 main.lua:5461
+msgid "Then by"
+msgstr ""
+
+#: main.lua:5278 main.lua:5467 main.lua:5470
 msgid "None"
 msgstr ""
 
-#: main.lua:5568
+#: main.lua:5304
+msgid "Book A–Z"
+msgstr ""
+
+#: main.lua:5305
+msgid "Author A–Z"
+msgstr ""
+
+#: main.lua:5306
+msgid "In book order"
+msgstr ""
+
+#: main.lua:5348 main.lua:5453 main.lua:5459 main.lua:6693
+msgid "Quick picks"
+msgstr ""
+
+#: main.lua:5508
 msgid "No annotations yet"
 msgstr ""
 
-#: main.lua:5570
+#: main.lua:5510
 msgid "Highlight a passage in this book and it shows up here."
 msgstr ""
 
-#: main.lua:5571
+#: main.lua:5511
 msgid "Highlight a passage in any book and it shows up here."
 msgstr ""
 
-#: main.lua:5576
-msgid "Nothing matches"
-msgstr ""
-
-#: main.lua:5576
+#: main.lua:5516
 msgid "Nothing here"
 msgstr ""
 
-#: main.lua:5580
+#: main.lua:5516
+msgid "Nothing matches"
+msgstr ""
+
+#: main.lua:5521
 msgid "No annotations in this view."
 msgstr ""
 
-#: main.lua:5582
+#: main.lua:5521
+msgid "No bookmarks in this view."
+msgstr ""
+
+#: main.lua:5523
 msgid "No annotations fit these filters."
 msgstr ""
 
-#: main.lua:5583
-msgid "1 is hidden."
+#: main.lua:5523
+msgid "No bookmarks fit these filters."
 msgstr ""
 
-#: main.lua:5583
+#: main.lua:5524
 #, lua-format
 msgid "%d are hidden."
 msgstr ""
 
-#: main.lua:5588
+#: main.lua:5524
+msgid "1 is hidden."
+msgstr ""
+
+#: main.lua:5529
 msgid "Clear filters"
 msgstr ""
 
-#: main.lua:5604
-msgid "Position in book"
-msgstr ""
-
-#: main.lua:5718
+#: main.lua:5653
 msgid "Any"
 msgstr ""
 
-#: main.lua:5720
+#: main.lua:5655
 #, lua-format
 msgid "%d chosen"
 msgstr ""
 
-#: main.lua:5721
+#: main.lua:5656
 #, lua-format
 msgid "%d hidden"
 msgstr ""
 
-#: main.lua:5743 main.lua:6307
+#: main.lua:5678 main.lua:6276
 msgid "FILTER"
 msgstr ""
 
-#: main.lua:5760 main.lua:6738
+#: main.lua:5694 main.lua:6820
 msgid "Tags"
 msgstr ""
 
-#: main.lua:5764 main.lua:6720
+#: main.lua:5698 main.lua:6801
 msgid "Chapters"
 msgstr ""
 
-#: main.lua:5772
-msgid "With a note"
-msgstr ""
-
-#: main.lua:5772
-msgid "Without"
-msgstr ""
-
-#: main.lua:5831
-msgid "Show only these instead"
-msgstr ""
-
-#: main.lua:5831
+#: main.lua:5741
 msgid "Hide these instead"
 msgstr ""
 
-#: main.lua:5837
-msgid "Hide colour & style"
+#: main.lua:5741
+msgid "Show only these instead"
 msgstr ""
 
-#: main.lua:5837
+#: main.lua:5747
 msgid "Colour & style"
 msgstr ""
 
-#: main.lua:5848
+#: main.lua:5747
+msgid "Hide colour & style"
+msgstr ""
+
+#: main.lua:5758
 msgid "Search highlights and notes"
 msgstr ""
 
-#: main.lua:5860
+#: main.lua:5770
 msgid "More text filters"
 msgstr ""
 
-#: main.lua:5863
+#: main.lua:5773
 msgid "Text contains"
 msgstr ""
 
-#: main.lua:5870
+#: main.lua:5782
 msgid "SORT"
 msgstr ""
 
-#: main.lua:5886
-msgid "More…"
-msgstr ""
-
-#: main.lua:5892
+#: main.lua:5790
 msgid "SAVED FILTERS"
 msgstr ""
 
-#: main.lua:5917
+#: main.lua:5830
 #, lua-format
 msgid "Delete the saved filter “%s”?"
 msgstr ""
 
-#: main.lua:5927
+#: main.lua:5840
 msgid "Nothing saved yet."
 msgstr ""
 
-#: main.lua:5931
+#: main.lua:5844
 msgid "Hold one to delete it."
 msgstr ""
 
-#: main.lua:5934
+#: main.lua:5847
 msgid "Save current filters…"
 msgstr ""
 
-#: main.lua:5942
+#: main.lua:5855
 #, lua-format
 msgid "Filter %d"
 msgstr ""
 
-#: main.lua:5950
-msgid "Save filters"
-msgstr ""
-
-#: main.lua:5950
+#: main.lua:5864
 msgid "Name"
 msgstr ""
 
-#: main.lua:5951
-msgid "Saves the filters and sort order as they are now."
+#: main.lua:5864
+msgid "Save filters"
 msgstr ""
 
-#: main.lua:5954 main.lua:6949
+#: main.lua:5865
+msgid ""
+"Saves the filters and the sort orders (annotations and bookmarks) as they "
+"are now."
+msgstr ""
+
+#: main.lua:5868 main.lua:7017
 msgid "Save"
 msgstr ""
 
-#: main.lua:5961
+#: main.lua:5875
 msgid "Filter & sort"
 msgstr ""
 
-#: main.lua:5962
+#: main.lua:5876
 msgid "Reset all"
 msgstr ""
 
-#: main.lua:5995
+#: main.lua:5911
 msgid "Text filters"
 msgstr ""
 
-#: main.lua:5997
+#: main.lua:5913
 msgid "Highlight contains"
 msgstr ""
 
-#: main.lua:5998
+#: main.lua:5913 main.lua:5914
+msgid "Words in highlighted text…"
+msgstr ""
+
+#: main.lua:5914
 msgid "Highlight doesn't contain"
 msgstr ""
 
-#: main.lua:5999
+#: main.lua:5915
 msgid "Note contains"
 msgstr ""
 
-#: main.lua:5999 main.lua:6000
+#: main.lua:5915 main.lua:5916
 msgid "Words in your notes…"
 msgstr ""
 
-#: main.lua:6000
+#: main.lua:5916
 msgid "Note doesn't contain"
 msgstr ""
 
-#: main.lua:6001
+#: main.lua:5917
 msgid "Close"
 msgstr ""
 
-#: main.lua:6215
+#: main.lua:6130
 msgid "FONTS"
 msgstr ""
 
-#: main.lua:6216
+#: main.lua:6131
 msgid "Title font"
 msgstr ""
 
-#: main.lua:6217
+#: main.lua:6132
 msgid "Info font"
 msgstr ""
 
-#: main.lua:6218 main.lua:6220
+#: main.lua:6133 main.lua:6135
 msgid "Author font"
 msgstr ""
 
-#: main.lua:6219
+#: main.lua:6134 main.lua:6188
 msgid "Same as info"
 msgstr ""
 
-#: main.lua:6222
+#: main.lua:6137
 msgid "Content font"
 msgstr ""
 
-#: main.lua:6223 main.lua:6225
+#: main.lua:6138 main.lua:6140
 msgid "Note font"
 msgstr ""
 
-#: main.lua:6224
+#: main.lua:6139
 msgid "Same as content"
 msgstr ""
 
-#: main.lua:6227
+#: main.lua:6142
 msgid "SIZES"
 msgstr ""
 
-#: main.lua:6230
+#: main.lua:6145
 msgid "Author size"
 msgstr ""
 
-#: main.lua:6230
+#: main.lua:6145 main.lua:6192
 msgid "Same as the info size until you change it"
 msgstr ""
 
-#: main.lua:6233
+#: main.lua:6148
 msgid "Note size"
 msgstr ""
 
-#: main.lua:6233
+#: main.lua:6148
 msgid "Same as the content size until you change it"
 msgstr ""
 
-#: main.lua:6235
+#: main.lua:6150
 msgid "Lines per highlight"
 msgstr ""
 
-#: main.lua:6235
+#: main.lua:6150
 msgid "Longer ones end with “…”; tap to read all"
 msgstr ""
 
-#: main.lua:6236
+#: main.lua:6151
 msgid "Lines per note"
 msgstr ""
 
-#: main.lua:6236
+#: main.lua:6151
 msgid "Longer notes end with “…”; tap to read all"
 msgstr ""
 
-#: main.lua:6237
+#: main.lua:6152
 msgid "Justify text"
 msgstr ""
 
-#: main.lua:6238 main.lua:6239 main.lua:6244
+#: main.lua:6153 main.lua:6154 main.lua:6159
 msgid "CAPITALS"
 msgstr ""
 
-#: main.lua:6239 main.lua:6244
+#: main.lua:6154 main.lua:6159
 msgid "As written"
 msgstr ""
 
-#: main.lua:6240
+#: main.lua:6155
 msgid "Book and chapter titles"
 msgstr ""
 
-#: main.lua:6242
+#: main.lua:6157
 msgid "Chapter · date line"
 msgstr ""
 
-#: main.lua:6244
+#: main.lua:6159
 msgid "Author name"
 msgstr ""
 
-#: main.lua:6259
+#: main.lua:6174
 msgid "PAGE"
 msgstr ""
 
-#: main.lua:6261
+#: main.lua:6176
 msgid "BETWEEN ANNOTATIONS"
 msgstr ""
 
-#: main.lua:6263
+#: main.lua:6178
 msgid "BOOK HEADING"
 msgstr ""
 
-#: main.lua:6265
+#: main.lua:6180
 msgid "HIGHLIGHT TEXT"
 msgstr ""
 
-#: main.lua:6270
+#: main.lua:6186
+msgid "BOOKMARK LINE"
+msgstr ""
+
+#: main.lua:6187
+msgid "Font"
+msgstr ""
+
+#: main.lua:6189
+msgid "Bookmark font"
+msgstr ""
+
+#: main.lua:6192
+msgid "Text size"
+msgstr ""
+
+#: main.lua:6194 main.lua:6217 main.lua:6225 main.lua:6227
+msgid "Always"
+msgstr ""
+
+#: main.lua:6194 main.lua:6227
+msgid "Never"
+msgstr ""
+
+#: main.lua:6194 main.lua:6217
+msgid "When sorted by date"
+msgstr ""
+
+#: main.lua:6196
+msgid "NOTE"
+msgstr ""
+
+#: main.lua:6197
+msgid "Icon before the note"
+msgstr ""
+
+#: main.lua:6198
+msgid "SPACING"
+msgstr ""
+
+#: main.lua:6199
+msgid "Between bookmarks"
+msgstr ""
+
+#: main.lua:6204
+msgid "DATE FORMAT"
+msgstr ""
+
+#: main.lua:6206
+msgid "Month"
+msgstr ""
+
+#: main.lua:6212
+#, lua-format
+msgid "As KOReader (%s)"
+msgstr ""
+
+#: main.lua:6212
+msgid "Clock"
+msgstr ""
+
+#: main.lua:6216
+msgid "ABOVE HIGHLIGHTS"
+msgstr ""
+
+#: main.lua:6217
+msgid "Show the date"
+msgstr ""
+
+#: main.lua:6219
+msgid "IN THE LIST"
+msgstr ""
+
+#: main.lua:6219
+msgid "ON THE ANNOTATION SHEET"
+msgstr ""
+
+#: main.lua:6225
+msgid "When not this year"
+msgstr ""
+
+#: main.lua:6225
+msgid "Year"
+msgstr ""
+
+#: main.lua:6227
+msgid "Time"
+msgstr ""
+
+#: main.lua:6227
+msgid "Today and yesterday"
+msgstr ""
+
+#: main.lua:6231
 msgid "INFO ROW"
 msgstr ""
 
-#: main.lua:6271
+#: main.lua:6232
 msgid "Show book / info row"
 msgstr ""
 
-#: main.lua:6272
+#: main.lua:6233
 msgid "Info row shows"
 msgstr ""
 
-#: main.lua:6273
+#: main.lua:6234
 msgid "Title on each page"
 msgstr ""
 
-#: main.lua:6274
+#: main.lua:6235
 msgid "Chapter headings in one book"
 msgstr ""
 
-#: main.lua:6274
+#: main.lua:6235
 msgid "Heading above each chapter when you open a single book"
 msgstr ""
 
-#: main.lua:6275
+#: main.lua:6236
 msgid "Chapter heading on each page"
 msgstr ""
 
-#: main.lua:6276
+#: main.lua:6237
 msgid "Chapter / date on each page"
 msgstr ""
 
-#: main.lua:6277
+#: main.lua:6238
 msgid "Hide duplicate book header"
 msgstr ""
 
-#: main.lua:6278
+#: main.lua:6239
 msgid "Hide duplicate info header"
 msgstr ""
 
-#: main.lua:6279
+#: main.lua:6240
 msgid "Duplicate check"
 msgstr ""
 
-#: main.lua:6279
+#: main.lua:6240
 msgid "Repeated info is hidden when these match"
 msgstr ""
 
-#: main.lua:6281
+#: main.lua:6242
 msgid "LIST"
 msgstr ""
 
-#: main.lua:6282 main.lua:6312
-msgid "Text"
-msgstr ""
-
-#: main.lua:6282
+#: main.lua:6243
 msgid "Fonts, sizes, capitals"
 msgstr ""
 
-#: main.lua:6284 main.lua:6312
-msgid "Spacing"
+#: main.lua:6243 main.lua:6281
+msgid "Text"
 msgstr ""
 
-#: main.lua:6284
+#: main.lua:6245
 msgid "Margins, lines, notes"
 msgstr ""
 
-#: main.lua:6293 main.lua:6312
+#: main.lua:6245 main.lua:6281
+msgid "Spacing"
+msgstr ""
+
+#: main.lua:6254 main.lua:6281
 msgid "Info row and repeats"
 msgstr ""
 
-#: main.lua:6293 main.lua:6304
+#: main.lua:6254 main.lua:6269
 msgid "Off"
 msgstr ""
 
-#: main.lua:6296
+#: main.lua:6257 main.lua:6281
+msgid "Dates"
+msgstr ""
+
+#: main.lua:6259
+msgid "Line size, date, spacing"
+msgstr ""
+
+#: main.lua:6261
 msgid "Counts on tabs"
 msgstr ""
 
-#: main.lua:6298
+#: main.lua:6263
 msgid "PAGES"
 msgstr ""
 
-#: main.lua:6299
+#: main.lua:6264
 msgid "Page controls"
 msgstr ""
 
-#: main.lua:6299
+#: main.lua:6264
 msgid "Prev / Next"
 msgstr ""
 
-#: main.lua:6300
+#: main.lua:6264
+msgid "Scrollbar"
+msgstr ""
+
+#: main.lua:6265
 msgid "Scrollbar + buttons"
 msgstr ""
 
-#: main.lua:6302
+#: main.lua:6267
 msgid "Marks on the scrollbar"
 msgstr ""
 
-#: main.lua:6302
+#: main.lua:6267
 msgid "Where a new book, author, month or chapter starts, by sort order"
 msgstr ""
 
-#: main.lua:6303
-msgid "Swipe to turn pages"
-msgstr ""
-
-#: main.lua:6303
+#: main.lua:6268
 msgid "Both"
 msgstr ""
 
-#: main.lua:6303
+#: main.lua:6268
 msgid "Horizontal"
 msgstr ""
 
-#: main.lua:6304
+#: main.lua:6268
+msgid "Swipe to turn pages"
+msgstr ""
+
+#: main.lua:6269
 msgid "Vertical"
 msgstr ""
 
-#: main.lua:6308
+#: main.lua:6272
+msgid "KOREADER"
+msgstr ""
+
+#: main.lua:6273
+msgid ""
+"Its menu entries, gestures and Bookmarks buttons open the Bookmarks tab here"
+msgstr ""
+
+#: main.lua:6273
+msgid "KOReader's Bookmarks open here"
+msgstr ""
+
+#: main.lua:6277
 msgid "Only offer used colours and styles"
 msgstr ""
 
-#: main.lua:6318
+#: main.lua:6287
 msgid "Reset"
 msgstr ""
 
-#: main.lua:6374 main.lua:6405
+#: main.lua:6347 main.lua:6378
 msgid "Default"
 msgstr ""
 
-#: main.lua:6390
+#: main.lua:6363
 msgid "The quick brown fox jumps over the lazy dog."
 msgstr ""
 
-#: main.lua:6556
-msgid "Select all"
-msgstr ""
-
-#: main.lua:6566
+#: main.lua:6535
 #, lua-format
 msgid "%d of %d selected"
 msgstr ""
 
-#: main.lua:6634
+#: main.lua:6603
 msgid "Nothing found."
 msgstr ""
 
-#: main.lua:6685
+#: main.lua:6711
+msgid "Sort"
+msgstr ""
+
+#: main.lua:6764
 msgid "Unknown"
 msgstr ""
 
-#: main.lua:6697
-msgid "Only these books"
-msgstr ""
-
-#: main.lua:6697
+#: main.lua:6777
 msgid "Hide these books"
 msgstr ""
 
-#: main.lua:6697
+#: main.lua:6777
+msgid "Only these books"
+msgstr ""
+
+#: main.lua:6777
 msgid "Search title or author"
 msgstr ""
 
-#: main.lua:6721
-msgid "Only these chapters"
-msgstr ""
-
-#: main.lua:6721
+#: main.lua:6802
 msgid "Hide these chapters"
 msgstr ""
 
-#: main.lua:6739
-msgid "Only these tags"
+#: main.lua:6802
+msgid "Only these chapters"
 msgstr ""
 
-#: main.lua:6739
+#: main.lua:6821
 msgid "Hide these tags"
 msgstr ""
 
-#: main.lua:6763
+#: main.lua:6821
+msgid "Only these tags"
+msgstr ""
+
+#: main.lua:6836
+msgid "Gray"
+msgstr ""
+
+#: main.lua:6845
 msgid "Select Color"
 msgstr ""
 
-#: main.lua:6778
-msgid "Highlight Style"
-msgstr ""
-
-#: main.lua:6781
-msgid "Change Style"
-msgstr ""
-
-#: main.lua:6787
-msgid "Change Color"
-msgstr ""
-
-#: main.lua:6805
+#: main.lua:6862
 msgid "Strikethrough"
 msgstr ""
 
-#: main.lua:6820
+#: main.lua:6877
 msgid "Select Style"
 msgstr ""
 
-#: main.lua:6858
+#: main.lua:6916
 msgid "Style updated."
 msgstr ""
 
-#: main.lua:6861
+#: main.lua:6919
 msgid "Color updated."
 msgstr ""
 
-#: main.lua:6935
+#: main.lua:7003
 msgid "Remove note"
 msgstr ""
 
-#: main.lua:6939
+#: main.lua:7007
 msgid "Edit note"
 msgstr ""
 
-#: main.lua:6942
+#: main.lua:7010
+msgid "Your note on this page"
+msgstr ""
+
+#: main.lua:7010
 msgid "Your note on this passage"
 msgstr ""
 
-#: main.lua:6994
+#: main.lua:7062
 msgid "Note saved."
 msgstr ""
 
-#: main.lua:7000
+#: main.lua:7068
 msgid "Cannot find book path."
 msgstr ""
