@@ -338,12 +338,18 @@ function SortState.parse(mode)
 end
 -- The all-annotations list and the one-book list each remember their own order. A book list that
 -- never had its own order set starts in reading order (first highlight in the book first).
+-- The Bookmarks tab has an order of its own too (bm_tab: the list is on that tab); until one is
+-- set it follows the annotations' order.
 function SortState.get(single)
+    if SortState.bm_tab then
+        local own = getSetting(single and "sort_mode_book_bm" or "sort_mode_bm", nil)
+        if own then return own end
+    end
     if single then return getSetting("sort_mode_book", nil) or "book:asc,pos:asc" end
     return getSetting("sort_mode", "date_newest")
 end
 function SortState.set(single, mode)
-    setSetting(single and "sort_mode_book" or "sort_mode", mode)
+    setSetting((single and "sort_mode_book" or "sort_mode") .. (SortState.bm_tab and "_bm" or ""), mode)
 end
 -- The same order can be written as an old name or as a rule: compare them through this.
 function SortState.norm(mode)
@@ -942,9 +948,10 @@ function NoteItemWidget.chapterHeading(chapter, width)
     return HorizontalGroup:new{ HorizontalSpan:new{ width = h_margin + h_padding },
         VerticalGroup:new{ widget, VerticalSpan:new{ width = getTitleMargin() } } }
 end
--- A bookmark's line in the list: ribbon and "Page 34" on the left, chapter · date on the right
--- (as the info row above a highlight; the chapter is left out under a chapter heading).
--- Bookmarks keep no text from the page, so this line is all there is besides the note.
+-- A bookmark's line in the list, drawn like the info row above a highlight (same font and size):
+-- ribbon and chapter on the left, "Page 34 · 8 Jan" on the right. Under a chapter heading (one
+-- book) the chapter is left out and the page moves to the left. The date only shows when the
+-- order goes by date. Bookmarks keep no text from the page, so this line and the note are all.
 NoteItemWidget.BOOKMARK_CHAR = "\u{F097}" -- KOReader's own bookmark mark (same font as the note pencil)
 function NoteItemWidget.pageText(note)
     local label = note.page_label
@@ -952,22 +959,40 @@ function NoteItemWidget.pageText(note)
     if label == nil or label == "" then return nil end
     return _("Page") .. " " .. tostring(label)
 end
-function NoteItemWidget.bookmarkRow(note, content_width, hide_chapter)
-    local info_face, content_face = select(2, getNoteFaces())
-    local left = HorizontalGroup:new{ align = "center",
-        TextWidget:new{ text = NoteItemWidget.BOOKMARK_CHAR, face = content_face },
-        HorizontalSpan:new{ width = Screen:scaleBySize(8) },
-        TextWidget:new{ text = NoteItemWidget.pageText(note) or _("Bookmark"), face = content_face, bold = true,
-            max_width = math.floor(content_width * 0.6) },
-    }
-    local lw = left:getSize()
-    local info = buildInfoText(note, NoteWrapper:new(note), false, hide_chapter)
-    local right
-    local room = content_width - lw.w - Screen:scaleBySize(12)
-    if info ~= "" and room > Screen:scaleBySize(24) then
-        right = TextWidget:new{ text = info, face = info_face, fgcolor = COLORS.muted, max_width = room }
+-- Whether the open order uses the date (then a bookmark shows its date).
+function NoteItemWidget.sortUsesDate(single)
+    for _, l in ipairs(SortState.view(SortState.get(single), single)) do
+        if l.key == "date" then return true end
     end
-    local d = Geom:new{ w = content_width, h = math.max(lw.h, right and right:getSize().h or 0) }
+    return false
+end
+function NoteItemWidget.bookmarkRow(note, content_width, hide_chapter, single)
+    local info_face = select(2, getNoteFaces())
+    local chapter = (not hide_chapter and note.chapter and note.chapter ~= "") and NoteItemWidget.chapterLabel(note.chapter) or nil
+    local page = NoteItemWidget.pageText(note)
+    local date = NoteItemWidget.sortUsesDate(single) and NoteItemWidget:formatDate(note.datetime) or nil
+    local left_text, right_parts = chapter, {}
+    if left_text then
+        if page then table.insert(right_parts, page) end
+    else
+        left_text = page or _("Bookmark")
+    end
+    if date then table.insert(right_parts, date) end
+    local right_text = NoteItemWidget.infoText(table.concat(right_parts, " · "))
+    local gap = Screen:scaleBySize(12)
+    local right = right_text ~= "" and TextWidget:new{ text = right_text, face = info_face, fgcolor = COLORS.muted,
+        max_width = math.floor(content_width * 0.6) } or nil
+    local right_w = right and right:getSize().w or 0
+    local icon = TextWidget:new{ text = NoteItemWidget.BOOKMARK_CHAR, face = info_face }
+    local icon_gap = Screen:scaleBySize(8)
+    local label = TextWidget:new{ text = NoteItemWidget.infoText(left_text), face = info_face,
+        max_width = math.max(Screen:scaleBySize(24), content_width - icon:getSize().w - icon_gap - right_w - gap) }
+    local h = math.max(label:getSize().h, icon:getSize().h)
+    -- the mark is centred on the height of the text next to it
+    local left = HorizontalGroup:new{ align = "center",
+        CenterContainer:new{ dimen = Geom:new{ w = icon:getSize().w, h = h }, icon },
+        HorizontalSpan:new{ width = icon_gap }, label }
+    local d = Geom:new{ w = content_width, h = h }
     return OverlapGroup:new{ dimen = d, allow_mirroring = false,
         LeftContainer:new{ dimen = d, left }, right and RightContainer:new{ dimen = d, right } or nil }
 end
@@ -1007,7 +1032,8 @@ local function measureNoteHeight(note, width, skip_title, skip_info)
         h = h + n * (line_h + 2 + NoteItemWidget.lineSpacing()) -- each line has 1px padding above and below, plus the line spacing
     end
     if note_wrapper:hasUserNote() then
-        h = h + NoteItemWidget.noteOffset()
+        -- a bookmark's note sits where a highlight's text would: the info margin below its line
+        h = h + (note.bookmark and getInfoMargin() or NoteItemWidget.noteOffset())
         local note_face = NoteItemWidget.noteFace()
         local note_line_h = getLineHeight(note_face)
         local widths = getWordWidths(note_face)
@@ -1038,6 +1064,7 @@ local function getLayoutSignature(width)
         tostring(getSetting("author_font", nil)), tostring(getSetting("author_font_size", nil)), getSetting("author_case", "upper"), getSetting("title_case", "normal"), getSetting("info_case", "normal"), NoteItemWidget.noteOffset(), NoteItemWidget.noteIndent(),
         tostring(getTruncateLines()), tostring(NoteItemWidget.noteLinesMax()), tostring(getShowInfo()), getInfoFields(), tostring(NoteItemWidget.measure_hide_chapter),
         os.date("%Y%m%d"), -- "Today"/"Yesterday" labels change the info row text
+        NoteItemWidget.dateStyle("list"),
     }, "|")
 end
 
@@ -1162,8 +1189,8 @@ function NoteItemWidget:init()
     end
     local is_bookmark = self.note.bookmark == true
     if is_bookmark then
-        local row = NoteItemWidget.bookmarkRow(self.note, content_width,
-            self.show_parent and self.show_parent.single_book and NoteItemWidget.showHeadings())
+        local single = self.show_parent and self.show_parent.single_book
+        local row = NoteItemWidget.bookmarkRow(self.note, content_width, single and NoteItemWidget.showHeadings(), single)
         table.insert(note_content, LeftContainer:new{
             dimen = Geom:new{ w = inner_width, h = row:getSize().h },
             HorizontalGroup:new{ HorizontalSpan:new{ width = h_padding }, row },
@@ -1287,7 +1314,7 @@ function NoteItemWidget:init()
     end
 
     if note_wrapper:hasUserNote() then
-        table.insert(note_content, VerticalSpan:new{ width = NoteItemWidget.noteOffset() })
+        table.insert(note_content, VerticalSpan:new{ width = is_bookmark and info_margin or NoteItemWidget.noteOffset() })
 
         local note_face = NoteItemWidget.noteFace()
         local note_icon_char = NOTE_ICON_CHAR
@@ -1336,11 +1363,30 @@ function NoteItemWidget:init()
     }
 
 end
-function NoteItemWidget:formatDate(datetime)
+-- How a date is written: "short" (Today, Yesterday, 3 Feb, 3 Feb 2025), "date" (3 Feb 2026),
+-- "short_time" (Today, 14:05 / 3 Feb, 14:05) or "date_time" (3 Feb 2026, 14:05). The list and the
+-- annotation sheet each have their own setting; without a style the list's is used.
+function NoteItemWidget.dateStyle(where)
+    if where == "sheet" then return getSetting("date_format_sheet", "date_time") end
+    return getSetting("date_format_list", "short")
+end
+function NoteItemWidget:formatDate(datetime, style)
     if not datetime or datetime == "" then return nil end
     local year, month, day = datetime:match("(%d+)-(%d+)-(%d+)")
     if not year then return datetime end
+    style = style or NoteItemWidget.dateStyle("list")
+    local hm = datetime:match("[ T](%d%d?:%d%d)")
+    local with_time = (style == "short_time" or style == "date_time") and hm
     local note_time = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day)})
+    local out
+    if style == "date" or style == "date_time" then
+        out = tostring(tonumber(day)) .. " " .. os.date("%b", note_time) .. " " .. year
+    else
+        out = NoteItemWidget.shortDate(note_time)
+    end
+    return with_time and (out .. ", " .. hm) or out
+end
+function NoteItemWidget.shortDate(note_time)
     local today = os.date("*t")
     local today_key = today.year * 10000 + today.month * 100 + today.day
     if NoteItemWidget._today_key ~= today_key then
@@ -1604,6 +1650,7 @@ function NotesListWidget:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     
     self:computeLayout()
+    self:syncSortTab()
     self:applyFilter()
     -- A book (or library) with bookmarks but no highlights or notes opens on the Bookmarks tab
     -- instead of an empty list
@@ -1611,6 +1658,7 @@ function NotesListWidget:init()
             and self.tab_totals.all == 0 and self.tab_totals.bookmarks > 0 then
         self.active_filter = self.active_filter or {}
         self.active_filter.notes_presence = "bookmarks"
+        self:syncSortTab()
         self:applyFilter()
     end
     self:calculatePages()
@@ -1753,6 +1801,15 @@ function NotesListWidget:applyFilter()
     self.tab_counts = counts
     self.tab_totals = totals
 end
+-- The Bookmarks tab keeps its own order: when the list moves onto or off that tab, the order of
+-- that tab is used (and the list sorted again when it differs).
+function NotesListWidget:syncSortTab()
+    local bm = self:tabKey() == "bookmarks"
+    if (SortState.bm_tab or false) == bm then return end
+    local before = SortState.get(self.single_book)
+    SortState.bm_tab = bm
+    if SortState.get(self.single_book) ~= before then self:applySort() end
+end
 -- Key of the open tab in tab_counts / tab_totals.
 function NotesListWidget:tabKey()
     local presence = self.active_filter and self.active_filter.notes_presence
@@ -1784,6 +1841,11 @@ function NotesListWidget:calculatePages()
         self.no_scrollbar = true
         self:setNoteColumn()
         self:paginate()
+        if self.total_pages > 1 then -- should not happen, but then the scrollbar is needed after all
+            self.no_scrollbar = nil
+            self:setNoteColumn()
+            self:paginate()
+        end
     end
 end
 function NotesListWidget:paginate()
@@ -2411,13 +2473,23 @@ function NotesListWidget:buildHeader()
             text = text, face = tab_face, bold = active,
             fgcolor = active and COLORS.ink or COLORS.muted,
         }
-        local tab_w = tw:getSize().w
+        -- every tab is as wide as its bold (chosen) text, so nothing moves when another tab is chosen
+        local tab_w = active and tw:getSize().w or TextWidget:new{ text = text, face = tab_face, bold = true }:getSize().w
         local box = VerticalGroup:new{
             CenterContainer:new{ dimen = Geom:new{ w = tab_w, h = row_h - underline_h }, tw },
             active and LineWidget:new{ dimen = Geom:new{ w = tab_w, h = underline_h }, background = BlitBuffer.COLOR_BLACK }
                 or VerticalSpan:new{ width = underline_h },
         }
-        if i > 1 then table.insert(tabs, HorizontalSpan:new{ width = Screen:scaleBySize(20) }) end
+        if tab.key == "bookmarks" then
+            -- Bookmarks are not annotations: a dot sets that tab apart from the three before it
+            local dot_gap = Screen:scaleBySize(12)
+            table.insert(tabs, HorizontalSpan:new{ width = dot_gap })
+            table.insert(tabs, CenterContainer:new{ dimen = Geom:new{ w = Screen:scaleBySize(8), h = row_h - underline_h },
+                TextWidget:new{ text = "•", face = tab_face, fgcolor = COLORS.muted } })
+            table.insert(tabs, HorizontalSpan:new{ width = dot_gap })
+        elseif i > 1 then
+            table.insert(tabs, HorizontalSpan:new{ width = Screen:scaleBySize(20) })
+        end
         table.insert(tabs, TapBox:new{ box, callback = function() self:setNotesPresence(tab.key) end })
     end
     -- The tabs keep their size; the sort label gets the room that is left. When that is too
@@ -3475,6 +3547,7 @@ end
 function NotesListWidget:refresh()
     self:computeLayout()
     local prev_page = self.current_page or 1
+    self:syncSortTab()
     self:applyFilter()
     self:calculatePages()
     self.current_page = math.max(1, math.min(prev_page, self.total_pages or 1))
@@ -4202,6 +4275,7 @@ function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations)
             tags = all_tags,
         })
     end
+    SortState.bm_tab = nil -- a new list starts sorted for the annotation tabs (see syncSortTab)
     NotesListWidget:sortNotesList(notes_list, SortState.get(true), true)
     UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self, single_book = true, book_title = book_title })
 end
@@ -4250,6 +4324,7 @@ function AllNotesViewer:showAllNotes()
             })
         end
     end
+    SortState.bm_tab = nil -- a new list starts sorted for the annotation tabs (see syncSortTab)
     NotesListWidget:sortNotesList(notes_list, SortState.get(false), false)
     local widget = NotesListWidget:new{ notes_list = notes_list, viewer = self }
     if loading then UIManager:close(loading) end
@@ -4496,12 +4571,12 @@ function AnnotationSheet:build()
     local authors = nw:getDisplayAuthors()
     if authors and authors ~= "Unknown" then table.insert(meta, ((note.book_authors or authors):gsub("\n", ", "))) end
     if note.chapter and note.chapter ~= "" then table.insert(meta, note.chapter) end
-    local date_text = NoteItemWidget:formatDate(note.datetime)
-    if date_text then table.insert(meta, date_text) end
-    -- KOReader's page number (EPUB positions aren't numbers, so its label is used when there)
+    -- KOReader's page number (EPUB positions aren't numbers, so its label is used when there), then the date
     local page_no = note.page_label
     if page_no == nil and tonumber(note.page) and tonumber(note.page) > 0 then page_no = tonumber(note.page) end
     if page_no ~= nil and page_no ~= "" then table.insert(meta, _("page") .. " " .. tostring(page_no)) end
+    local date_text = NoteItemWidget:formatDate(note.datetime, NoteItemWidget.dateStyle("sheet"))
+    if date_text then table.insert(meta, date_text) end
     local head = VerticalGroup:new{ align = "left",
         TextBoxWidget:new{ text = note.book_title or _("Annotation"), face = getFaceOr(SERIF_FONT, 20, "cfont"),
             bold = true, width = text_w },
@@ -6389,6 +6464,17 @@ function SS:build()
         add(toggle(_("Hide duplicate book header"), nil, "hide_dup_title", getHideDupTitle))
         add(toggle(_("Hide duplicate info header"), nil, "hide_dup_info", getHideDupInfo))
         add(fieldChips(_("Duplicate check"), _("Repeated info is hidden when these match"), getDedupInfoFields, "dedup_info_fields"))
+        -- how dates are written: in the list and on the annotation sheet, each its own; the options
+        -- are shown as an example date from earlier this year
+        add(sectionBar(_("DATES")))
+        local sample = os.date("%Y-%m-%d 14:05:00", os.time() - 40 * 86400)
+        local date_opts = {}
+        local styles = { "short", "date", "short_time", "date_time" }
+        for n = 1, #styles do date_opts[n] = { styles[n], NoteItemWidget:formatDate(sample, styles[n]) } end
+        add(segment(_("In the list"), date_opts, NoteItemWidget.dateStyle("list"),
+            function(v) setSetting("date_format_list", v); self:changed() end))
+        add(segment(_("On the annotation sheet"), date_opts, NoteItemWidget.dateStyle("sheet"),
+            function(v) setSetting("date_format_sheet", v); self:changed() end))
     else
         add(sectionBar(_("LIST")))
         add(navRow(_("Text"), _("Fonts, sizes, capitals"),
