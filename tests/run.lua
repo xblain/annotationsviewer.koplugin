@@ -246,5 +246,15 @@ local bmd = T.notesToMarkdown({ { book_title = "A", bookmark = true, datetime = 
 check("markdown bookmark line", bmd:find("*Bookmark · 2026-01-09 · Two · page 34*", 1, true) ~= nil, bmd)
 check("markdown no xpointer", bmd:find("/body", 1, true) == nil, bmd)
 
+-- pickers count what the open tab is about
+local NLW = T.NotesListWidget
+local pw = setmetatable({ active_filter = {} }, { __index = NLW })
+check("annotation counts on All", pw:countsHere({}) and not pw:countsHere({ bookmark = true }))
+pw.active_filter = { notes_presence = "bookmarks" }
+check("bookmark counts on Bookmarks", pw:countsHere({ bookmark = true }) and not pw:countsHere({}))
+pw.active_filter = { books = { B = true } }
+local kept = pw:pickerItems({ { key = "A", count = 2 }, { key = "B", count = 0 }, { key = "C", count = 0 } }, "books", "books_exclude")
+check("picker keeps counted and ticked items", #kept == 2 and kept[1].key == "A" and kept[2].key == "B")
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

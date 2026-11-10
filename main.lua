@@ -6543,9 +6543,12 @@ function ListPicker:init()
     self.saved_inc = deepCopy(af[self.inc_key])
     self.saved_exc = deepCopy(af[self.exc_key])
     self.query = ""
-    -- the side a tap marks: the one already in use ("only" when both are)
-    self.mode = (af[self.inc_key] and next(af[self.inc_key])) and "inc"
-        or ((af[self.exc_key] and next(af[self.exc_key])) and "exc" or "inc")
+    -- One side at a time: the marked items are either the only ones shown or the hidden ones.
+    -- A filter from before that has both keeps its "only" side: with "only these" set, the
+    -- hidden ones were not shown anyway, so the list stays the same.
+    local has_inc = af[self.inc_key] and next(af[self.inc_key])
+    if has_inc then af[self.exc_key] = nil end
+    self.mode = has_inc and "inc" or ((af[self.exc_key] and next(af[self.exc_key])) and "exc" or "inc")
     if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
     self:build()
 end
@@ -6599,7 +6602,7 @@ function ListPicker:build()
         if self.list.filter_screen then self.list.filter_screen:onClose() end
     end)
 
-    -- controls: mode switch, search, "N of M selected", Select all / Clear
+    -- controls: mode switch, search, "N of M selected", Clear
     local controls = VerticalGroup:new{ align = "left" }
     do
         local seg = HorizontalGroup:new{}
@@ -6615,15 +6618,13 @@ function ListPicker:build()
                             fgcolor = on and BlitBuffer.COLOR_WHITE or COLORS.ink } } },
                 callback = function()
                     if self.mode == m[1] then return end
-                    -- everything chosen moves to the other side, unless both sides are in use
-                    -- (then only what a tap marks changes)
-                    local chosen, mixed = {}, false
+                    -- everything marked moves to the other side
+                    local chosen = {}
                     for _i, it in ipairs(self.items) do
-                        local st = self:state(it.key)
-                        if st then table.insert(chosen, it.key); if st ~= self.mode then mixed = true end end
+                        if self:state(it.key) then table.insert(chosen, it.key) end
                     end
                     self.mode = m[1]
-                    if not mixed then for _i, key in ipairs(chosen) do self:set(key, m[1]) end end
+                    for _i, key in ipairs(chosen) do self:set(key, m[1]) end
                     self:changed()
                 end,
             })
@@ -6650,11 +6651,6 @@ function ListPicker:build()
     for _i, it in ipairs(self.items) do if self:state(it.key) then n_sel = n_sel + 1 end end
     local d = Geom:new{ w = inner, h = Screen:scaleBySize(32) }
     local links = HorizontalGroup:new{ align = "center" }
-    table.insert(links, TapBox:new{ underlined(_("Select all")), callback = function()
-        for _i, it in ipairs(visible) do self:set(it.key, self.mode) end
-        self:changed()
-    end })
-    table.insert(links, HorizontalSpan:new{ width = Screen:scaleBySize(18) })
     table.insert(links, TapBox:new{ underlined(_("Clear")), callback = function()
         for _i, it in ipairs(self.items) do self:set(it.key, nil) end
         self:changed()
@@ -6776,6 +6772,22 @@ function ListPicker:onClose()
     return true
 end
 
+-- The pickers count what the open tab is about: bookmarks on the Bookmarks tab, annotations
+-- (highlights and notes) on the others. An item with nothing of that kind is left out, unless it
+-- is already ticked (so it can still be unticked).
+function NotesListWidget:countsHere(n)
+    return (n.bookmark == true) == (self:tabKey() == "bookmarks")
+end
+function NotesListWidget:pickerItems(items, inc_key, exc_key)
+    local af = self.active_filter or {}
+    local out = {}
+    for _i, it in ipairs(items) do
+        if it.count > 0 or (af[inc_key] and af[inc_key][it.key]) or (af[exc_key] and af[exc_key][it.key]) then
+            table.insert(out, it)
+        end
+    end
+    return out
+end
 function NotesListWidget:showBookPicker(on_done)
     local by_title, items = {}, {}
     for _i, n in ipairs(self.notes_list) do
@@ -6787,8 +6799,9 @@ function NotesListWidget:showBookPicker(on_done)
             by_title[t] = it
             table.insert(items, it)
         end
-        it.count = it.count + 1
+        if self:countsHere(n) then it.count = it.count + 1 end
     end
+    items = self:pickerItems(items, "books", "books_exclude")
     table.sort(items, function(a, b) return normalizeBookTitle(a.title) < normalizeBookTitle(b.title) end)
     UIManager:show(ListPicker:new{ list = self, title = _("Books"), items = items, inc_key = "books", exc_key = "books_exclude",
         mode_labels = { _("Only these books"), _("Hide these books") }, search_hint = _("Search title or author"), on_done = on_done })
@@ -6804,9 +6817,10 @@ function NotesListWidget:showChapterPicker(on_done)
                 seen[n.chapter] = it
                 table.insert(items, it)
             end
-            it.count = it.count + 1
+            if self:countsHere(n) then it.count = it.count + 1 end
         end
     end
+    items = self:pickerItems(items, "chapters", "chapters_exclude")
     -- grouped by book, chapters in reading order where known
     local first_pos = {}
     for i, n in ipairs(self.notes_list) do if n.chapter and not first_pos[n.chapter] then first_pos[n.chapter] = i end end
@@ -6826,11 +6840,12 @@ function NotesListWidget:showTagPicker(on_done)
                 if tag ~= "" then
                     local it = seen[tag]
                     if not it then it = { key = tag, title = tag, count = 0 }; seen[tag] = it; table.insert(items, it) end
-                    it.count = it.count + 1
+                    if self:countsHere(n) then it.count = it.count + 1 end
                 end
             end
         end
     end
+    items = self:pickerItems(items, "tags", "tags_exclude")
     table.sort(items, function(a, b) return a.title:lower() < b.title:lower() end)
     UIManager:show(ListPicker:new{ list = self, title = _("Tags"), items = items, inc_key = "tags", exc_key = "tags_exclude",
         mode_labels = { _("Only these tags"), _("Hide these tags") }, on_done = on_done })
