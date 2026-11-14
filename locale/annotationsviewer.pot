@@ -1482,3 +1482,193 @@ msgstr ""
 #: main.lua:7068
 msgid "Cannot find book path."
 msgstr ""
+
+#: main.lua:5448
+#, c-format
+msgid "%d files in %s"
+msgstr ""
+
+#: main.lua:3126
+#, c-format
+msgid "%d of %d files were written."
+msgstr ""
+
+#: main.lua:6587
+msgid "After the book title"
+msgstr ""
+
+#: main.lua:6613
+msgid "Also include"
+msgstr ""
+
+#: main.lua:6588
+msgid "As headings"
+msgstr ""
+
+#: main.lua:6618
+msgid "As in the list"
+msgstr ""
+
+#: main.lua:6623
+msgid "Bold label"
+msgstr ""
+
+#: main.lua:6600
+msgid "Colour and style"
+msgstr ""
+
+#: main.lua:5439
+#, c-format
+msgid "Copied %d annotations"
+msgstr ""
+
+#: main.lua:5438
+#, c-format
+msgid "Copied %d bookmarks"
+msgstr ""
+
+#: main.lua:5439
+msgid "Copied 1 annotation"
+msgstr ""
+
+#: main.lua:5438
+msgid "Copied 1 bookmark"
+msgstr ""
+
+#: main.lua:6737
+msgid "Copy"
+msgstr ""
+
+#: main.lua:6628
+msgid "Date and time in the file name"
+msgstr ""
+
+#: main.lua:6590
+msgid "Date and time"
+msgstr ""
+
+#: main.lua:6594
+msgid "Date format"
+msgstr ""
+
+#: main.lua:6668
+msgid "EXPORT"
+msgstr ""
+
+#: main.lua:6618
+msgid "Each book once"
+msgstr ""
+
+#: main.lua:6728
+#, c-format
+msgid "Export %d annotations"
+msgstr ""
+
+#: main.lua:6727
+#, c-format
+msgid "Export %d bookmarks"
+msgstr ""
+
+#: main.lua:6728
+msgid "Export 1 annotation"
+msgstr ""
+
+#: main.lua:6727
+msgid "Export 1 bookmark"
+msgstr ""
+
+#: main.lua:5477
+msgid "Export"
+msgstr ""
+
+#: main.lua:6626
+msgid "FILES"
+msgstr ""
+
+#: main.lua:6583
+msgid "FORMAT"
+msgstr ""
+
+#: main.lua:6584
+msgid "File type"
+msgstr ""
+
+#: main.lua:6627
+msgid "Files"
+msgstr ""
+
+#: main.lua:6629
+msgid "Folder"
+msgstr ""
+
+#: main.lua:6621
+msgid "Highlight"
+msgstr ""
+
+#: main.lua:6585
+msgid "INCLUDE"
+msgstr ""
+
+#: main.lua:6588
+msgid "In the info line"
+msgstr ""
+
+#: main.lua:6621
+msgid "Italic"
+msgstr ""
+
+#: main.lua:6588
+msgid "Leave out"
+msgstr ""
+
+#: main.lua:3102
+msgid "Markdown"
+msgstr ""
+
+#: main.lua:6727
+msgid "Nothing to export"
+msgstr ""
+
+#: main.lua:6617
+msgid "ORDER"
+msgstr ""
+
+#: main.lua:6628
+msgid "Off: exporting again replaces the file"
+msgstr ""
+
+#: main.lua:3102
+msgid "One file"
+msgstr ""
+
+#: main.lua:3102
+msgid "One per book"
+msgstr ""
+
+#: main.lua:3102
+msgid "Plain text"
+msgstr ""
+
+#: main.lua:6621
+msgid "Plain"
+msgstr ""
+
+#: main.lua:6621
+msgid "Quote"
+msgstr ""
+
+#: main.lua:3182
+msgid "This device has no clipboard."
+msgstr ""
+
+#: main.lua:6586
+msgid "Title and filter at the top"
+msgstr ""
+
+#: main.lua:2924
+msgid "Unknown book"
+msgstr ""
+
+#: main.lua:5447
+msgid "to the clipboard"
+msgstr ""
