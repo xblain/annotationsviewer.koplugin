@@ -1660,6 +1660,21 @@ local function filterToString(filter, skip_presence)
         table.sort(tags)
         table.insert(parts, "T≠ " .. table.concat(tags, ", "))
     end
+    -- Authors, series, language include / exclude
+    local meta_kinds = { "authors", "series", "languages" } -- as NotesListWidget.META_KINDS (defined later)
+    for i = 1, 3 do
+        local kind = meta_kinds[i]
+        local letter = kind:sub(1, 1):upper()
+        for pi = 1, 2 do
+            local k = pi == 1 and kind or (kind .. "_exclude")
+            if type(filter[k]) == "table" and next(filter[k]) then
+                local names = {}
+                for v in pairs(filter[k]) do table.insert(names, v == "" and _("None") or v) end
+                table.sort(names)
+                table.insert(parts, letter .. (pi == 1 and ": " or "≠ ") .. table.concat(names, ", "))
+            end
+        end
+    end
     -- Highlight text include / exclude
     if filter.search_highlight and filter.search_highlight ~= "" then
         local mode = filter.search_highlight_mode or "all"
@@ -1934,6 +1949,45 @@ function NotesListWidget.dropStaleSearchOptions(af)
         end
     end
 end
+-- Filters on the book's metadata: authors, series and language. Each has an "only these" key and
+-- a "hide these" key (kind .. "_exclude"), as books and tags. A book without a value counts as ""
+-- (shown as "None").
+NotesListWidget.META_KINDS = { "authors", "series", "languages" }
+function NotesListWidget.metaValues(note, kind)
+    if kind == "authors" then
+        local out = {}
+        local a = note.book_authors
+        if type(a) == "string" and a ~= "Unknown" then
+            for name in a:gmatch("[^\n]+") do
+                name = name:match("^%s*(.-)%s*$")
+                if name ~= "" then out[#out + 1] = name end
+            end
+        end
+        if #out == 0 then out[1] = "" end
+        return out
+    end
+    local v
+    if kind == "series" then v = note.book_series else v = note.book_language end
+    return { type(v) == "string" and v or "" }
+end
+function NotesListWidget.metaLabel(v) return v == "" and _("None") or v end
+-- whether a note passes the author / series / language filters
+function NotesListWidget.metaMatches(af, note)
+    for i = 1, #NotesListWidget.META_KINDS do
+        local kind = NotesListWidget.META_KINDS[i]
+        local inc, exc = af[kind], af[kind .. "_exclude"]
+        local has_inc, has_exc = type(inc) == "table" and next(inc) ~= nil, type(exc) == "table" and next(exc) ~= nil
+        if has_inc or has_exc then
+            local vals, any = NotesListWidget.metaValues(note, kind), false
+            for k = 1, #vals do
+                if has_exc and exc[vals[k]] then return false end
+                if has_inc and inc[vals[k]] then any = true end
+            end
+            if has_inc and not any then return false end
+        end
+    end
+    return true
+end
 -- The chapter filter names chapters of the books chosen when it was set ("Chapter 1" of book A):
 -- with other books it would pick their chapters of that name, so it goes when the books change.
 function NotesListWidget.booksChanged(af)
@@ -1978,6 +2032,8 @@ function NotesListWidget:applyFilter()
             if match and af.books_exclude and next(af.books_exclude) then
                 if af.books_exclude[note.book_title] then match = false end
             end
+            -- Authors, series, language
+            if match then match = NotesListWidget.metaMatches(af, note) end
             -- Tags include / exclude
             if match and af.tags and next(af.tags) then
                 local nw = NoteWrapper:new(note)
@@ -2539,6 +2595,23 @@ function NotesListWidget:getFilterChips(full)
     if af.books and next(af.books) then add(setLabel(af.books, _("%d books"), full), function() af.books = nil; NotesListWidget.booksChanged(af) end) end
     if af.books_exclude and next(af.books_exclude) then
         add(_("Hide") .. " " .. setLabel(af.books_exclude, _("%d books"), full), function() af.books_exclude = nil; NotesListWidget.booksChanged(af) end)
+    end
+    do
+        local many = { authors = _("%d authors"), series = _("%d series"), languages = _("%d languages") }
+        for i = 1, #NotesListWidget.META_KINDS do
+            local kind = NotesListWidget.META_KINDS[i]
+            local pair = { kind, kind .. "_exclude" }
+            for pi = 1, 2 do
+                local k = pair[pi]
+                if type(af[k]) == "table" and next(af[k]) then
+                    local named = {} -- "" is "None"
+                    for v in pairs(af[k]) do named[NotesListWidget.metaLabel(v)] = true end
+                    local label = setLabel(named, many[kind], full)
+                    if k ~= kind then label = _("Hide") .. " " .. label end
+                    add(label, function() af[k] = nil end)
+                end
+            end
+        end
     end
     if af.chapters and next(af.chapters) then add(setLabel(af.chapters, _("%d chapters"), full), function() af.chapters = nil end) end
     if af.chapters_exclude and next(af.chapters_exclude) then
@@ -3544,6 +3617,7 @@ function NotesListWidget:showFilterMenu()
     local function back() if self.filter_screen then self.filter_screen:rebuild() end end
     self:showFilterScreen{
         books = function() self:showBookPicker(back) end,
+        meta = function(kind) self:showMetaPicker(kind, back) end,
         tags = function() self:showTagPicker(back) end,
         chapters = function() self:showChapterPicker(back) end,
         chapters_available = isSingleBookContext,
@@ -3917,7 +3991,8 @@ end
 
 -- On-disk copy of the caches above, so a KOReader restart doesn't mean parsing every
 -- book's sidecar again. Bump CACHE_VERSION whenever the cached data's shape changes.
-local CACHE_VERSION = 4 -- 3: bookmarks and page labels are kept; 4: old-format books marked legacy, with notes
+local CACHE_VERSION = 5 -- 3: bookmarks and page labels are kept; 4: old-format books marked legacy, with notes;
+                        -- 5: book info keeps series and language
 local _persist = nil        -- LuaSettings object, loaded on the first scan
 local _persist_dirty = false
 local _persist_count = 0
@@ -4566,9 +4641,20 @@ function AllNotesViewer:getBookInfo(book_path, data, key, sidecar)
                  (custom_metadata.doc_props and (custom_metadata.doc_props.tags or custom_metadata.doc_props.keywords)) or
                  (data.doc_props and (data.doc_props.tags or data.doc_props.keywords))
     
+    -- series and language: the book's own metadata, as KOReader's book information shows it
+    local function prop(name)
+        local v = (custom_metadata.custom_props and custom_metadata.custom_props[name])
+            or (custom_metadata.doc_props and custom_metadata.doc_props[name])
+            or (data.doc_props and data.doc_props[name])
+        if type(v) == "number" then v = tostring(v) end
+        return type(v) == "string" and v ~= "" and v or nil
+    end
+    local series, language = prop("series"), prop("language")
+
     if not title or title == "" then title = filename:gsub("%.[^.]+$", "") end
     
-    local info = { path = book_path, filename = filename, title = title or filename, authors = authors or "Unknown", tags = tags }
+    local info = { path = book_path, filename = filename, title = title or filename, authors = authors or "Unknown", tags = tags,
+        series = series, language = language }
     _book_info_cache[book_path] = { data = info, mtime = info_key }
     return info
 end
@@ -4607,6 +4693,7 @@ function AllNotesViewer:findAllNotes()
             table.insert(notes_data, {
                 path = book_path, filename = book_info.filename,
                 title = book_info.title, authors = book_info.authors,
+                series = book_info.series, language = book_info.language,
                 tags = book_info.tags, notes = annotations,
             })
         end
@@ -4675,6 +4762,7 @@ function AllNotesViewer.listNote(note, book, book_tags)
     table.sort(all_tags)
     return {
         book_title = book.title, book_authors = book.authors, book_filename = book.filename, book_path = book.path,
+        book_series = book.series, book_language = book.language,
         page = note.page, chapter = note.chapter, order = note.order,
         pos0 = note.pos0, pos1 = note.pos1,
         highlighted_text = note.text, user_note = note.notes,
@@ -4687,7 +4775,8 @@ function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations,
     local book_info = self:getBookInfo(book_path)
     local notes_list = {}
     local book = { title = book_title, authors = book_info and book_info.authors or nil,
-        filename = book_path:match("([^/\\]+)$") or book_path, path = book_path }
+        filename = book_path:match("([^/\\]+)$") or book_path, path = book_path,
+        series = book_info and book_info.series, language = book_info and book_info.language }
     local book_tags = AllNotesViewer.splitTags(book_info and book_info.tags)
     for _, note in ipairs(raw_annotations) do
         table.insert(notes_list, AllNotesViewer.listNote(note, book, book_tags))
@@ -4707,7 +4796,8 @@ function AllNotesViewer:showAllNotes(tab)
     local all_notes_by_book = self:findAllNotes()
     local notes_list = {}
     for _, book_data in ipairs(all_notes_by_book) do
-        local book = { title = book_data.title, authors = book_data.authors, filename = book_data.filename, path = book_data.path }
+        local book = { title = book_data.title, authors = book_data.authors, filename = book_data.filename, path = book_data.path,
+            series = book_data.series, language = book_data.language }
         local book_tags = AllNotesViewer.splitTags(book_data.tags)
         for _, note in ipairs(book_data.notes) do
             table.insert(notes_list, AllNotesViewer.listNote(note, book, book_tags))
@@ -6484,6 +6574,27 @@ function FilterScreen:build()
     if not list.single_book then
         local v, on = setSummary(af.books, af.books_exclude, book_count)
         table.insert(body, navRow(_("Books"), v, on, function() self.helpers.books() end))
+        -- authors, series, language: only when some book has one (or a filter is on)
+        local labels = { authors = _("Authors"), series = _("Series"), languages = _("Language") }
+        for i = 1, #NotesListWidget.META_KINDS do
+            local kind = NotesListWidget.META_KINDS[i]
+            local exc = kind .. "_exclude"
+            local values, has_value = {}, false
+            for ni = 1, #list.notes_list do
+                local vals = NotesListWidget.metaValues(list.notes_list[ni], kind)
+                for j = 1, #vals do
+                    values[vals[j]] = true
+                    if vals[j] ~= "" then has_value = true end
+                end
+            end
+            local filtered = (type(af[kind]) == "table" and next(af[kind])) or (type(af[exc]) == "table" and next(af[exc]))
+            if has_value or filtered then
+                local count = 0
+                for _ in pairs(values) do count = count + 1 end
+                local mv, mon = setSummary(af[kind], af[exc], count)
+                table.insert(body, navRow(labels[kind], mv, mon, function() self.helpers.meta(kind) end))
+            end
+        end
     end
     do
         local v, on = setSummary(af.tags, af.tags_exclude)
@@ -7678,6 +7789,38 @@ function NotesListWidget:showBookPicker(on_done)
     table.sort(items, function(a, b) return normalizeBookTitle(a.title) < normalizeBookTitle(b.title) end)
     UIManager:show(ListPicker:new{ list = self, title = _("Books"), items = items, inc_key = "books", exc_key = "books_exclude",
         mode_labels = { _("Only these books"), _("Hide these books") }, search_hint = _("Search title or author"), on_done = on_done })
+end
+-- kind: "authors", "series" or "languages"
+function NotesListWidget:showMetaPicker(kind, on_done)
+    local seen, items = {}, {}
+    for i = 1, #self.notes_list do
+        local n = self.notes_list[i]
+        local here = self:countsHere(n)
+        local vals = NotesListWidget.metaValues(n, kind)
+        for j = 1, #vals do
+            local v = vals[j]
+            local it = seen[v]
+            if not it then
+                it = { key = v, title = NotesListWidget.metaLabel(v), count = 0 }
+                seen[v] = it
+                table.insert(items, it)
+            end
+            if here then it.count = it.count + 1 end
+        end
+    end
+    items = self:pickerItems(items, kind, kind .. "_exclude")
+    table.sort(items, function(a, b) -- "None" last
+        if (a.key == "") ~= (b.key == "") then return b.key == "" end
+        return a.title:lower() < b.title:lower()
+    end)
+    local texts = {
+        authors = { _("Authors"), _("Only these authors"), _("Hide these authors"), _("Search authors") },
+        series = { _("Series"), _("Only these series"), _("Hide these series"), nil },
+        languages = { _("Language"), _("Only these languages"), _("Hide these languages"), nil },
+    }
+    local t = texts[kind]
+    UIManager:show(ListPicker:new{ list = self, title = t[1], items = items, inc_key = kind, exc_key = kind .. "_exclude",
+        mode_labels = { t[2], t[3] }, search_hint = t[4], on_done = on_done })
 end
 function NotesListWidget:showChapterPicker(on_done)
     local seen, items = {}, {}

@@ -977,5 +977,40 @@ do
     check("listNote: book tags when it has none", table.concat(e2.tags, ",") == "q")
 end
 
+-- filter by author, series and language
+do
+    local L = T.NotesListWidget
+    local mlist = {
+        { book_title = "A", book_authors = "Ann\nBob", book_series = "Saga", book_language = "en", highlighted_text = "a" },
+        { book_title = "B", book_authors = "Bob", book_language = "nl", highlighted_text = "b" },
+        { book_title = "C", book_authors = "Unknown", highlighted_text = "c" },
+    }
+    local function mf(af)
+        local w = { notes_list = mlist, active_filter = af }
+        L.applyFilter(w)
+        local out = {}
+        for i, n in ipairs(w.filtered_notes) do out[i] = n.book_title end
+        return table.concat(out)
+    end
+    check("authors: only Bob (one of two authors counts)", mf({ authors = { Bob = true } }) == "AB")
+    check("authors: hide Ann", mf({ authors_exclude = { Ann = true } }) == "BC")
+    check("authors: none = no author", mf({ authors = { [""] = true } }) == "C")
+    check("series: only Saga", mf({ series = { Saga = true } }) == "A")
+    local hn = mf({ series_exclude = { [""] = true } })
+    check("series: hide none", hn == "A", hn)
+    check("language: only nl", mf({ languages = { nl = true } }) == "B")
+    check("language: hide en", mf({ languages_exclude = { en = true } }) == "BC")
+    check("together: Bob and en", mf({ authors = { Bob = true }, languages = { en = true } }) == "A")
+    check("old saved filter without these keys", mf({ books = { B = true } }) == "B")
+    local fs = T.filterToString({ authors = { Bob = true, Ann = true }, series_exclude = { [""] = true }, languages = { en = true } })
+    check("filterToString: authors, series, language", fs:find("A: Ann, Bob", 1, true) ~= nil and fs:find("S≠ None", 1, true) ~= nil
+        and fs:find("L: en", 1, true) ~= nil, fs)
+    local cw = setmetatable({ active_filter = { authors = { Bob = true }, series_exclude = { [""] = true, Saga = true } } }, { __index = L })
+    local chips = cw:getFilterChips(true)
+    local labels = {}
+    for i, c in ipairs(chips) do labels[i] = c.label end
+    check("chips: author and hidden series", table.concat(labels, "|") == "Bob|Hide None, Saga", table.concat(labels, "|"))
+end
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

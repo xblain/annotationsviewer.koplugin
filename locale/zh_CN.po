@@ -1473,6 +1473,45 @@ msgstr "仅这些章节"
 msgid "Hide these tags"
 msgstr "隐藏这些标签"
 
+msgid "Authors"
+msgstr ""
+
+msgid "Series"
+msgstr ""
+
+msgid "Language"
+msgstr ""
+
+msgid "%d authors"
+msgstr ""
+
+msgid "%d series"
+msgstr ""
+
+msgid "%d languages"
+msgstr ""
+
+msgid "Only these authors"
+msgstr ""
+
+msgid "Hide these authors"
+msgstr ""
+
+msgid "Search authors"
+msgstr ""
+
+msgid "Only these series"
+msgstr ""
+
+msgid "Hide these series"
+msgstr ""
+
+msgid "Only these languages"
+msgstr ""
+
+msgid "Hide these languages"
+msgstr ""
+
 #: main.lua:6821
 msgid "Only these tags"
 msgstr "仅这些标签"
