@@ -666,6 +666,42 @@ do
     check("books picker: picking a book clears it", lst.active_filter.chapters == nil and lst.active_filter.books.B)
 end
 
+-- Cancel and Back go where you expect
+do
+    local SS = T.SortState
+    T.setSetting("sort_mode", "author:asc")
+    T.setSetting("sort_mode_bm", nil)            -- Bookmarks follow the annotation order
+    T.setSetting("sort_mode_book", "book:asc,pos:asc")
+    T.setSetting("sort_mode_book_bm", "date:desc")
+    local snap = SS.snapshot()
+    -- what a saved filter does: sets both tabs' order
+    SS.setFor(false, false, "date:asc"); SS.setFor(false, true, "book:asc"); SS.setFor(true, true, "pos:asc")
+    check("cancel: restore says something changed", SS.restore(snap) == true)
+    check("cancel: both tabs' orders back", SS.getFor(false, false) == "author:asc" and SS.getFor(true, true) == "date:desc")
+    check("cancel: Bookmarks follow the annotation order again", T.getSetting("sort_mode_bm", nil) == nil
+        and SS.getFor(false, true) == "author:asc")
+    check("cancel: nothing changed, nothing to redo", SS.restore(snap) == false)
+    for _, k in ipairs({ "sort_mode", "sort_mode_bm", "sort_mode_book", "sort_mode_book_bm" }) do T.setSetting(k, nil) end
+    -- cards: Back / tap outside run cancel_cb; a choice doesn't
+    local Card = T.NotesListWidget.States.Card
+    local UI = T.UIManager
+    local saved_close = rawget(UI, "close")
+    UI.close = function() end
+    local back = 0
+    local card = setmetatable({ cancel_cb = function() back = back + 1 end }, { __index = Card })
+    card:onClose()
+    check("card: Back goes back one level", back == 1)
+    card:onClose()
+    check("card: only once", back == 1)
+    local chosen = setmetatable({ cancel_cb = function() back = back + 1 end }, { __index = Card })
+    chosen:dismiss()
+    check("card: a choice doesn't go back", back == 1)
+    local outside = setmetatable({ cancel_cb = function() back = back + 1 end, dimen = { x = 0, y = 0, w = 10, h = 10 } }, { __index = Card })
+    outside:onTapOutside(nil, { pos = { intersectWith = function() return false end } })
+    check("card: tap outside goes back one level", back == 2)
+    UI.close = saved_close
+end
+
 -- bookmarks: finding them again in the sidecar
 local bnote = { bookmark = true, datetime = "d", page = "/body/p[3]" }
 check("bookmark match", T.itemMatchesNote({ datetime = "d", page = "/body/p[3]", text = "in Two" }, bnote))

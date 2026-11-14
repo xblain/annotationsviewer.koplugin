@@ -329,6 +329,25 @@ end
 function SortState.setFor(single, bm, mode)
     setSetting((single and "sort_mode_book" or "sort_mode") .. (bm and "_bm" or ""), mode)
 end
+-- All four sort orders as stored, for Cancel: nil for the Bookmarks tab means "follow the
+-- annotation order", and has to come back as nil, not as a copy of that order.
+SortState.SETTING_KEYS = { "sort_mode", "sort_mode_bm", "sort_mode_book", "sort_mode_book_bm" }
+function SortState.snapshot()
+    local snap = {}
+    for i = 1, #SortState.SETTING_KEYS do snap[i] = getSetting(SortState.SETTING_KEYS[i], nil) end
+    return snap
+end
+-- Puts them back; true when something changed.
+function SortState.restore(snap)
+    local changed = false
+    for i = 1, #SortState.SETTING_KEYS do
+        if getSetting(SortState.SETTING_KEYS[i], nil) ~= snap[i] then
+            setSetting(SortState.SETTING_KEYS[i], snap[i])
+            changed = true
+        end
+    end
+    return changed
+end
 function SortState.encode(levels)
     local parts = {}
     for _, l in ipairs(levels) do parts[#parts + 1] = l.key .. ":" .. l.dir end
@@ -5131,8 +5150,8 @@ function AnnotationSheet:build()
         table.insert(btn_row, HorizontalSpan:new{ width = btn_gap })
     end
     table.insert(btn_row, actionButton(_("Delete"), function()
-        self:onClose()
-        viewer:confirmDelete(note, parent)
+        -- the card opens over the sheet: Cancel goes back to it, Delete closes both
+        viewer:confirmDelete(note, parent, function() self:onClose() end)
     end, false, can_open and unit or inner))
     table.insert(group, btn_row)
 
@@ -5727,13 +5746,20 @@ end
 Page.forwardGestures(States.Card) -- after onShow / onCloseWidget, which it wraps
 function States.Card:onTapOutside(_arg, ges)
     if ges and ges.pos and ges.pos:intersectWith(self.dimen) then return true end
-    self:onClose()
-    if self.cancel_cb then self.cancel_cb() end
+    return self:onClose()
+end
+-- Back, tap outside, Cancel: closes, then cancel_cb (e.g. back to the menu it came from).
+function States.Card:onClose()
+    local cb = self.cancel_cb
+    self.cancel_cb = nil
+    UIManager:close(self, "ui")
+    if cb then cb() end
     return true
 end
-function States.Card:onClose()
-    UIManager:close(self, "ui")
-    return true
+-- A choice was made: closes without cancel_cb.
+function States.Card:dismiss()
+    self.cancel_cb = nil
+    return self:onClose()
 end
 function States.Card:show()
     UIManager:show(self, "ui", self.dimen)
@@ -6117,11 +6143,12 @@ end
 
 -- The sort order as a menu, for screens too small for the chip card: a row per level that opens a
 -- list of keys, and a row under it that flips the direction.
-function States.chooseCard(list, title, options)
+-- on_cancel: Back / tap outside (the sort menu opens again)
+function States.chooseCard(list, title, options, on_cancel)
     local W = Screen:getWidth()
     local card_w = math.min(Screen:scaleBySize(360), W - Screen:scaleBySize(20))
     local bw = Size.border.window
-    States.Card:new{ modal = true, width = card_w,
+    States.Card:new{ modal = true, width = card_w, cancel_cb = on_cancel,
         left = W - card_w - Screen:scaleBySize(10), top = list.topbar_height + Screen:scaleBySize(4),
         pad_h = bw, pad_v = bw + Screen:scaleBySize(4),
         build = function(w, card)
@@ -6135,7 +6162,7 @@ function States.chooseCard(list, title, options)
                 table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side }, TapBox:new{
                     LeftContainer:new{ dimen = d, TextWidget:new{ text = (o.on and "✓ " or "") .. o.label,
                         face = Font:getFace("cfont", 15), bold = o.on, max_width = d.w } },
-                    callback = function() card:onClose(); o.callback() end } })
+                    callback = function() card:dismiss(); o.callback() end } })
             end
             return g
         end }:show()
@@ -6174,7 +6201,7 @@ function States.sortList(list, on_done)
                             max_width = math.floor(inner * 0.4) } },
                         RightContainer:new{ dimen = d, TextWidget:new{ text = value, face = Font:getFace("cfont", 14), bold = true,
                             max_width = math.floor(inner * 0.58) } } },
-                    callback = function() card:onClose(); callback() end } })
+                    callback = function() card:dismiss(); callback() end } })
                 table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = side },
                     LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light } })
             end
@@ -6184,7 +6211,7 @@ function States.sortList(list, on_done)
                     opts[#opts + 1] = { label = q[1], on = SortState.encode(SortState.parse(q[2])) == now,
                         callback = function() apply(SortState.parse(q[2])) end }
                 end
-                States.chooseCard(list, _("Quick picks"), opts)
+                States.chooseCard(list, _("Quick picks"), opts, function() States.sortList(list, on_done) end)
             end)
             local titles = { _("Sort by"), _("Then by"), _("And then by") }
             for n = 1, 3 do
@@ -6207,7 +6234,7 @@ function States.sortList(list, on_done)
                                     apply(c)
                                 end }
                         end
-                        States.chooseCard(list, titles[n], opts)
+                        States.chooseCard(list, titles[n], opts, function() States.sortList(list, on_done) end)
                     end)
                     if lv then
                         row("", SortState.dirName(lv.key, lv.dir, single) .. " ⇅", function()
@@ -6273,7 +6300,7 @@ Page.forwardGestures(FilterScreen)
 function FilterScreen:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
     self.saved_filter = deepCopy(self.list.active_filter or {})
-    self.saved_sort = SortState.get(self.list.single_book)
+    self.saved_sorts = SortState.snapshot() -- a saved filter can change the other tab's order too
     if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
     self:build()
 end
@@ -6677,10 +6704,7 @@ end
 function FilterScreen:onClose()
     -- Cancel: put filters and sort back as they were
     self.list.active_filter = self.saved_filter
-    if SortState.get(self.list.single_book) ~= self.saved_sort then
-        SortState.set(self.list.single_book, self.saved_sort)
-        self.list:applySort()
-    end
+    if SortState.restore(self.saved_sorts) then self.list:applySort() end
     self.list:refresh()
     return self:onDone()
 end
@@ -7517,7 +7541,7 @@ Page.watchResize(SortPicker)
 Page.forwardGestures(SortPicker)
 function SortPicker:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
-    self.saved_sort = SortState.get(self.list.single_book)
+    self.saved_sorts = SortState.snapshot()
     if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
     self:build()
 end
@@ -7588,10 +7612,7 @@ function SortPicker:onDone()
     return true
 end
 function SortPicker:onClose()
-    if SortState.get(self.list.single_book) ~= self.saved_sort then
-        SortState.set(self.list.single_book, self.saved_sort)
-        self.list:applySort()
-    end
+    if SortState.restore(self.saved_sorts) then self.list:applySort() end
     self.list:applyFilter()
     UIManager:close(self, "flashui")
     if self.on_done then self.on_done() end
@@ -7797,9 +7818,11 @@ end
 function AllNotesViewer:updateHighlightColor(note, new_color, parent_widget)
     self:setHighlightField(note, "color", new_color, parent_widget, _("Color updated."))
 end
-function AllNotesViewer:confirmDelete(note, parent_widget)
+-- before_delete: runs once Delete is tapped (closes the sheet the card was opened from)
+function AllNotesViewer:confirmDelete(note, parent_widget, before_delete)
     if AllNotesViewer.legacyBlocked(note) then return end
     NotesListWidget.States.confirmDelete(note, function()
+        if before_delete then before_delete() end
         self:deleteAnnotation(note, parent_widget)
     end)
 end
@@ -7890,6 +7913,13 @@ function AllNotesViewer:editNote(note, parent_widget, on_done, start_text)
         table.insert(row, { text = _("Remove note"), callback = function() save("") end })
     end
     table.insert(row, { text = _("Cancel"), id = "close", callback = function() UIManager:close(input_dialog) end })
+    -- Save last in the row (unpack(row) in the middle of a table keeps only its first button,
+    -- which lost Cancel whenever there was a note)
+    table.insert(row, {
+        text = _("Save"),
+        is_enter_default = true,
+        callback = function() save(input_dialog:getInputText()) end,
+    })
     input_dialog = InputDialog:new{
         title = has_note and _("Edit note") or _("Add note"),
         description = description ~= "" and description or nil,
@@ -7897,16 +7927,7 @@ function AllNotesViewer:editNote(note, parent_widget, on_done, start_text)
         input_hint = note.bookmark and _("Your note on this page") or _("Your note on this passage"),
         input_type = "text",
         text_height = Screen:scaleBySize(120),
-        buttons = {
-            {
-                unpack(row),
-                {
-                    text = _("Save"),
-                    is_enter_default = true,
-                    callback = function() save(input_dialog:getInputText()) end,
-                },
-            },
-        },
+        buttons = { row },
     }
     NotesListWidget.showDialog(input_dialog)
     input_dialog:onShowKeyboard()
@@ -8030,6 +8051,7 @@ AllNotesViewer._test = {
     notesToMarkdown = Export.notesToMarkdown,
     Export = Export,
     setSetting = setSetting,
+    getSetting = getSetting,
     NotesListWidget = NotesListWidget,
     NoteItemWidget = NoteItemWidget,
 }
