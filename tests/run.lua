@@ -315,6 +315,50 @@ local pdf_hl
 for _, n in ipairs(pdf) do if n.page == 5 then pdf_hl = n end end
 check("legacy pdf: the highlight entry matches the bookmark on its page", pdf_hl and pdf_hl.notes == "pdf note" and pdf_hl.page_label == 5)
 
+-- the same book under two spellings of its path (links, /mnt/us vs /mnt/base-us)
+do
+    local real_fu = real["ffi/util"]
+    local calls = 0
+    real["ffi/util"] = { realpath = function(p)
+        calls = calls + 1
+        local map = { ["/home/u/BooksLink/a.epub"] = "/home/u/Books/a.epub", ["/home/u/Books/a.epub"] = "/home/u/Books/a.epub",
+            ["/mnt/us/b.epub"] = "/mnt/base-us/b.epub", ["/mnt/base-us/b.epub"] = "/mnt/base-us/b.epub" }
+        return map[p] -- nil: the file doesn't exist
+    end }
+    T.NotesListWidget._realpaths = {}
+    check("samePath: equal strings", T.samePath("/x/a.epub", "/x/a.epub"))
+    check("samePath: through a link", T.samePath("/home/u/BooksLink/a.epub", "/home/u/Books/a.epub"))
+    check("samePath: kindle mount names", T.samePath("/mnt/us/b.epub", "/mnt/base-us/b.epub"))
+    check("samePath: other books differ", not T.samePath("/home/u/Books/a.epub", "/mnt/us/b.epub"))
+    check("samePath: missing files compare as written", not T.samePath("/gone/a.epub", "/gone/b.epub") and T.samePath("/gone/a.epub", "/gone/a.epub"))
+    check("samePath: nil is never the same", not T.samePath(nil, "/x") and not T.samePath(nil, nil))
+    local before = calls
+    T.samePath("/home/u/BooksLink/a.epub", "/home/u/Books/a.epub")
+    check("samePath: realpath kept per path", calls == before)
+    real["ffi/util"] = { realpath = function() error("boom") end }
+    T.NotesListWidget._realpaths = {}
+    check("samePath: realpath failing falls back to the string", not T.samePath("/p/a", "/p/b") and T.samePath("/p/a", "/p/a"))
+    real["ffi/util"] = real_fu
+    T.NotesListWidget._realpaths = {}
+    -- two mounts of the same files: no link to follow, but the same file (a hard link here)
+    local lfs_real = real["libs/libkoreader-lfs"]
+    if type(lfs_real) == "table" and lfs_real.attributes and lfs_real.attributes("/", "ino") ~= nil then
+        local a = os.tmpname()
+        local b = a .. "-mount2"
+        local fh = io.open(a, "w"); fh:write("x"); fh:close()
+        os.execute("ln '" .. a .. "' '" .. b .. "' 2>/dev/null")
+        real["ffi/util"] = { realpath = function(p) return p end } -- as if nothing were a link
+        T.NotesListWidget._realpaths = {}
+        check("samePath: same file on two mounts", T.samePath(a, b))
+        local c = a .. "-other"
+        fh = io.open(c, "w"); fh:write("x"); fh:close()
+        check("samePath: a copy is not the same book", not T.samePath(a, c))
+        os.remove(a); os.remove(b); os.remove(c)
+        real["ffi/util"] = real_fu
+        T.NotesListWidget._realpaths = {}
+    end
+end
+
 -- bookmarks: finding them again in the sidecar
 local bnote = { bookmark = true, datetime = "d", page = "/body/p[3]" }
 check("bookmark match", T.itemMatchesNote({ datetime = "d", page = "/body/p[3]", text = "in Two" }, bnote))

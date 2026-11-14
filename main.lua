@@ -3225,8 +3225,15 @@ function NotesListWidget:sortNotesList(notes_list, sort_mode, single)
     if uses_opened then
         SortState.opened = {}
         for _, item in ipairs(ReadHistory.hist or {}) do
-            if item.file then SortState.opened[item.file] = tonumber(item.time) or 0 end
+            if item.file then SortState.opened[NotesListWidget.realPath(item.file)] = tonumber(item.time) or 0 end
         end
+        -- the list may name a book differently from the history (a link, another mount name)
+        local by_path = {}
+        for _, n in ipairs(notes_list) do
+            local p = n.book_path
+            if p and by_path[p] == nil then by_path[p] = SortState.opened[NotesListWidget.realPath(p)] or false end
+        end
+        for p, t in pairs(by_path) do if t then SortState.opened[p] = t end end
     end
     if comparator then
         table.sort(notes_list, comparator)
@@ -3705,11 +3712,37 @@ local function itemMatchesNote(item, note)
     return true
 end
 
+-- The real path of a file (links followed), or the path itself when that can't be worked out
+-- (missing file, no realpath). Kept per path; findAllNotes starts each scan with an empty table.
+NotesListWidget._realpaths = {}
+function NotesListWidget.realPath(path)
+    if type(path) ~= "string" then return path end
+    local real = NotesListWidget._realpaths[path]
+    if real == nil then
+        local ok, ffiutil = pcall(require, "ffi/util")
+        local ok_rp, rp = false, nil
+        if ok and type(ffiutil) == "table" and ffiutil.realpath then ok_rp, rp = pcall(ffiutil.realpath, path) end
+        real = (ok_rp and type(rp) == "string" and rp ~= "") and rp or path
+        NotesListWidget._realpaths[path] = real
+    end
+    return real
+end
+-- Are these the same book? The open book's path can be written differently from the list's
+-- (a link to the folder, /mnt/us and /mnt/base-us on a Kindle, the path KOReader saved earlier).
+function NotesListWidget.samePath(a, b)
+    if type(a) ~= "string" or type(b) ~= "string" then return false end
+    if a == b then return true end
+    if NotesListWidget.realPath(a) == NotesListWidget.realPath(b) then return true end
+    -- two mounts of the same storage (no link to follow): the same file on the same device
+    local fa, fb = lfs.attributes(a), lfs.attributes(b)
+    return fa ~= nil and fb ~= nil and fa.mode == "file" and fa.ino ~= nil and fa.ino ~= 0
+        and fa.dev == fb.dev and fa.ino == fb.ino
+end
 -- Returns the ReaderUI if this book is currently open, so changes go through KOReader.
 local function getLiveReader(book_path)
     local ReaderUI = require("apps/reader/readerui")
     local ui = ReaderUI and ReaderUI.instance
-    if ui and ui.document and ui.document.file == book_path
+    if ui and ui.document and NotesListWidget.samePath(ui.document.file, book_path)
             and ui.annotation and ui.annotation.annotations then
         return ui
     end
@@ -3760,6 +3793,7 @@ local function setLiveHighlightField(ui, index, field, value)
 end
 
 local AllNotesViewer = WidgetContainer:extend{ name = "allnotesviewer", is_doc_only = false }
+AllNotesViewer.samePath = NotesListWidget.samePath
 AllNotesViewer.is_doc_only = false
 function AllNotesViewer:init()
     AllNotesViewer.registerGestures()
@@ -3847,7 +3881,8 @@ end
 function AllNotesViewer:bookHasAnnotations(path)
     local ReaderUI = require("apps/reader/readerui")
     local open = ReaderUI and ReaderUI.instance
-    if open and open.document and open.document.file == path and open.annotation and open.annotation.annotations then
+    if open and open.document and NotesListWidget.samePath(open.document.file, path)
+            and open.annotation and open.annotation.annotations then
         return #open.annotation.annotations > 0
     end
     local ok, list = pcall(self.loadBookAnnotations, self, path)
@@ -3919,7 +3954,7 @@ end
 function AllNotesViewer:showBookFile(path, tab)
     local ReaderUI = require("apps/reader/readerui")
     local open = ReaderUI and ReaderUI.instance
-    if open and open.document and open.document.file == path then
+    if open and open.document and NotesListWidget.samePath(open.document.file, path) then
         return self:showCurrentBookNotes(tab)
     end
     local info = self:getBookInfo(path)
@@ -4233,14 +4268,20 @@ function AllNotesViewer:getBookInfo(book_path, data, key, sidecar)
 end
 function AllNotesViewer:findAllNotes()
     local notes_data = {}
-    local seen = {}  -- deduplicate by book_path
+    local seen = {}  -- paths already tried
     local scanned = {} -- books with a sidecar, kept in the on-disk cache
     loadPersistentCache()
+    NotesListWidget._realpaths = {} -- links may have changed since the last scan
 
     -- Helper: load annotations for a path and add to notes_data if any found
+    local added = {} -- real paths of the books already listed
     local function addBook(book_path)
         if seen[book_path] then return end
         seen[book_path] = true
+        -- another spelling of a book already listed; one that found nothing doesn't count, as
+        -- KOReader may keep the sidecar under the other spelling
+        local real = NotesListWidget.realPath(book_path)
+        if added[real] then return end
         if not lfs.attributes(book_path, "mode") then return end
         local live_ui = getLiveReader(book_path)
         local key, sidecar = getSidecarKey(book_path)
@@ -4255,6 +4296,7 @@ function AllNotesViewer:findAllNotes()
             annotations = self:loadBookAnnotations(book_path, key, sidecar)
         end
         if #annotations > 0 then
+            added[real] = true
             local book_info = self:getBookInfo(book_path, nil, key, sidecar)
             table.insert(notes_data, {
                 path = book_path, filename = book_info.filename,
@@ -7661,7 +7703,7 @@ function AllNotesViewer:openBookAtNote(note)
     end
 
     if ReaderUI.instance and ReaderUI.instance.document then
-        if ReaderUI.instance.document.file == book_path then
+        if NotesListWidget.samePath(ReaderUI.instance.document.file, book_path) then
             gotoNote(ReaderUI.instance)
             return
         end
@@ -7679,7 +7721,7 @@ function AllNotesViewer:openBookAtNote(note)
     UIManager:scheduleIn(1.5, function()
         if done then return end
         local ui = require("apps/reader/readerui").instance
-        if ui and ui.document and ui.document.file == book_path then after_open(ui) end
+        if ui and ui.document and NotesListWidget.samePath(ui.document.file, book_path) then after_open(ui) end
     end)
 end
 -- Internals exposed for tests/run.lua; KOReader doesn't use this.
@@ -7693,6 +7735,7 @@ AllNotesViewer._test = {
     compareByPosition = compareByPosition,
     itemMatchesNote = itemMatchesNote,
     legacyNotes = AllNotesViewer.legacyNotes,
+    samePath = AllNotesViewer.samePath,
     notesToMarkdown = Export.notesToMarkdown,
     Export = Export,
     setSetting = setSetting,
