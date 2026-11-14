@@ -1076,8 +1076,14 @@ function NoteItemWidget.bookmarkIndent()
     return NoteItemWidget.bookmarkColumn() + Screen:scaleBySize(8)
 end
 function NoteItemWidget.bookmarkColumn()
-    return math.max(TextWidget:new{ text = NoteItemWidget.BOOKMARK_CHAR, face = NoteItemWidget.bookmarkFace() }:getSize().w,
-        TextWidget:new{ text = NOTE_ICON_CHAR, face = NoteItemWidget.noteFace() }:getSize().w)
+    -- asked for every bookmark on a page: measured once per pair of faces
+    local bf, nf = NoteItemWidget.bookmarkFace(), NoteItemWidget.noteFace()
+    local c = NoteItemWidget._bm_col
+    if not (c and c.bf == bf and c.nf == nf) then
+        c = { bf = bf, nf = nf, w = math.max(measureTextWidth(NoteItemWidget.BOOKMARK_CHAR, bf), measureTextWidth(NOTE_ICON_CHAR, nf)) }
+        NoteItemWidget._bm_col = c
+    end
+    return c.w
 end
 -- A bookmark's note: without the note icon (default) it lines up with the chapter text; with it,
 -- the icon sits under the ribbon as on an annotation.
@@ -1175,8 +1181,10 @@ local function measureNoteHeight(note, width, skip_title, skip_info)
         h = h + header_h + getTitleMargin()
     end
     if note.bookmark then
-        -- the bookmark line takes the place of the info row (and there is no highlight)
-        h = h + NoteItemWidget.bookmarkRow(note, content_width, NoteItemWidget.measure_hide_chapter):getSize().h
+        -- the bookmark line takes the place of the info row (and there is no highlight). It is one
+        -- line of text and a mark in the same face, so it is as high as a line in that face
+        -- (a TextWidget's height comes from its face, not its text).
+        h = h + getLineHeight(NoteItemWidget.bookmarkFace())
     else
         local info_text = buildInfoText(note, note_wrapper, skip_title, NoteItemWidget.measure_hide_chapter)
         local info_visible = not skip_info and info_text ~= ""
@@ -1856,8 +1864,9 @@ function NotesListWidget:computeLayout()
     self.width = Screen:getWidth()
     self.height = Screen:getHeight()
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    local _chips, chips_h = self:buildFilterChips(self.width)
+    local chips, chips_h = self:buildFilterChips(self.width)
     self.chips_height = chips_h
+    self._layout_chips = { w = self.width, widget = chips } -- the header uses these (built once per page)
     self.topbar_height = self.single_book and TOPBAR_BOOK_HEIGHT or TOPBAR_HEIGHT
     self.title_height = self.topbar_height + TABS_HEIGHT + chips_h
     local pag_style = getPaginationStyle()
@@ -2067,8 +2076,9 @@ function NotesListWidget:tabKey()
 end
 -- Scrollbar marks follow the sort order: a mark where the group changes. Books (or authors) when
 -- sorted by book / author / file, months when sorted by date, chapters in one book sorted by location.
-function NotesListWidget.markKey(note, single)
-    local levels = SortState.view(SortState.get(single), single) -- the order the list really has
+-- levels: the parsed order (paginate passes it, so it isn't parsed again for every annotation)
+function NotesListWidget.markKey(note, single, levels)
+    levels = levels or SortState.view(SortState.get(single), single) -- the order the list really has
     local by = levels[1].key
     if single then
         for _, l in ipairs(levels) do
@@ -2100,6 +2110,7 @@ function NotesListWidget:calculatePages()
 end
 function NotesListWidget:paginate()
     self.pages = {}
+    local mark_levels = SortState.view(SortState.get(self.single_book), self.single_book)
     local current_page_notes, current_height = {}, 0
     
     local available_content_height = self.content_height
@@ -2145,7 +2156,7 @@ function NotesListWidget:paginate()
             current_height = getNoteHeight(note, note_width, st, si, layout_sig) + (heading and NoteItemWidget.headingHeight(note.chapter, note_width) or 0)
         end
         prev_chapter = note.chapter
-        local mark_key = NotesListWidget.markKey(note, self.single_book)
+        local mark_key = NotesListWidget.markKey(note, self.single_book, mark_levels)
         if i > 1 and mark_key ~= prev_mark_key then
             self.book_start_pages[#self.pages + 1] = true
         end
@@ -2192,6 +2203,68 @@ function NotesListWidget.navBar(o)
             jumpButton(clast, o.has_next, o.last),
             HorizontalSpan:new{ width = side } } } }
 end
+-- The scrollbar strip on the right of the list: one class, made once; each page turn makes an
+-- instance with that page's numbers (strip_x, track_h, marks, ...).
+NotesListWidget.ScrollStrip = InputContainer:extend{}
+function NotesListWidget.ScrollStrip:init()
+    self.dimen = Geom:new{ x = self.strip_x, y = self.strip_y, w = self.strip_w, h = self.strip_h }
+    self.ges_events = { TapStrip = { GestureRange:new{ ges = "tap",
+        range = Geom:new{ x = self.strip_x, y = self.strip_y, w = self.strip_w + SB_MARGIN_RIGHT, h = self.strip_h } } } }
+end
+function NotesListWidget.ScrollStrip:getSize() return Geom:new{ w = self.strip_w, h = self.strip_h } end
+function NotesListWidget.ScrollStrip:pageY(p) -- top of the thumb when page p is shown
+    return math.floor((p - 1) / (self.total - 1) * self.travel + 0.5)
+end
+function NotesListWidget.ScrollStrip:onTapStrip(_, ges)
+    if not ges or not ges.pos then return end
+    local list, btn_h, track_y, track_h = self.list, self.btn_h, self.track_y, self.track_h
+    local y = ges.pos.y - self.strip_y
+    if self.has_chevrons and y < btn_h then
+        if self.up_enabled then list:onGotoPrevPage() end
+    elseif self.has_chevrons and y >= self.strip_h - btn_h then
+        if self.dn_enabled then list:onGotoNextPage() end
+    elseif y >= track_y and y < track_y + track_h then
+        local rel = (y - track_y) / track_h
+        local page = math.max(1, math.min(self.total, math.ceil(rel * self.total)))
+        if page ~= list.current_page then
+            list.current_page = page
+            list:updatePage()
+        end
+    end
+    return true
+end
+function NotesListWidget.ScrollStrip:paintTo(bb, x, y)
+    local strip_w, icon_size, track_h, thumb_h = self.strip_w, self.icon_size, self.track_h, self.thumb_h
+    -- thumb and track positions exactly as before the redesign
+    local thumb_x = x + math.floor((strip_w - SB_THUMB_WIDTH) / 2)
+    local track_x = thumb_x + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2)
+    local icon_x = x + math.floor((strip_w - icon_size) / 2)
+    if self.up_icon then self.up_icon:paintTo(bb, icon_x, y) end
+    local ty = y + self.track_y
+    -- a very small screen or big chevrons: no room for the thumb, so no track either
+    local room = track_h >= thumb_h
+    if room then bb:paintRect(track_x, ty, SB_TRACK_WIDTH, track_h, COLORS.ink) end
+    -- same overhang on both sides of the track, so the notch is centred on it
+    local mark_x = track_x - SB_MARK_OVERHANG
+    local mark_w = SB_TRACK_WIDTH + SB_MARK_OVERHANG * 2
+    local marks = room and self.marks or {}
+    for i = 1, #marks do
+        local p = marks[i]
+        if p > 1 then -- the top of the track already marks page 1
+            bb:paintRect(mark_x, ty + self:pageY(p) + math.floor(thumb_h / 2), mark_w, SB_MARK_HEIGHT, COLORS.ink)
+        end
+    end
+    if room then
+        local thumb_y = ty + self:pageY(self.list.current_page)
+        local radius = math.floor(SB_THUMB_WIDTH / 2)
+        bb:paintRoundedRect(thumb_x, thumb_y, SB_THUMB_WIDTH, thumb_h, BlitBuffer.COLOR_WHITE, radius)
+        -- Size.border.default = 1px at 160dpi, scaled up on denser screens like the thumb itself
+        bb:paintBorder(thumb_x, thumb_y, SB_THUMB_WIDTH, thumb_h, Size.border.default, BlitBuffer.COLOR_BLACK, radius)
+    end
+    local lw = self.page_label:getSize().w
+    self.page_label:paintTo(bb, track_x - math.floor(lw / 2), ty + track_h + Screen:scaleBySize(6))
+    if self.dn_icon then self.dn_icon:paintTo(bb, icon_x, y + self.strip_h - icon_size) end
+end
 function NotesListWidget:createFooter()
     local style = getPaginationStyle()
 
@@ -2218,9 +2291,6 @@ function NotesListWidget:createFooter()
         local total = self.total_pages
         local thumb_h = math.max(Screen:scaleBySize(16), math.floor(track_h / total))
         local travel = track_h - thumb_h
-        local function pageY(p) -- top of the thumb when page p is shown
-            return math.floor((p - 1) / (total - 1) * travel + 0.5)
-        end
         local up_enabled = self.current_page > 1
         local dn_enabled = self.current_page < total
         local icon_size = Screen:scaleBySize(32)
@@ -2233,62 +2303,13 @@ function NotesListWidget:createFooter()
         if getScrollbarBookMarks() then
             for p in pairs(self.book_start_pages or {}) do table.insert(marks, p) end
         end
-        local range = Geom:new{ x = strip_x, y = strip_y, w = strip_w + SB_MARGIN_RIGHT, h = strip_h }
-        local ScrollStrip = InputContainer:extend{}
-        function ScrollStrip:init()
-            self.dimen = Geom:new{ x = strip_x, y = strip_y, w = strip_w, h = strip_h }
-            self.ges_events = { TapStrip = { GestureRange:new{ ges = "tap", range = range } } }
-        end
-        function ScrollStrip:getSize() return Geom:new{ w = strip_w, h = strip_h } end
-        function ScrollStrip:onTapStrip(_, ges)
-            if not ges or not ges.pos then return end
-            local y = ges.pos.y - strip_y
-            if has_chevrons and y < btn_h then
-                if up_enabled then self_ref:onGotoPrevPage() end
-            elseif has_chevrons and y >= strip_h - btn_h then
-                if dn_enabled then self_ref:onGotoNextPage() end
-            elseif y >= track_y and y < track_y + track_h then
-                local rel = (y - track_y) / track_h
-                local page = math.max(1, math.min(total, math.ceil(rel * total)))
-                if page ~= self_ref.current_page then
-                    self_ref.current_page = page
-                    self_ref:updatePage()
-                end
-            end
-            return true
-        end
-        function ScrollStrip:paintTo(bb, x, y)
-            -- thumb and track positions exactly as before the redesign
-            local thumb_x = x + math.floor((strip_w - SB_THUMB_WIDTH) / 2)
-            local track_x = thumb_x + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2)
-            local icon_x = x + math.floor((strip_w - icon_size) / 2)
-            if up_icon then up_icon:paintTo(bb, icon_x, y) end
-            local ty = y + track_y
-            -- a very small screen or big chevrons: no room for the thumb, so no track either
-            local room = track_h >= thumb_h
-            if room then bb:paintRect(track_x, ty, SB_TRACK_WIDTH, track_h, COLORS.ink) end
-            -- same overhang on both sides of the track, so the notch is centred on it
-            local mark_x = track_x - SB_MARK_OVERHANG
-            local mark_w = SB_TRACK_WIDTH + SB_MARK_OVERHANG * 2
-            for _i, p in ipairs(room and marks or {}) do
-                if p > 1 then -- the top of the track already marks page 1
-                    bb:paintRect(mark_x, ty + pageY(p) + math.floor(thumb_h / 2), mark_w, SB_MARK_HEIGHT, COLORS.ink)
-                end
-            end
-            if room then
-                local thumb_y = ty + pageY(self_ref.current_page)
-                local radius = math.floor(SB_THUMB_WIDTH / 2)
-                bb:paintRoundedRect(thumb_x, thumb_y, SB_THUMB_WIDTH, thumb_h, BlitBuffer.COLOR_WHITE, radius)
-                -- Size.border.default = 1px at 160dpi, scaled up on denser screens like the thumb itself
-                bb:paintBorder(thumb_x, thumb_y, SB_THUMB_WIDTH, thumb_h, Size.border.default, BlitBuffer.COLOR_BLACK, radius)
-            end
-            local lw = page_label:getSize().w
-            page_label:paintTo(bb, track_x - math.floor(lw / 2), ty + track_h + Screen:scaleBySize(6))
-            if dn_icon then dn_icon:paintTo(bb, icon_x, y + strip_h - icon_size) end
-        end
+        local strip = NotesListWidget.ScrollStrip:new{ list = self_ref, strip_x = strip_x, strip_y = strip_y,
+            strip_w = strip_w, strip_h = strip_h, btn_h = btn_h, has_chevrons = has_chevrons, up_enabled = up_enabled,
+            dn_enabled = dn_enabled, track_y = track_y, track_h = track_h, total = total, thumb_h = thumb_h,
+            travel = travel, icon_size = icon_size, up_icon = up_icon, dn_icon = dn_icon, marks = marks, page_label = page_label }
         return VerticalGroup:new{
             VerticalSpan:new{ width = strip_y },
-            HorizontalGroup:new{ HorizontalSpan:new{ width = strip_x }, ScrollStrip:new{} },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = strip_x }, strip },
         }
     else
         -- Bottom bar as in the mockup: thin line on top, "‹ Prev" left, "1 / 4" centred,
@@ -2767,7 +2788,10 @@ function NotesListWidget:buildHeader()
     table.insert(header, LineWidget:new{ dimen = Geom:new{ w = w, h = line_h }, background = COLORS.line })
 
     -- 3. active-filter chips (the tab is not repeated here)
-    local chips = self:buildFilterChips(w)
+    local lc = self._layout_chips
+    self._layout_chips = nil
+    local chips
+    if lc and lc.w == w then chips = lc.widget else chips = self:buildFilterChips(w) end
     if chips then table.insert(header, chips) end
     return header
 end

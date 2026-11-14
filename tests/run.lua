@@ -948,5 +948,21 @@ do
     check("bookmark glyph is 3 bytes", #NIW.BOOKMARK_CHAR == 3 and NIW.BOOKMARK_CHAR:byte(1) == 239)
 end
 
+-- page marks: the order parsed once by paginate gives the same keys as parsing it per annotation
+do
+    local L, SS = T.NotesListWidget, T.SortState
+    local n = { book_title = "B", book_authors = "Au", chapter = "Ch", datetime = "2026-03-04 10:00:00" }
+    local same = true
+    for _, single in ipairs({ false, true }) do
+        for _, rule in ipairs({ "date:desc", "author:asc,book:asc,pos:asc", "book:asc", "chapter:asc" }) do
+            T.setSetting(single and "sort_mode_book" or "sort_mode", rule)
+            local lv = SS.view(SS.get(single), single)
+            if L.markKey(n, single, lv) ~= L.markKey(n, single) then same = false end
+        end
+    end
+    T.setSetting("sort_mode", nil); T.setSetting("sort_mode_book", nil)
+    check("markKey: parsed once, same keys", same)
+end
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
