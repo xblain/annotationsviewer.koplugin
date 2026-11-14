@@ -2240,20 +2240,24 @@ function NotesListWidget:createFooter()
             local icon_x = x + math.floor((strip_w - icon_size) / 2)
             if up_icon then up_icon:paintTo(bb, icon_x, y) end
             local ty = y + track_y
-            bb:paintRect(track_x, ty, SB_TRACK_WIDTH, track_h, COLORS.ink)
+            -- a very small screen or big chevrons: no room for the thumb, so no track either
+            local room = track_h >= thumb_h
+            if room then bb:paintRect(track_x, ty, SB_TRACK_WIDTH, track_h, COLORS.ink) end
             -- same overhang on both sides of the track, so the notch is centred on it
             local mark_x = track_x - SB_MARK_OVERHANG
             local mark_w = SB_TRACK_WIDTH + SB_MARK_OVERHANG * 2
-            for _i, p in ipairs(marks) do
+            for _i, p in ipairs(room and marks or {}) do
                 if p > 1 then -- the top of the track already marks page 1
                     bb:paintRect(mark_x, ty + pageY(p) + math.floor(thumb_h / 2), mark_w, SB_MARK_HEIGHT, COLORS.ink)
                 end
             end
-            local thumb_y = ty + pageY(self_ref.current_page)
-            local radius = math.floor(SB_THUMB_WIDTH / 2)
-            bb:paintRoundedRect(thumb_x, thumb_y, SB_THUMB_WIDTH, thumb_h, BlitBuffer.COLOR_WHITE, radius)
-            -- Size.border.default = 1px at 160dpi, scaled up on denser screens like the thumb itself
-            bb:paintBorder(thumb_x, thumb_y, SB_THUMB_WIDTH, thumb_h, Size.border.default, BlitBuffer.COLOR_BLACK, radius)
+            if room then
+                local thumb_y = ty + pageY(self_ref.current_page)
+                local radius = math.floor(SB_THUMB_WIDTH / 2)
+                bb:paintRoundedRect(thumb_x, thumb_y, SB_THUMB_WIDTH, thumb_h, BlitBuffer.COLOR_WHITE, radius)
+                -- Size.border.default = 1px at 160dpi, scaled up on denser screens like the thumb itself
+                bb:paintBorder(thumb_x, thumb_y, SB_THUMB_WIDTH, thumb_h, Size.border.default, BlitBuffer.COLOR_BLACK, radius)
+            end
             local lw = page_label:getSize().w
             page_label:paintTo(bb, track_x - math.floor(lw / 2), ty + track_h + Screen:scaleBySize(6))
             if dn_icon then dn_icon:paintTo(bb, icon_x, y + strip_h - icon_size) end
@@ -4034,6 +4038,7 @@ local function setLiveHighlightField(ui, index, field, value)
         if item.note then hl:writePdfAnnotation("content", item, item.note) end
     end
     ui:handleEvent(Event:new("AnnotationsModified", { item }))
+    UIManager:setDirty(ui.dialog) -- repainted with the new colour / style when the list closes
 end
 
 local AllNotesViewer = WidgetContainer:extend{ name = "allnotesviewer", is_doc_only = false }
@@ -4907,6 +4912,8 @@ function AnnotationSheet:build()
     local note, viewer, parent = self.note, self.viewer, self.parent_widget
     local nw = NoteWrapper:new(note)
     local W, H = Screen:getWidth(), Screen:getHeight()
+    -- tap outside: the whole of the current screen (also after a rotation)
+    self.ges_events.TapOutside = { GestureRange:new{ ges = "tap", range = Geom:new{ x = 0, y = 0, w = W, h = H } } }
     -- bottom sheet as in the mockup: full width (in landscape no wider than the list column)
     local sheet_w = W
     if W > H then sheet_w = math.min(W, math.floor(H * 1.1)) end
@@ -5138,7 +5145,7 @@ function AnnotationSheet:build()
     local can_open = note.book_path and lfs.attributes(note.book_path, "mode") ~= nil
     local unit = math.floor((inner - btn_gap) / 3)
     if can_open then
-        local goto_text = has_note and _("Go to note") or _("Go to highlight")
+        local goto_text = _("Go to highlight")
         if note.bookmark then
             goto_text = page_no and (_("Go to page") .. " " .. tostring(page_no)) or _("Go to bookmark")
         end
@@ -5208,6 +5215,7 @@ end
 -- Shared title bar for full-screen pages (Filter & sort, pickers): same height, icon size,
 -- spacing and serif title as the list's top bar; ‹ on the left, ✕ on the right (both cancel).
 local Page = {} -- shared pieces of the full-screen pages (kept in one table: Lua allows 200 locals)
+NotesListWidget.Page = Page
 -- A tick (or ✕) drawn with plain white strokes, so it shows on every device (no icon file, no font glyph)
 Page.Glyph = WidgetContainer:extend{ kind = "check", size = 18 }
 function Page.Glyph:getSize() return Geom:new{ w = self.size, h = self.size } end
@@ -5385,6 +5393,7 @@ function Page.scrollable(w, h, show_parent, child)
                 -- thumb centred in the strip, with the same space above and below as the list's
                 local tx = x + math.floor((b.width - SB_THUMB_WIDTH) / 2)
                 local top, th_total = y + SB_MARGIN_V_TOP, b.height - SB_MARGIN_V_TOP - SB_MARGIN_V_BOTTOM
+                if th_total < Screen:scaleBySize(16) then return end -- no room for a thumb
                 bb:paintRect(tx + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2), top, SB_TRACK_WIDTH, th_total, COLORS.ink)
                 local th = math.max(Screen:scaleBySize(16), math.floor(th_total * (b.high - b.low)))
                 local ty = top + math.min(math.floor(b.low * th_total), th_total - th)
@@ -5567,6 +5576,7 @@ function Page.watchResize(cls)
         InputContainer.paintTo(self, bb, x, y)
     end
 end
+Page.watchResize(AnnotationSheet) -- the sheet follows a rotation
 -- ✕ on a sub page: close it and every page under it, back to the list.
 function Page.exitAll(w)
     local first = true
@@ -5580,24 +5590,52 @@ end
 -- `rows` (a VerticalGroup) is cut into pages of whole rows that fit `avail` high; the first
 -- `opts.fixed` rows stay on every page; `opts.left` pads the rows on the left. The page number is
 -- kept in owner.page_idx, so rebuilding after a change stays on the same page.
-function Page.paged(owner, W, avail, rows, opts)
-    opts = opts or {}
-    local fixed_n = opts.fixed or 0
-    local n = #rows
-    local fixed_h = 0
-    for i = 1, math.min(fixed_n, n) do fixed_h = fixed_h + rows[i]:getSize().h end
-    local total = 0
-    for i = 1, n do total = total + rows[i]:getSize().h end
-    local bar_h = FOOTER_BAR_HEIGHT + Size.line.medium
-    local function wrap(g)
-        if opts.left then return HorizontalGroup:new{ HorizontalSpan:new{ width = opts.left }, g } end
-        return g
+-- Which rows go on which page: { first, last } per page (rows 1..fixed on every page). A heading
+-- (keep_with_next) never ends a page; a block taller than a page is split into its rows, which
+-- gives a new rows list (returned as the second value).
+-- A column of rows that can be split over pages: a left-aligned VerticalGroup
+function Page.isColumn(r)
+    if type(r) ~= "table" or r.align ~= "left" then return false end
+    local mt = getmetatable(r)
+    while mt and mt.__index do
+        if mt.__index == VerticalGroup then return true end
+        mt = type(mt.__index) == "table" and getmetatable(mt.__index) or nil
     end
+    return false
+end
+function Page.splitPages(rows, avail, bar_h, fixed_n)
+    local n = #rows
+    local fixed_h, total = 0, 0
+    for i = 1, math.min(fixed_n, n) do fixed_h = fixed_h + rows[i]:getSize().h end
+    for i = 1, n do total = total + rows[i]:getSize().h end
     local pages = {}
     if total <= avail then
         pages[1] = { first = 1, last = n }
     else
         local cap = avail - bar_h - fixed_h
+        -- a block taller than a page is split into its own rows, so it can't run under the footer
+        -- only a column of rows (a VerticalGroup) can be split
+        local function splittable(r)
+            return r:getSize().h > cap and #r > 1 and Page.isColumn(r)
+        end
+        local split = false
+        for i = fixed_n + 1, n do
+            if splittable(rows[i]) then split = true; break end
+        end
+        if split then
+            local flat = {}
+            local function add(r)
+                if splittable(r) then
+                    for k = 1, #r do add(r[k]) end
+                else
+                    flat[#flat + 1] = r
+                end
+            end
+            for i = 1, n do
+                if i <= fixed_n then flat[#flat + 1] = rows[i] else add(rows[i]) end
+            end
+            rows, n = flat, #flat
+        end
         local cur, h = nil, 0
         for i = fixed_n + 1, n do
             local rh = rows[i]:getSize().h
@@ -5619,6 +5657,20 @@ function Page.paged(owner, W, avail, rows, opts)
         end
         if #pages == 0 then pages[1] = { first = n + 1, last = n } end
     end
+    return pages, rows
+end
+function Page.paged(owner, W, avail, rows, opts)
+    opts = opts or {}
+    local fixed_n = opts.fixed or 0
+    local n
+    local bar_h = FOOTER_BAR_HEIGHT + Size.line.medium
+    local function wrap(g)
+        if opts.left then return HorizontalGroup:new{ HorizontalSpan:new{ width = opts.left }, g } end
+        return g
+    end
+    local pages
+    pages, rows = Page.splitPages(rows, avail, bar_h, fixed_n)
+    n = #rows
     local count = #pages
     if count == 1 and owner.ges_events then owner.ges_events.PagedSwipe = nil end
     owner.page_idx = math.max(1, math.min(owner.page_idx or 1, count))
@@ -5705,6 +5757,7 @@ States.Card = InputContainer:extend{
 }
 function States.Card:init()
     local W, H = Screen:getWidth(), Screen:getHeight()
+    self.screen_w, self.screen_h = W, H
     local col_w = W > H and math.min(W, math.floor(H * 1.1)) or W
     local margin = Screen:scaleBySize(14)
     local bw = Size.border.window
@@ -5732,6 +5785,20 @@ function States.Card:init()
     end
 end
 function States.Card:paintTo(bb)
+    -- the screen was rotated: build the card again for the new size and place
+    if (self.screen_w ~= Screen:getWidth() or self.screen_h ~= Screen:getHeight()) and not self._resize_pending then
+        self._resize_pending = true
+        UIManager:nextTick(function()
+            self._resize_pending = nil
+            if not UIManager:isWidgetShown(self) then return end -- closed in the meantime
+            -- a card placed by hand (the ☰ menu, the sort card) would be in the wrong place: it closes
+            if self.left or self.top then return self:onClose() end
+            if self.timeout_cb then UIManager:unschedule(self.timeout_cb) end
+            self:init()
+            if self.timeout then self:onShow() end
+            UIManager:setDirty(self, "full")
+        end)
+    end
     self.box:paintTo(bb, self.box_x, self.box_y)
 end
 function States.Card:onShow()
@@ -5962,10 +6029,14 @@ function States.sortChips(g, side, inner, items)
     for _, r in ipairs(rows) do
         local used = (#r - 1) * gap
         for _, i in ipairs(r) do used = used + widths[i] end
-        local extra, rg = inner - used, HorizontalGroup:new{ HorizontalSpan:new{ width = side } }
+        -- rows may stretch to the edge, but a chip never gets narrower than its text. One wider
+        -- than the row says so (the sort card then uses the menu); on the full pages it gets the
+        -- whole row, as wide as it can be on the screen.
+        local extra, rg = math.max(0, inner - used), HorizontalGroup:new{ HorizontalSpan:new{ width = side } }
         for k, i in ipairs(r) do
             local it = items[i]
-            local cw = widths[i] + math.floor(extra / #r) + (k == #r and extra % #r or 0)
+            if widths[i] > inner then States.chip_overflow = true end
+            local cw = math.min(inner, widths[i] + math.floor(extra / #r) + (k == #r and extra % #r or 0))
             local color = BlitBuffer.COLOR_BLACK
             if k > 1 then table.insert(rg, HorizontalSpan:new{ width = gap }) end
             table.insert(rg, TapBox:new{
@@ -6134,7 +6205,10 @@ function States.sortMenu(list, on_done)
                 if make(tier, fullest):getSize().h <= avail then use = tier; break end
             end
             local g = make(use)
+            States.chip_overflow = false
             if make(use, fullest):getSize().h > avail then too_tall = true end
+            -- a chip wider than the card (big font, narrow screen): the menu, as chips never shrink
+            if States.chip_overflow then too_tall = true end
             return g
         end }
     -- still too tall for this screen: a plain menu instead (one row per level)
@@ -6339,8 +6413,14 @@ function FilterScreen:build()
             LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light } }
     end
     local function padded(widget, top, bottom)
-        return VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top or 0 },
-            HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget }, VerticalSpan:new{ width = bottom or 0 } }
+        local g = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top or 0 } }
+        if Page.isColumn(widget) then -- each row indented on its own, so a tall column can be split over pages
+            for k = 1, #widget do table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget[k] }) end
+        else
+            table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget })
+        end
+        table.insert(g, VerticalSpan:new{ width = bottom or 0 })
+        return g
     end
     -- section title as in the mockup: small caps-style grey label with a black line under it
     local first_section = true
@@ -6365,7 +6445,10 @@ function FilterScreen:build()
     local function chip(text, on, callback, opts)
         opts = opts or {}
         local h = opts.h or Screen:scaleBySize(34)
-        local color = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK
+        -- opts.single: one of a single choice (saved filters): a thick black outline when chosen,
+        -- as on the annotation sheet; black fill is for chips of which several can be on
+        local filled = on and not opts.single
+        local color = filled and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK
         local widest = TextWidget:new{ text = text, face = face13, bold = true }:getSize().w
         local tw = TextWidget:new{ text = text, face = face13, bold = on, fgcolor = color }
         local label = decoratedText(tw, opts.deco, color)
@@ -6381,8 +6464,9 @@ function FilterScreen:build()
         table.insert(content, label)
         local w = math.max(widest + extra + Screen:scaleBySize(28), opts.w or 0) -- opts.w: stretch to this width
         return { w = w, widget = TapBox:new{
-            Pill:new{ width = w, height = h, fill = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
-                border = on and 0 or thin, border_color = COLORS.line, content },
+            Pill:new{ width = w, height = h, fill = filled and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
+                border = filled and 0 or (on and Size.border.thick or thin),
+                border_color = on and COLORS.ink or COLORS.line, content },
             callback = callback, hold_callback = opts.hold,
         } }
     end
@@ -6601,7 +6685,7 @@ function FilterScreen:build()
                 if b then SortState.setFor(single, true, b) end
                 if a or b then list:applySort() end
                 self:changed()
-            end, { hold = function()
+            end, { single = true, hold = function()
                 local ConfirmBox = require("ui/widget/confirmbox")
                 NotesListWidget.showDialog(ConfirmBox:new{
                     text = string.format(_("Delete the saved filter “%s”?"), p.name),
@@ -6773,8 +6857,14 @@ function SS:build()
         return bar
     end
     local function padded(widget, top, bottom)
-        return VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top or 0 },
-            HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget }, VerticalSpan:new{ width = bottom or 0 } }
+        local g = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top or 0 } }
+        if Page.isColumn(widget) then -- each row indented on its own, so a tall column can be split over pages
+            for k = 1, #widget do table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget[k] }) end
+        else
+            table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget })
+        end
+        table.insert(g, VerticalSpan:new{ width = bottom or 0 })
+        return g
     end
     -- label (with an optional grey line under it) on the left, a control on the right
     local function row(label, sub, control, callback)
@@ -7434,14 +7524,17 @@ function ListPicker:build()
             last_group = it.group
             local gd = Geom:new{ w = rinner, h = Screen:scaleBySize(40) }
             local group_name = it.group
-            table.insert(rows, OverlapGroup:new{ dimen = gd, allow_mirroring = false,
+            -- the book's heading and its line as one row, kept with its first chapter
+            local hd = VerticalGroup:new{ align = "left", OverlapGroup:new{ dimen = gd, allow_mirroring = false,
                 LeftContainer:new{ dimen = gd, TextWidget:new{ text = group_name, face = getFaceOr(SERIF_FONT, 17, "cfont"), bold = true,
                     max_width = rinner - Screen:scaleBySize(60) } },
                 RightContainer:new{ dimen = gd, TapBox:new{ underlined(_("All")), callback = function()
                     for _j, x in ipairs(self.items) do if x.group == group_name then self:set(x.key, self.mode or "inc") end end
                     self:changed()
-                end } } })
-            table.insert(rows, LineWidget:new{ dimen = Geom:new{ w = rinner, h = Size.line.thin }, background = COLORS.line_light })
+                end } } },
+                LineWidget:new{ dimen = Geom:new{ w = rinner, h = Size.line.thin }, background = COLORS.line_light } }
+            hd.keep_with_next = true
+            table.insert(rows, hd)
         end
         local st = self:state(it.key)
         local mark
@@ -7569,9 +7662,12 @@ function SortPicker:build()
     -- the order in a sentence
     local rows = VerticalGroup:new{ align = "left" }
     local function heading(text)
-        table.insert(rows, VerticalSpan:new{ width = Screen:scaleBySize(14) })
-        table.insert(rows, TextWidget:new{ text = text:upper(), face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted })
-        table.insert(rows, VerticalSpan:new{ width = Screen:scaleBySize(6) })
+        -- one row, kept with what follows (Page.paged never ends a page with it)
+        local hd = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = Screen:scaleBySize(14) },
+            TextWidget:new{ text = text:upper(), face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted },
+            VerticalSpan:new{ width = Screen:scaleBySize(6) } }
+        hd.keep_with_next = true
+        table.insert(rows, hd)
     end
     heading(_("Quick picks"))
     local encoded = SortState.encode(levels)

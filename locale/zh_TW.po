@@ -704,10 +704,6 @@ msgstr "顏色"
 msgid "Go to highlight"
 msgstr "跳轉到標註"
 
-#: main.lua:4454
-msgid "Go to note"
-msgstr "跳轉到筆記"
-
 #: main.lua:4456
 msgid "Go to bookmark"
 msgstr ""

@@ -695,10 +695,6 @@ msgstr ""
 msgid "Go to highlight"
 msgstr ""
 
-#: main.lua:4454
-msgid "Go to note"
-msgstr ""
-
 #: main.lua:4456
 msgid "Go to bookmark"
 msgstr ""

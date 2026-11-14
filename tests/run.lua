@@ -23,7 +23,20 @@ function TextWidget:new(o)
     return { getSize = function() return { w = 10 * #(o.text or ""), h = 20 } end, free = function() end }
 end
 
+-- A column of widgets, as KOReader's: instances have the class as metatable
+local VerticalGroup = {}
+VerticalGroup.__index = VerticalGroup
+function VerticalGroup:extend(o) o = o or {}; setmetatable(o, self); self.__index = self; return o end
+function VerticalGroup:new(o) o = o or {}; setmetatable(o, self); self.__index = self; return o end
+function VerticalGroup:getSize()
+    local h, w = 0, 0
+    for _, c in ipairs(self) do local sz = c:getSize(); h = h + sz.h; w = math.max(w, sz.w) end
+    return { w = w, h = h }
+end
+VerticalGroup.free = function() end
+
 local real = {
+    ["ui/widget/verticalgroup"] = VerticalGroup,
     ["gettext"] = function(str) return str end,
     ["ui/widget/textwidget"] = TextWidget,
     ["device"] = { screen = { scaleBySize = function(_, v) return v end, getWidth = function() return 600 end,
@@ -869,6 +882,31 @@ local fw = setmetatable({ active_filter = { notes_presence = "only", books_exclu
     search_note = "love" } }, { __index = T.NotesListWidget })
 check("filter label in words", fw:exportFilterLabel() == "Notes, Hide Alpha, Zeta, Note: “love”", fw:exportFilterLabel())
 check("chips still count several books", fw:getFilterChips()[1].label == "Hide 2 books")
+
+-- menu pages: a heading never ends a page, a block taller than a page is split into its rows
+do
+    local P = T.NotesListWidget.Page
+    local function row(h, keep) return { getSize = function() return { w = 10, h = h } end, keep_with_next = keep } end
+    -- 100 per page (avail 130 - bar 30): rows 60, heading 20, then 50 -> the heading goes to page 2
+    local rows = { row(60), row(20, true), row(50), row(40) }
+    local pages = P.splitPages(rows, 130, 30, 0)
+    check("pages: heading moves to the next page", #pages == 3 and pages[1].last == 1 and pages[2].first == 2,
+        #pages .. " " .. tostring(pages[1].last))
+    local one = P.splitPages({ row(20), row(30) }, 130, 30, 0)
+    check("pages: all fits on one page", #one == 1 and one[1].first == 1 and one[1].last == 2)
+    -- a heading alone on a page stays (it can't move further)
+    local lone = P.splitPages({ row(20, true), row(150) }, 130, 30, 0)
+    check("pages: a heading at the top of a page stays", lone[1].first == 1)
+    local block = VerticalGroup:new{ align = "left", row(60), row(60), row(60) }
+    local centred = VerticalGroup:new{ row(60), row(60), row(60) }
+    local _, flat3 = P.splitPages({ row(10), centred }, 130, 30, 0)
+    check("pages: a centred column stays whole", #flat3 == 2)
+    local pg, flat = P.splitPages({ row(10), block }, 130, 30, 0)
+    check("pages: a tall block is split into its rows", #flat == 4 and #pg == 3, #flat .. " " .. #pg)
+    local wide = { row(150) } -- a single tall row that isn't a column stays whole
+    local _, flat2 = P.splitPages({ row(10), wide[1] }, 130, 30, 0)
+    check("pages: a single tall row stays whole", #flat2 == 2)
+end
 
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
