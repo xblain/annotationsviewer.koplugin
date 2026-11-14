@@ -2321,17 +2321,20 @@ local function colorName(key)
     end
     return key and (key:sub(1, 1):upper() .. key:sub(2)) or ""
 end
-local function setLabel(set, many)
+-- full: every name (sorted), for the filter line of an export; otherwise "3 books" when there are several
+local function setLabel(set, many, full)
     local keys = {}
     for k in pairs(set) do table.insert(keys, k) end
     if #keys == 1 then return keys[1] end
+    if full then table.sort(keys); return table.concat(keys, ", ") end
     return string.format(many, #keys)
 end
 local CHIP_HEIGHT = Screen:scaleBySize(32)
 local CHIP_GAP = Screen:scaleBySize(8)
 local CHIPS_PAD_TOP, CHIPS_PAD_BOTTOM = Screen:scaleBySize(6), Screen:scaleBySize(6)
 
-function NotesListWidget:getFilterChips()
+-- full: chips name every book, chapter and tag (the export's filter line)
+function NotesListWidget:getFilterChips(full)
     local af = self.active_filter or {}
     local chips = {}
     -- prefix: shown before the colour dot ("Hide ● Yellow")
@@ -2355,17 +2358,17 @@ function NotesListWidget:getFilterChips()
             end
         end
     end
-    if af.books and next(af.books) then add(setLabel(af.books, _("%d books")), function() af.books = nil end) end
+    if af.books and next(af.books) then add(setLabel(af.books, _("%d books"), full), function() af.books = nil end) end
     if af.books_exclude and next(af.books_exclude) then
-        add(_("Hide") .. " " .. setLabel(af.books_exclude, _("%d books")), function() af.books_exclude = nil end)
+        add(_("Hide") .. " " .. setLabel(af.books_exclude, _("%d books"), full), function() af.books_exclude = nil end)
     end
-    if af.chapters and next(af.chapters) then add(setLabel(af.chapters, _("%d chapters")), function() af.chapters = nil end) end
+    if af.chapters and next(af.chapters) then add(setLabel(af.chapters, _("%d chapters"), full), function() af.chapters = nil end) end
     if af.chapters_exclude and next(af.chapters_exclude) then
-        add(_("Hide") .. " " .. setLabel(af.chapters_exclude, _("%d chapters")), function() af.chapters_exclude = nil end)
+        add(_("Hide") .. " " .. setLabel(af.chapters_exclude, _("%d chapters"), full), function() af.chapters_exclude = nil end)
     end
-    if af.tags and next(af.tags) then add(setLabel(af.tags, _("%d tags")), function() af.tags = nil end) end
+    if af.tags and next(af.tags) then add(setLabel(af.tags, _("%d tags"), full), function() af.tags = nil end) end
     if af.tags_exclude and next(af.tags_exclude) then
-        add(_("Hide") .. " " .. setLabel(af.tags_exclude, _("%d tags")), function() af.tags_exclude = nil end)
+        add(_("Hide") .. " " .. setLabel(af.tags_exclude, _("%d tags"), full), function() af.tags_exclude = nil end)
     end
     if af.search_any and af.search_any ~= "" then add(quoted(af.search_any), function() af.search_any = nil end) end
     if af.search_highlight and af.search_highlight ~= "" then
@@ -2836,70 +2839,336 @@ end
 function NotesListWidget:showMainMenu()
     NotesListWidget.States.menu(self)
 end
--- Builds Markdown for a list of notes, grouped under a heading per book (in list order).
-local function notesToMarkdown(notes, filter_label)
-    local out = { "# " .. _("Annotations"), "" }
-    if filter_label and filter_label ~= "" then
-        table.insert(out, "_" .. _("Filter") .. ": " .. filter_label .. "_")
-        table.insert(out, "")
+-- Export: the list (with its filter and sort) as a Markdown or plain-text file, or onto the
+-- clipboard. What goes in is set on the Export page (☰ → Export, or Settings → Export); every
+-- option is a setting "export_<name>" with its default here. Export.build turns notes into text.
+local Export = {}
+Export.DEFAULTS = {
+    format = "md",        -- "md" | "txt"
+    header = true,        -- "Annotations" title and the filter line at the top
+    author = true,        -- author after the book title
+    chapter = "line",     -- "line" (in the info line) | "heading" | "none"
+    date = "date",        -- "date" | "datetime" | "none"
+    date_style = "iso",   -- "iso" (2026-01-09) | "long" (9 Jan 2026)
+    page = true,
+    notes = true,         -- your notes
+    style = false,        -- colour and style of the highlight
+    tags = false,
+    group = "book",       -- "book" (each book once, in the order it first shows) | "list" (as in the list)
+    highlight = "quote",  -- Markdown: "quote" | "italic" | "plain"
+    note_style = "bold",  -- Markdown: "bold" ("Note:" label) | "quote" | "italic"
+    files = "one",        -- "one" | "book" (a file per book)
+    name_date = true,     -- date and time in the file name (off: exporting again replaces the file)
+}
+function Export.options()
+    local o = {}
+    for k, v in pairs(Export.DEFAULTS) do
+        local s = getSetting("export_" .. k, nil)
+        if s == nil or type(s) ~= type(v) then o[k] = v else o[k] = s end
     end
-    local current_book
-    for _i, note in ipairs(notes) do
-        local book = note.book_title or "Unknown"
-        if book ~= current_book then
-            current_book = book
-            local authors = note.book_authors
-            table.insert(out, "## " .. book .. ((authors and authors ~= "") and (" — " .. tostring(authors)) or ""))
+    return o
+end
+-- the text split into lines (no \r), without empty lines at the end
+function Export.lines(text)
+    local out = {}
+    for line in (tostring(text or ""):gsub("\r", "") .. "\n"):gmatch("([^\n]*)\n") do table.insert(out, line) end
+    while #out > 0 and not out[#out]:find("%S") do out[#out] = nil end
+    return out
+end
+-- Markdown: a title, chapter, tag or filter can't turn into emphasis, a link or code
+function Export.esc(s, md)
+    s = tostring(s or "")
+    if not md then return s end
+    return (s:gsub("([\\`%*_%[%]<>])", "\\%1"))
+end
+-- the books in the order they first show; with group "list" a book starts again whenever the list
+-- goes to another book and back
+function Export.groups(notes, by_book)
+    local groups, index = {}, {}
+    for i = 1, #notes do
+        local n = notes[i]
+        local key = n.book_path or n.book_title or ""
+        local g
+        if by_book then g = index[key]
+        else
+            g = groups[#groups]
+            if g and g.key ~= key then g = nil end
+        end
+        if not g then
+            g = { key = key, title = n.book_title, authors = n.book_authors, notes = {} }
+            table.insert(groups, g)
+            if by_book then index[key] = g end
+        end
+        table.insert(g.notes, n)
+    end
+    return groups
+end
+function Export.dateText(datetime, o)
+    if o.date == "none" or not datetime or datetime == "" then return nil end
+    local with_time = o.date == "datetime"
+    if o.date_style == "long" then
+        return NoteItemWidget:formatDate(datetime, { year = "always", time = with_time and "always" or "never" })
+    end
+    local d = datetime:match("^%d+%-%d+%-%d+")
+    if not d then return datetime end
+    local hm = with_time and datetime:match("[ T](%d%d?:%d%d)")
+    return hm and (d .. " " .. hm) or d
+end
+function Export.authorsText(authors)
+    if not authors or authors == "" or authors == "Unknown" then return nil end
+    return (tostring(authors):gsub("%s*\n%s*", ", "))
+end
+-- One book (a group) as lines appended to out.
+function Export.addBook(out, g, o)
+    local md = o.format ~= "txt"
+    local title = Export.esc(g.title or _("Unknown book"), md)
+    local authors = o.author and Export.authorsText(g.authors)
+    local heading = title .. (authors and (" — " .. Export.esc(authors, md)) or "")
+    if md then table.insert(out, "## " .. heading)
+    else
+        table.insert(out, heading)
+        table.insert(out, string.rep("=", math.max(3, #(heading:gsub("[\128-\191]", "")))))
+    end
+    table.insert(out, "")
+    local current_chapter
+    for i = 1, #g.notes do
+        local note = g.notes[i]
+        local chapter = note.chapter ~= "" and note.chapter or nil
+        if o.chapter == "heading" and chapter and chapter ~= current_chapter then
+            current_chapter = chapter
+            if md then table.insert(out, "### " .. Export.esc(chapter, md))
+            else
+                table.insert(out, chapter)
+                table.insert(out, string.rep("-", math.max(3, #(chapter:gsub("[\128-\191]", "")))))
+            end
             table.insert(out, "")
         end
         local meta = {}
         if note.bookmark then table.insert(meta, _("Bookmark")) end
-        if note.datetime and note.datetime ~= "" then table.insert(meta, note.datetime:sub(1, 10)) end
-        if note.chapter and note.chapter ~= "" then table.insert(meta, note.chapter) end
-        -- page number as KOReader shows it (an EPUB position is not a page number)
-        local page_no = note.page_label
-        if page_no == nil and tonumber(note.page) then page_no = tonumber(note.page) end
-        if page_no ~= nil and page_no ~= "" then table.insert(meta, _("page") .. " " .. tostring(page_no)) end
-        if #meta > 0 then table.insert(out, "*" .. table.concat(meta, " · ") .. "*") end
-        local text = note.highlighted_text or ""
-        if text:find("%S") then
-            for line in (text:gsub("\r", "") .. "\n"):gmatch("([^\n]*)\n") do
-                table.insert(out, "> " .. line)
+        local date = Export.dateText(note.datetime, o)
+        if date then table.insert(meta, date) end
+        if o.chapter == "line" and chapter then table.insert(meta, Export.esc(chapter, md)) end
+        if o.page then
+            -- the page number as KOReader shows it (an EPUB position is not a page number)
+            local page_no = note.page_label
+            if page_no == nil and tonumber(note.page) then page_no = tonumber(note.page) end
+            if page_no ~= nil and page_no ~= "" then table.insert(meta, _("page") .. " " .. Export.esc(page_no, md)) end
+        end
+        if o.style and not note.bookmark then
+            if note.color and note.color ~= "" then table.insert(meta, Export.esc(colorName(note.color:lower()), md)) end
+            local drawer = note.drawer and note.drawer:lower()
+            if drawer and drawer ~= "" then table.insert(meta, Export.esc(STYLE_NAMES[drawer] or drawer, md)) end
+        end
+        if #meta > 0 then
+            local line = table.concat(meta, " · ")
+            table.insert(out, md and ("*" .. line .. "*") or line)
+        end
+        local text = Export.lines(note.highlighted_text)
+        if table.concat(text):find("%S") then
+            if md and o.highlight == "quote" then
+                for j = 1, #text do
+                    local line = text[j]
+                    table.insert(out, line == "" and ">" or ("> " .. line))
+                end
+            elseif md and o.highlight == "italic" then
+                local parts = {}
+                for j = 1, #text do
+                    local line = text[j]
+                    local t = line:match("^%s*(.-)%s*$")
+                    table.insert(parts, t ~= "" and ("*" .. t:gsub("%*", "\\*") .. "*") or "")
+                end
+                table.insert(out, (table.concat(parts, "  \n"):gsub("  \n  \n", "\n\n")))
+            else
+                table.insert(out, (table.concat(text, md and "  \n" or "\n")))
             end
         end
-        local user_note = note.user_note or ""
-        if user_note:find("%S") then
+        local user_note = o.notes and Export.lines(note.user_note) or {}
+        if table.concat(user_note):find("%S") then
             table.insert(out, "")
-            table.insert(out, "**" .. _("Note") .. ":** " .. user_note:gsub("\r", ""):gsub("\n", "  \n"))
+            local label = _("Note") .. ":"
+            if not md then
+                table.insert(out, label .. " " .. table.concat(user_note, "\n"))
+            elseif o.note_style == "quote" then
+                for j, line in ipairs(user_note) do
+                    table.insert(out, j == 1 and ("> **" .. label .. "** " .. line) or (line == "" and ">" or ("> " .. line)))
+                end
+            elseif o.note_style == "italic" then
+                local parts = {}
+                for j = 1, #user_note do
+                    local line = user_note[j]
+                    local t = line:match("^%s*(.-)%s*$")
+                    table.insert(parts, t ~= "" and ("*" .. t:gsub("%*", "\\*") .. "*") or "")
+                end
+                table.insert(out, "**" .. label .. "** " .. table.concat(parts, "  \n"))
+            else
+                table.insert(out, "**" .. label .. "** " .. table.concat(user_note, "  \n"))
+            end
+        end
+        if o.tags then
+            local tags = NoteWrapper:new(note):getTags()
+            if type(tags) == "table" and #tags > 0 then
+                local esc = {}
+                for j, t in ipairs(tags) do esc[j] = Export.esc(t, md) end
+                table.insert(out, "")
+                table.insert(out, md and ("**" .. _("Tags") .. ":** " .. table.concat(esc, ", "))
+                    or (_("Tags") .. ": " .. table.concat(esc, ", ")))
+            end
         end
         table.insert(out, "")
     end
+end
+-- The whole text of one file. header: the title and filter line on top (not in a file per book).
+function Export.build(notes, o, filter_label, header)
+    o = o or Export.options()
+    if header == nil then header = o.header end
+    local md = o.format ~= "txt"
+    local out = {}
+    if header then
+        local title = Export.allBookmarks(notes) and _("Bookmarks") or _("Annotations")
+        if md then table.insert(out, "# " .. title) else table.insert(out, title:upper()) end
+        if filter_label and filter_label ~= "" then
+            local line = _("Filter") .. ": " .. Export.esc(filter_label, md)
+            table.insert(out, md and ("_" .. line .. "_") or line)
+        end
+        table.insert(out, "")
+    end
+    local groups = Export.groups(notes, o.group ~= "list")
+    for k = 1, #groups do Export.addBook(out, groups[k], o) end
     return table.concat(out, "\n")
 end
+-- the old one: Markdown with the default options (tests)
+function Export.notesToMarkdown(notes, filter_label)
+    local o = {}
+    for k, v in pairs(Export.DEFAULTS) do o[k] = v end
+    return Export.build(notes, o, filter_label, true)
+end
+-- A safe file name: no characters a file system refuses, at most ~80 bytes (whole characters),
+-- the date and time added when asked, and " (2)" when the name is already used in this export.
+function Export.fileName(base, o, used, stamp)
+    base = tostring(base or ""):gsub("[%c/\\:%*%?\"<>|]", "_")
+    base = base:gsub("^[%s%.]+", ""):gsub("[%s%.]+$", "")
+    if #base > 80 then base = base:sub(1, 80):gsub("[\192-\255][\128-\191]*$", "") end
+    if base == "" then base = "annotations" end
+    if o.name_date then base = base .. "-" .. (stamp or os.date("%Y%m%d-%H%M%S")) end
+    local name, i = base, 2
+    used = used or {}
+    while used[name:lower()] do name = base .. " (" .. i .. ")"; i = i + 1 end
+    used[name:lower()] = true
+    return name .. (o.format == "txt" and ".txt" or ".md")
+end
+-- The files of an export: { { name =, text = } , ... }
+function Export.files(notes, o, filter_label, stamp)
+    local used, files = {}, {}
+    if o.files == "book" then
+        local groups = Export.groups(notes, true)
+        for k = 1, #groups do
+            local g = groups[k]
+            local out = {}
+            Export.addBook(out, g, o)
+            table.insert(files, { name = Export.fileName(g.title or "annotations", o, used, stamp),
+                text = table.concat(out, "\n"), count = #g.notes })
+        end
+        return files
+    end
+    local groups = Export.groups(notes, true)
+    local base = #groups == 1 and groups[1].title or (Export.allBookmarks(notes) and "bookmarks" or "annotations")
+    return { { name = Export.fileName(base, o, used, stamp), text = Export.build(notes, o, filter_label), count = #notes } }
+end
+-- The folder files go to: the chosen one, or koreader/exports.
+function Export.defaultDir()
+    local DataStorage = require("datastorage")
+    return DataStorage:getDataDir() .. "/exports"
+end
+function Export.dir()
+    local d = getSetting("export_dir", nil)
+    if type(d) ~= "string" or d == "" then d = Export.defaultDir() end
+    return d
+end
+-- Writes the files; returns the file (the folder when there are several) and the number of files,
+-- or nil and the error (saying how many were written already, for a file per book).
+function Export.write(notes, o, filter_label)
+    local dir = Export.dir()
+    if lfs.attributes(dir, "mode") ~= "directory" then
+        local ok, err = lfs.mkdir(dir)
+        if not ok and lfs.attributes(dir, "mode") ~= "directory" then return nil, tostring(err or dir) end
+    end
+    local files = Export.files(notes, o, filter_label, os.date("%Y%m%d-%H%M%S")) -- one time for every file
+    local first
+    for i = 1, #files do
+        local f = files[i]
+        local path = dir .. "/" .. f.name
+        local file, err = io.open(path, "w")
+        local ok = file ~= nil
+        if file then
+            ok, err = file:write(f.text)
+            local cok, cerr = file:close() -- a full card often only fails here
+            if ok then ok, err = cok, cerr end
+        end
+        if not ok then
+            local msg = tostring(err or path)
+            if i > 1 then msg = msg .. "\n" .. string.format(_("%d of %d files were written."), i - 1, #files) end
+            return nil, msg
+        end
+        first = first or path
+    end
+    return #files == 1 and first or dir, #files
+end
 
--- Writes the annotations currently in the list (with the active filter and sort order)
--- to a Markdown file in KOReader's data folder.
-function NotesListWidget:exportToMarkdown()
+-- The filter of the list in plain words, for the top of an export: the tab, then each filter
+-- as its chip says it, with every book, chapter and tag named.
+function NotesListWidget:exportFilterLabel()
+    local af = self.active_filter or {}
+    local parts = {}
+    local tabs = { exclude = _("Highlights"), only = _("Notes"), bookmarks = _("Bookmarks") }
+    if af.notes_presence and tabs[af.notes_presence] then table.insert(parts, tabs[af.notes_presence]) end
+    local chips = self:getFilterChips(true)
+    for k = 1, #chips do
+        local c = chips[k]
+        table.insert(parts, (c.colors and c.prefix) and (c.prefix .. " " .. c.label) or c.label)
+    end
+    return table.concat(parts, ", ")
+end
+function Export.allBookmarks(notes)
+    if #notes == 0 then return false end
+    for i = 1, #notes do
+        local n = notes[i]
+        if not n.bookmark then return false end
+    end
+    return true
+end
+-- Writes the annotations currently in the list (with the active filter and sort order) to files
+-- with the Export page's options.
+function NotesListWidget:exportList()
     local notes = self.filtered_notes or {}
     if #notes == 0 then
         NotesListWidget.showDialog(InfoMessage:new{ text = _("Nothing to export.") })
         return
     end
-    local DataStorage = require("datastorage")
-    local dir = DataStorage:getDataDir() .. "/exports"
-    if lfs.attributes(dir, "mode") ~= "directory" then lfs.mkdir(dir) end
-    local path = dir .. "/annotations-" .. os.date("%Y%m%d-%H%M%S") .. ".md"
-    local file, err = io.open(path, "w")
-    if not file then
-        NotesListWidget.showDialog(InfoMessage:new{ text = _("Export failed:") .. " " .. tostring(err) })
+    local path, n_files = Export.write(notes, Export.options(), self:exportFilterLabel())
+    if not path then
+        NotesListWidget.showDialog(InfoMessage:new{ text = _("Export failed:") .. " " .. tostring(n_files) })
         return
     end
-    file:write(notesToMarkdown(notes, filterToString(self.active_filter)))
-    file:close()
-    local all_bm = #notes > 0
-    for _i, n in ipairs(notes) do if not n.bookmark then all_bm = false; break end end
-    NotesListWidget.States.exported(#notes, path, all_bm)
+    NotesListWidget.States.exported(#notes, path, Export.allBookmarks(notes), n_files)
 end
+-- the old name (kept for anything that still calls it)
+function NotesListWidget:exportToMarkdown() self:exportList() end
+-- Copies the same text onto the clipboard (all books in one, also with a file per book).
+function NotesListWidget:copyList()
+    local notes = self.filtered_notes or {}
+    if #notes == 0 then
+        NotesListWidget.showDialog(InfoMessage:new{ text = _("Nothing to export.") })
+        return
+    end
+    local set = Device.input and Device.input.setClipboardText
+    if type(set) ~= "function" then
+        NotesListWidget.showDialog(InfoMessage:new{ text = _("This device has no clipboard.") })
+        return
+    end
+    set(Export.build(notes, Export.options(), self:exportFilterLabel()))
+    NotesListWidget.States.exported(#notes, nil, Export.allBookmarks(notes), 0, true)
+end
+NotesListWidget.Export = Export
 
 -- back_to_menu == false: opened from the sort button in the tab row, so don't reopen the ☰ menu.
 function NotesListWidget:showSortMenu(_back_to_menu, on_done)
@@ -5081,10 +5350,11 @@ function States.confirmDelete(note, on_delete)
 end
 
 -- Export done: a note at the bottom that closes itself; the list under it stays usable.
-function States.exported(count, path, bookmarks)
+-- path: the file, or the folder when there are several files; copied: put on the clipboard instead.
+function States.exported(count, path, bookmarks, n_files, copied)
     local rel = path
     local ok, DataStorage = pcall(require, "datastorage")
-    if ok then
+    if ok and path then
         local dir = DataStorage:getDataDir()
         local name = dir:match("([^/\\]+)[/\\]*$")
         if not name or name == "." then name = "koreader" end
@@ -5093,17 +5363,26 @@ function States.exported(count, path, bookmarks)
     States.Card:new{ anchor = "bottom", toast = true, timeout = 5, build = function(w)
         local icon_s = Screen:scaleBySize(18)
         local gap = Screen:scaleBySize(8)
-        local title = count == 1 and _("Exported 1 annotation") or string.format(_("Exported %d annotations"), count)
-        if bookmarks then
-            title = count == 1 and _("Exported 1 bookmark") or string.format(_("Exported %d bookmarks"), count)
+        local title
+        if copied then
+            title = bookmarks and (count == 1 and _("Copied 1 bookmark") or string.format(_("Copied %d bookmarks"), count))
+                or (count == 1 and _("Copied 1 annotation") or string.format(_("Copied %d annotations"), count))
+        else
+            title = count == 1 and _("Exported 1 annotation") or string.format(_("Exported %d annotations"), count)
+            if bookmarks then
+                title = count == 1 and _("Exported 1 bookmark") or string.format(_("Exported %d bookmarks"), count)
+            end
         end
+        local sub = rel
+        if copied then sub = _("to the clipboard")
+        elseif n_files and n_files > 1 then sub = string.format(_("%d files in %s"), n_files, tostring(rel)) end
         return VerticalGroup:new{ align = "left",
             HorizontalGroup:new{ align = "center",
                 IconWidget:new{ icon = "check", width = icon_s, height = icon_s },
                 HorizontalSpan:new{ width = gap },
                 TextWidget:new{ text = title, face = Font:getFace("cfont", 15), bold = true, max_width = w - icon_s - gap } },
             VerticalSpan:new{ width = Screen:scaleBySize(6) },
-            TextWidget:new{ text = rel, face = Font:getFace("cfont", 12), fgcolor = COLORS.muted, max_width = w },
+            TextWidget:new{ text = tostring(sub or ""), face = Font:getFace("cfont", 12), fgcolor = COLORS.muted, max_width = w },
         }
     end }:show()
 end
@@ -5126,7 +5405,7 @@ function States.menu(list)
     end
     table.insert(items, "line")
     table.insert(items, { icon = "move.up", label = _("Export to Markdown"),
-        value = string.format(_("%d shown"), #(list.filtered_notes or {})), cb = function() list:exportToMarkdown() end })
+        value = string.format(_("%d shown"), #(list.filtered_notes or {})), cb = function() list:exportList() end })
     table.insert(items, { icon = "cre.render.reload", label = _("Reload annotations"),
         cb = function() list.viewer:reloadAnnotations(list) end })
     table.insert(items, "line")
@@ -7116,7 +7395,9 @@ AllNotesViewer._test = {
     sortModeLabel = sortModeLabel,
     compareByPosition = compareByPosition,
     itemMatchesNote = itemMatchesNote,
-    notesToMarkdown = notesToMarkdown,
+    notesToMarkdown = Export.notesToMarkdown,
+    Export = Export,
+    setSetting = setSetting,
     NotesListWidget = NotesListWidget,
     NoteItemWidget = NoteItemWidget,
 }

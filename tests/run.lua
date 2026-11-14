@@ -45,9 +45,18 @@ local real = {
     end },
     ["logger"] = { info = function() end, warn = function() end, dbg = function() end },
     ["datastorage"] = { getSettingsDir = function() return "/tmp" end, getDataDir = function() return "/tmp" end },
-    ["luasettings"] = { open = function() return { data = {}, readSetting = function() return nil end,
-        saveSetting = function() end, flush = function() end, isTrue = function() return false end } end },
+    -- a settings file that remembers what is saved while the tests run
+    ["luasettings"] = { open = function()
+        local data = {}
+        return { data = data, readSetting = function(_, k) return data[k] end,
+            saveSetting = function(_, k, v) data[k] = v end, flush = function() end, isTrue = function() return false end }
+    end },
 }
+-- the real LuaFileSystem when it is installed (export writes files)
+do
+    local ok, lfs = pcall(require, "lfs")
+    if ok and type(lfs) == "table" then real["libs/libkoreader-lfs"] = lfs end
+end
 local real_require = require
 require = function(name) -- luacheck: ignore
     if real[name] ~= nil then return real[name] end
@@ -270,6 +279,107 @@ check("month: English name when KOReader's translation is missing", NIW.monthNam
 check("clock: 24 hours stays as stored", NIW.twelveHour() ~= true and NIW.clockText("14:05") == "14:05")
 check("clock: 12 hours", NIW.clockText("14:05", true) == "2:05 PM" and NIW.clockText("00:30", true) == "12:30 AM")
 check("date: no time stored", fd("2024-02-03", "always", "always"):match(",") == nil)
+
+-- export: options, grouping, formats, file names
+local E = T.Export
+local function opts(over)
+    local o = {}
+    for k, v in pairs(E.DEFAULTS) do o[k] = v end
+    for k, v in pairs(over or {}) do o[k] = v end
+    return o
+end
+check("export defaults from settings", E.options().format == "md" and E.options().header == true and E.options().style == false)
+local mixed = {
+    { book_path = "/a", book_title = "A", book_authors = "Ann\nBob", chapter = "One", datetime = "2026-01-09 10:12:00",
+      highlighted_text = "first", drawer = "lighten", color = "yellow", tags = { "x", "y" }, page_label = 3 },
+    { book_path = "/b", book_title = "B", chapter = "", datetime = "2026-01-10 11:00:00", highlighted_text = "second" },
+    { book_path = "/a", book_title = "A", book_authors = "Ann\nBob", chapter = "Two", datetime = "2026-01-11 12:30:00",
+      highlighted_text = "third", user_note = "my note\nline two" },
+}
+local function count(str, pat) local _s, n = str:gsub(pat, ""); return n end
+local g = E.build(mixed, opts(), "")
+check("export: each book once", count(g, "## A") == 1 and count(g, "## B") == 1, g)
+check("export: book order of first appearance", g:find("## A", 1, true) < g:find("## B", 1, true), g)
+check("export: third note stays with its book", g:find("third", 1, true) < g:find("## B", 1, true), g)
+check("export: authors on one line", g:find("## A — Ann, Bob", 1, true) ~= nil, g)
+local gl = E.build(mixed, opts({ group = "list" }), "")
+check("export: list order repeats the book", count(gl, "## A") == 2, gl)
+check("export: header", g:find("^# Annotations\n") ~= nil, g)
+check("export: no header", not E.build(mixed, opts({ header = false }), "f"):find("# Annotations", 1, true))
+check("export: filter line", E.build(mixed, opts(), "Notes, Hide 2 books"):find("_Filter: Notes, Hide 2 books_", 1, true) ~= nil)
+check("export: no author", not E.build(mixed, opts({ author = false }), ""):find("Bob", 1, true))
+local ch = E.build(mixed, opts({ chapter = "heading" }), "")
+check("export: chapter headings", ch:find("### One", 1, true) and ch:find("### Two", 1, true) and not ch:find("· One", 1, true), ch)
+check("export: chapter left out", not E.build(mixed, opts({ chapter = "none" }), ""):find("One", 1, true))
+check("export: date and time", E.build(mixed, opts({ date = "datetime" }), ""):find("*2026-01-09 10:12 · One · page 3*", 1, true) ~= nil)
+check("export: no date", not E.build(mixed, opts({ date = "none" }), ""):find("2026-01", 1, true))
+local jan = os.date("%b", os.time({ year = 2026, month = 1, day = 9 }))
+check("export: long date", E.build(mixed, opts({ date_style = "long" }), ""):find("9 " .. jan .. " 2026", 1, true) ~= nil)
+check("export: no page", not E.build(mixed, opts({ page = false }), ""):find("page 3", 1, true))
+check("export: colour and style", E.build(mixed, opts({ style = true }), ""):find("page 3 · Yellow · Lighten*", 1, true) ~= nil)
+check("export: tags", E.build(mixed, opts({ tags = true }), ""):find("**Tags:** x, y", 1, true) ~= nil)
+check("export: no tags by default", not g:find("Tags", 1, true))
+check("export: notes", g:find("**Note:** my note  \nline two", 1, true) ~= nil, g)
+check("export: notes left out", not E.build(mixed, opts({ notes = false }), ""):find("my note", 1, true))
+check("export: italic highlight", E.build(mixed, opts({ highlight = "italic" }), ""):find("\n*first*\n", 1, true) ~= nil)
+check("export: plain highlight", E.build(mixed, opts({ highlight = "plain" }), ""):find("\nfirst\n", 1, true) ~= nil)
+check("export: quoted note", E.build(mixed, opts({ note_style = "quote" }), ""):find("> **Note:** my note\n> line two", 1, true) ~= nil)
+check("export: italic note", E.build(mixed, opts({ note_style = "italic" }), ""):find("**Note:** *my note*  \n*line two*", 1, true) ~= nil)
+local txt = E.build(mixed, opts({ format = "txt", style = true }), "f")
+check("export txt: title", txt:find("^ANNOTATIONS\nFilter: f\n") ~= nil, txt)
+check("export txt: book underline", txt:find("A — Ann, Bob\n============\n", 1, true) ~= nil, txt)
+check("export txt: no markdown", not txt:find("[#>%*]"), txt)
+check("export txt: note", txt:find("Note: my note\nline two", 1, true) ~= nil, txt)
+check("export: escapes titles", E.build({ { book_title = "A *star* [x]", highlighted_text = "t" } }, opts(), ""):find("## A \\*star\\* \\[x\\]", 1, true) ~= nil)
+check("export: highlight text not escaped", E.build({ { book_title = "A", highlighted_text = "a_b *c*" } }, opts(), ""):find("> a_b *c*", 1, true) ~= nil)
+check("export: unknown book", E.build({ { highlighted_text = "t" } }, opts(), ""):find("## Unknown book", 1, true) ~= nil)
+check("export: bookmarks title", E.build({ { book_title = "A", bookmark = true, page_label = 2 } }, opts(), ""):find("^# Bookmarks") ~= nil)
+check("export: bookmark has no style", not E.build({ { book_title = "A", bookmark = true, drawer = "lighten", color = "red" } }, opts({ style = true }), ""):find("Red", 1, true))
+-- file names
+local used = {}
+check("file name: unsafe characters", E.fileName('a/b:c*?"<>|', opts({ name_date = false }), used) == "a_b_c______.md")
+check("file name: date", E.fileName("Book", opts(), {}, "20260109-101200") == "Book-20260109-101200.md")
+check("file name: txt", E.fileName("Book", opts({ format = "txt", name_date = false }), {}) == "Book.txt")
+local u2 = {}
+E.fileName("Same", opts({ name_date = false }), u2)
+check("file name: second one numbered", E.fileName("same", opts({ name_date = false }), u2) == "same (2).md")
+local long = string.rep("é", 60) -- 120 bytes
+local ln = E.fileName(long, opts({ name_date = false }), {})
+check("file name: cut at whole characters", #ln <= 83 and not ln:find("[\192-\255]%.md$") and ln:sub(-3) == ".md", ln)
+check("file name: empty", E.fileName("  ..  ", opts({ name_date = false }), {}) == "annotations.md")
+local f1 = E.files(mixed, opts({ name_date = false }), "")
+check("files: one file for several books", #f1 == 1 and f1[1].name == "annotations.md" and f1[1].count == 3)
+local f2 = E.files({ mixed[1], mixed[3] }, opts({ name_date = false }), "")
+check("files: one book named after it", f2[1].name == "A.md")
+local fb = E.files(mixed, opts({ files = "book", name_date = false }), "f")
+check("files: one per book", #fb == 2 and fb[1].name == "A.md" and fb[2].name == "B.md" and fb[1].count == 2)
+check("files: no header in a book file", fb[1].text:find("^## A") ~= nil and not fb[1].text:find("Filter", 1, true))
+check("files: bookmarks file name", E.files({ { book_path = "/a", book_title = "A", bookmark = true }, { book_path = "/b", book_title = "B", bookmark = true } },
+    opts({ name_date = false }), "")[1].name == "bookmarks.md")
+-- writing
+local dir = os.tmpname()
+os.remove(dir)
+T.setSetting("export_dir", dir)
+local lfs_ok, lfs = pcall(require, "lfs")
+if lfs_ok and type(lfs) == "table" and lfs.attributes then
+    local path, n = E.write(mixed, opts({ name_date = false }), "")
+    check("write: one file", path == dir .. "/annotations.md" and n == 1, tostring(path) .. " " .. tostring(n))
+    local fh = io.open(dir .. "/annotations.md")
+    check("write: content", fh and fh:read("*a") == E.build(mixed, opts({ name_date = false }), ""))
+    if fh then fh:close() end
+    local p2, n2 = E.write(mixed, opts({ name_date = false, files = "book" }), "")
+    check("write: a file per book", p2 == dir and n2 == 2 and io.open(dir .. "/B.md") ~= nil)
+    os.remove(dir .. "/annotations.md"); os.remove(dir .. "/A.md"); os.remove(dir .. "/B.md"); lfs.rmdir(dir)
+end
+T.setSetting("export_dir", "/proc/no/such/folder")
+local bad_path, bad_err = E.write(mixed, opts(), "")
+check("write: unwritable folder gives an error", bad_path == nil and bad_err ~= nil)
+T.setSetting("export_dir", nil)
+-- the filter line in plain words
+local fw = setmetatable({ active_filter = { notes_presence = "only", books_exclude = { Zeta = true, Alpha = true },
+    search_note = "love" } }, { __index = T.NotesListWidget })
+check("filter label in words", fw:exportFilterLabel() == "Notes, Hide Alpha, Zeta, Note: “love”", fw:exportFilterLabel())
+check("chips still count several books", fw:getFilterChips()[1].label == "Hide 2 books")
 
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
