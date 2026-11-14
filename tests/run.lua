@@ -220,6 +220,101 @@ check("empty highlight skipped", toNote({ drawer = "lighten", text = "", datetim
 local hl = toNote({ drawer = "lighten", text = "t", pos0 = "a", pos1 = "b", page = "a", pageno = 12, datetime = "d" }, 2)
 check("highlight kept", hl and not hl.bookmark and hl.text == "t" and hl.page_label == 12)
 
+-- old-format sidecars (KOReader before 2024): notes are in bookmarks[].text
+local legacy = T.legacyNotes({
+    highlight = {
+        [12] = {
+            { datetime = "2023-05-01 10:00:00", drawer = "lighten", color = "red", text = "first passage",
+              pos0 = "/body/p[1].0", pos1 = "/body/p[1].5", chapter = "One" },
+            { datetime = "2023-05-02 10:00:00", drawer = "underscore", text = "second passage",
+              pos0 = "/body/p[2].0", pos1 = "/body/p[2].5" },
+        },
+    },
+    bookmarks = {
+        { datetime = "2023-05-01 10:00:00", highlighted = true, notes = "first passage", text = "my old note",
+          page = "/body/p[1].0", pos0 = "/body/p[1].0", pos1 = "/body/p[1].5", chapter = "One" },
+        { datetime = "2023-05-02 10:00:00", highlighted = true, notes = "second passage",
+          text = "Page 13 second passage @ 2023-05-02 10:00:00",
+          page = "/body/p[2].0", pos0 = "/body/p[2].0", pos1 = "/body/p[2].5", chapter = "Two" },
+        { datetime = "2023-05-03 09:00:00", page = "/body/p[9].0", notes = "Page 40", text = "page note", chapter = "Three" },
+        { datetime = "2023-05-04 09:00:00", page = "/body/p[11].0", notes = "Page 44", text = "Page 44" },
+    },
+})
+local by_text = {}
+for _, n in ipairs(legacy) do by_text[n.bookmark and ("bm:" .. n.datetime) or n.text] = n end
+check("legacy: note taken from bookmarks[].text", by_text["first passage"] and by_text["first passage"].notes == "my old note")
+check("legacy: KOReader's automatic bookmark text is not a note", by_text["second passage"] and by_text["second passage"].notes == "")
+check("legacy: chapter from the bookmark when the highlight has none", by_text["second passage"] and by_text["second passage"].chapter == "Two")
+check("legacy: highlight keeps style and colour", by_text["first passage"].drawer == "lighten" and by_text["first passage"].color == "red"
+    and by_text["second passage"].color == "yellow")
+local pbm = by_text["bm:2023-05-03 09:00:00"]
+check("legacy: a page bookmark stays a bookmark", pbm and pbm.bookmark == true and pbm.notes == "page note" and pbm.text == "")
+check("legacy: page bookmark without a note", by_text["bm:2023-05-04 09:00:00"] and by_text["bm:2023-05-04 09:00:00"].notes == "")
+check("legacy: highlights become no bookmarks", #legacy == 4, #legacy)
+local all_legacy = true
+for _, n in ipairs(legacy) do if not n.legacy then all_legacy = false end end
+check("legacy: every note marked legacy", all_legacy)
+-- what KOReader keeps when it converts the file: text, note and date come from the bookmark
+local conv = T.legacyNotes({
+    highlights_imported = true,
+    highlight = { [4] = {
+        { datetime = "a", drawer = "strikeout", color = "blue", text = "old text", note = "plugin-only note",
+          pos0 = "/p[1].0", pos1 = "/p[1].9" },
+        { datetime = "b", drawer = "lighten", text = "never bookmarked", pos0 = "/p[5].0", pos1 = "/p[5].9" },
+    } },
+    bookmarks = {
+        { datetime = "a", highlighted = true, notes = "edited text", text = "My thought Page 4 edited text @ a",
+          page = "/p[1].0", pos0 = "/p[1].0", pos1 = "/p[1].9" },
+        { datetime = "c", highlighted = true, notes = "orphan text", text = "",
+          page = "/p[7].0", pos0 = "/p[7].0", pos1 = "/p[7].9" },
+    },
+})
+local c_by = {}
+for _, n in ipairs(conv) do c_by[n.text] = n end
+check("legacy: text from the bookmark, style from the highlight", c_by["edited text"] and c_by["edited text"].drawer == "strikeout"
+    and c_by["edited text"].color == "blue")
+check("legacy: a note typed before KOReader's own text is kept", c_by["edited text"] and c_by["edited text"].notes == "My thought Page 4 edited text @ a")
+check("legacy: a note only in highlight[] is not shown (KOReader drops it)", c_by["old text"] == nil and c_by["edited text"].notes ~= "plugin-only note")
+check("legacy: highlight without bookmark dropped once imported", c_by["never bookmarked"] == nil)
+check("legacy: bookmark without highlight entry gets the default style", c_by["orphan text"] and c_by["orphan text"].drawer == "lighten")
+local not_imported = T.legacyNotes({ highlight = { [2] = { { datetime = "x", drawer = "underscore", text = "pre-2014", pos0 = "/p[2].0", pos1 = "/p[2].5" } } } })
+check("legacy: before highlights_imported every highlight counts", #not_imported == 1 and not_imported[1].text == "pre-2014")
+check("legacy: no bookmarks and imported gives nothing", #T.legacyNotes({ highlights_imported = true,
+    highlight = { [2] = { { datetime = "x", drawer = "lighten", text = "t", pos0 = "a", pos1 = "b" } } } }) == 0)
+local reflow = T.legacyNotes({ highlights_imported = true, highlight = {},
+    bookmarks = { { datetime = "r", highlighted = true, page = 9, notes = "reflow", pos0 = { x = 1, y = 2 }, pos1 = { x = 3, y = 4 } } } })
+check("legacy pdf: a position without page gets the bookmark's page", reflow[1] and reflow[1].pos0.page == 9 and reflow[1].pos1.page == 9)
+local old_pdf = T.legacyNotes({ highlight = { [3] = { { datetime = "z", drawer = "lighten", text = "pdf 2013", pos0 = { x = 1, y = 1 }, pos1 = { x = 2, y = 2 } } } } })
+check("legacy pdf before 2014: page is the page number", old_pdf[1] and old_pdf[1].page == 3 and old_pdf[1].pos0.page == 3)
+local twice = T.legacyNotes({ highlights_imported = true,
+    highlight = { [1] = { { datetime = "d", drawer = "underscore", color = "green", text = "t", pos0 = "/a", pos1 = "/b" } } },
+    bookmarks = { { datetime = "d", highlighted = true, notes = "t", page = "/a", pos0 = "/a", pos1 = "/b" },
+                  { datetime = "d", highlighted = true, notes = "t", page = "/a", pos0 = "/a", pos1 = "/b" } } })
+check("legacy: two bookmarks on one highlight both keep its style", #twice == 2 and twice[2].drawer == "underscore")
+do -- KOReader's gettext is a callable table; a German sidecar has German automatic texts
+    local real_gt = real["gettext"]
+    real["gettext"] = setmetatable({}, { __call = function(_, str)
+        return str == "Page %1 %2 @ %3" and "Seite %1 %2 @ %3" or str end })
+    local de = T.legacyNotes({ highlights_imported = true, highlight = {},
+        bookmarks = { { datetime = "2023-01-01 10:00:00", highlighted = true, notes = "Text (1)",
+            text = "Seite 12 Text (1) @ 2023-01-01 10:00:00", page = "/p", pos0 = "/p", pos1 = "/q" } } })
+    real["gettext"] = real_gt
+    check("legacy: KOReader's translated automatic text is not a note", de[1] and de[1].notes == "", de[1] and de[1].notes)
+end
+local ok_empty, empty = pcall(T.legacyNotes, { highlight = { [3] = { { drawer = "lighten" }, "junk" } }, bookmarks = { "junk", { page = nil } } })
+check("legacy: missing fields give no error", ok_empty and #empty == 0)
+check("legacy: no data", #T.legacyNotes(nil) == 0 and #T.legacyNotes({}) == 0)
+local pdf = T.legacyNotes({
+    highlight = { [5] = { { datetime = "d", drawer = "lighten", text = "pdf text", pos0 = { x = 1, y = 2 }, pos1 = { x = 3, y = 4 } } } },
+    bookmarks = {
+        { datetime = "d", highlighted = true, page = 6, notes = "pdf text", text = "wrong page", pos0 = { x = 1, y = 2 }, pos1 = { x = 3, y = 4 } },
+        { datetime = "d", highlighted = true, page = 5, notes = "pdf text", text = "pdf note", pos0 = { x = 1, y = 2 }, pos1 = { x = 3, y = 4 } },
+    },
+})
+local pdf_hl
+for _, n in ipairs(pdf) do if n.page == 5 then pdf_hl = n end end
+check("legacy pdf: the highlight entry matches the bookmark on its page", pdf_hl and pdf_hl.notes == "pdf note" and pdf_hl.page_label == 5)
+
 -- bookmarks: finding them again in the sidecar
 local bnote = { bookmark = true, datetime = "d", page = "/body/p[3]" }
 check("bookmark match", T.itemMatchesNote({ datetime = "d", page = "/body/p[3]", text = "in Two" }, bnote))

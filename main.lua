@@ -3624,7 +3624,7 @@ end
 
 -- On-disk copy of the caches above, so a KOReader restart doesn't mean parsing every
 -- book's sidecar again. Bump CACHE_VERSION whenever the cached data's shape changes.
-local CACHE_VERSION = 3 -- 3: bookmarks and page labels are kept
+local CACHE_VERSION = 4 -- 3: bookmarks and page labels are kept; 4: old-format books marked legacy, with notes
 local _persist = nil        -- LuaSettings object, loaded on the first scan
 local _persist_dirty = false
 local _persist_count = 0
@@ -3737,20 +3737,7 @@ local function editStoredAnnotation(note, fn)
             end
         end
     end
-    if not found then -- legacy format (KOReader < 2024)
-        for _, page_highlights in pairs(data.highlight or {}) do
-            if type(page_highlights) == "table" then
-                for i, hl in ipairs(page_highlights) do
-                    if itemMatchesNote(hl, note) then
-                        fn(hl, page_highlights, i)
-                        found = true
-                        break
-                    end
-                end
-            end
-            if found then break end
-        end
-    end
+    -- an old-format sidecar (no `annotations` list) is never written: see AllNotesViewer.legacyBlocked
     if found then doc_settings:flush() end
     return found
 end
@@ -4055,6 +4042,119 @@ function AllNotesViewer:convertLiveAnnotations(live)
     end
     return annotations
 end
+-- A sidecar in KOReader's old format (no `annotations` list; the book was not opened since
+-- KOReader 2024) as plugin notes, each marked legacy. Built the way KOReader converts the file
+-- when it opens the book (readerannotation.lua migrateToAnnotations / buildAnnotation), so the
+-- list shows what KOReader will keep: every bookmark becomes one annotation, with its text
+-- (`notes`), note (`text`, unless KOReader wrote it itself), date and position; the style and
+-- colour come from the matching `highlight[page]` entry (the same date when both have one, and
+-- the same position). A highlight without a bookmark only counts when KOReader still imports
+-- those (no `highlights_imported`).
+function AllNotesViewer.legacyNotes(data)
+    local out = {}
+    if type(data) ~= "table" then return out end
+    local highlights = type(data.highlight) == "table" and data.highlight or {}
+    local bookmarks = type(data.bookmarks) == "table" and data.bookmarks or {}
+    local function samePos(a, b)
+        if type(a) == "table" and type(b) == "table" then return a.x == b.x and a.y == b.y end
+        return a == b
+    end
+    local function matches(hl, page, bm)
+        if hl.datetime ~= nil and bm.datetime ~= nil and hl.datetime ~= bm.datetime then return false end
+        if type(hl.pos0) == "table" and tonumber(bm.page) ~= tonumber(page) then return false end
+        return samePos(hl.pos0, bm.pos0) and samePos(hl.pos1, bm.pos1)
+    end
+    -- KOReader's own text on a bookmark ("Page 12 <text> @ <date>", in KOReader's language) is
+    -- not a note (readerbookmark.lua isBookmarkAutoText)
+    local auto_tpl = "Page %1 %2 @ %3"
+    local ok_gt, gettext = pcall(require, "gettext")
+    if ok_gt and gettext then -- KOReader's gettext is a callable table
+        local ok_t, t = pcall(gettext, auto_tpl)
+        if ok_t and type(t) == "string" then auto_tpl = t end
+    end
+    local function esc(str) return (tostring(str):gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0")) end
+    local function noteOf(bm)
+        local t = type(bm.text) == "string" and bm.text or ""
+        if t == "" or t == bm.notes then return "" end
+        local pat = esc(auto_tpl):gsub("%%%%([123])", function(d)
+            if d == "1" then return ".-" end
+            local v = d == "2" and bm.notes or bm.datetime
+            return v ~= nil and esc(v) or ".-"
+        end)
+        if t:match("^" .. pat .. "$") then return "" end
+        return t
+    end
+    -- a PDF position without its page (old reflow highlights) gets it, as KOReader does
+    local function withPage(pos, page)
+        if type(pos) ~= "table" or pos.page ~= nil then return pos end
+        local copy = {}
+        for k, v in pairs(pos) do copy[k] = v end
+        copy.page = page
+        return copy
+    end
+    local hl_list = {}
+    for page, page_highlights in pairs(highlights) do
+        if type(page_highlights) == "table" then
+            for k = 1, #page_highlights do
+                local hl = page_highlights[k]
+                if type(hl) == "table" and hl.drawer then table.insert(hl_list, { hl = hl, page = page }) end
+            end
+        end
+    end
+    local used = {}
+    for j = 1, #bookmarks do
+        local bm = bookmarks[j]
+        if type(bm) == "table" and bm.page ~= nil then
+            local note = noteOf(bm)
+            if bm.highlighted then
+                local hl, hl_page
+                for k = 1, #hl_list do
+                    -- KOReader takes the first match, even one another bookmark matched already
+                    if matches(hl_list[k].hl, hl_list[k].page, bm) then
+                        used[k] = true
+                        hl, hl_page = hl_list[k].hl, hl_list[k].page
+                        break
+                    end
+                end
+                local text = type(bm.notes) == "string" and bm.notes or ""
+                if text ~= "" or note ~= "" then
+                    table.insert(out, {
+                        page = bm.page, page_label = tonumber(hl_page) or tonumber(bm.page),
+                        pos0 = withPage(bm.pos0, bm.page), pos1 = withPage(bm.pos1, bm.page),
+                        chapter = bm.chapter or (hl and hl.chapter) or "", text = text, notes = note,
+                        datetime = bm.datetime or "",
+                        -- without its highlight entry KOReader uses the default style (lighten, yellow)
+                        drawer = hl and hl.drawer or "lighten", color = hl and hl.color or "yellow",
+                        tags = hl and hl.tags, keywords = hl and hl.keywords, legacy = true,
+                    })
+                end
+            else -- a page bookmark
+                table.insert(out, {
+                    page = bm.page, page_label = tonumber(bm.page), chapter = bm.chapter or "", text = "",
+                    notes = note, datetime = bm.datetime or "", bookmark = true, bm_text = bm.notes,
+                    legacy = true,
+                })
+            end
+        end
+    end
+    -- very old books (before 2014) had highlights that were never added to the bookmarks:
+    -- KOReader imports those once, while highlights_imported is not set
+    if not data.highlights_imported then
+        for k = 1, #hl_list do
+            local hl, page = hl_list[k].hl, hl_list[k].page
+            local text = type(hl.text) == "string" and hl.text or ""
+            if not used[k] and hl.pos0 ~= nil and text ~= "" then
+                table.insert(out, {
+                    page = type(hl.pos0) == "table" and (tonumber(page) or page) or hl.pos0, page_label = tonumber(page), pos0 = withPage(hl.pos0, page), pos1 = withPage(hl.pos1, page),
+                    chapter = hl.chapter or "", text = text, notes = "",
+                    datetime = hl.datetime or "", drawer = hl.drawer, color = hl.color or "yellow",
+                    tags = hl.tags, keywords = hl.keywords, legacy = true,
+                })
+            end
+        end
+    end
+    return out
+end
 -- key/sidecar are optional: pass them when getSidecarKey() was already called for this book.
 function AllNotesViewer:loadBookAnnotations(book_path, key, sidecar)
     local annotations = {}
@@ -4071,31 +4171,14 @@ function AllNotesViewer:loadBookAnnotations(book_path, key, sidecar)
     if not data then return annotations end
     
     local items = data.annotations
-    if items and #items > 0 then
+    -- an empty list is a converted book without annotations (KOReader keeps the old keys)
+    if type(items) == "table" then
         for idx, item in ipairs(items) do
             local n = AllNotesViewer.toNote(item, idx)
             if n then table.insert(annotations, n) end
         end
-    else
-        local highlights = data.highlight or {}
-        for page, page_highlights in pairs(highlights) do
-            if type(page_highlights) == "table" then
-                for _, hl in ipairs(page_highlights) do
-                    if hl.drawer then
-                        local has_highlight = hl.text and hl.text ~= ""
-                        local has_note = hl.note and hl.note ~= ""
-                        if has_highlight or has_note then
-                            table.insert(annotations, {
-                                page = tonumber(page) or 0, pos0 = hl.pos0, pos1 = hl.pos1,
-                                chapter = hl.chapter or "", text = hl.text or "", notes = hl.note or "",
-                                datetime = hl.datetime or "", drawer = hl.drawer, color = hl.color or "yellow",
-                                tags = hl.tags, keywords = hl.keywords
-                            })
-                        end
-                    end
-                end
-            end
-        end
+    else -- old format (book not opened since KOReader 2024): shown, but not editable
+        annotations = AllNotesViewer.legacyNotes(data)
     end
     table.sort(annotations, function(a, b) return (a.datetime or "") > (b.datetime or "") end)
     _annotation_cache[book_path] = { data = annotations, mtime = key }
@@ -4256,7 +4339,7 @@ function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations,
             highlighted_text = note.text, user_note = note.notes,
             datetime = note.datetime, drawer = note.drawer, color = note.color,
             bookmark = note.bookmark, bm_text = note.bm_text, page_label = note.page_label,
-            tags = all_tags,
+            legacy = note.legacy, tags = all_tags,
         })
     end
     SortState.bm_tab = nil -- a new list starts sorted for the annotation tabs (see syncSortTab)
@@ -4306,7 +4389,7 @@ function AllNotesViewer:showAllNotes(tab)
                 highlighted_text = note.text, user_note = note.notes,
                 datetime = note.datetime, drawer = note.drawer, color = note.color,
                 bookmark = note.bookmark, bm_text = note.bm_text, page_label = note.page_label,
-                tags = all_tags
+                legacy = note.legacy, tags = all_tags
             })
         end
     end
@@ -7340,8 +7423,18 @@ local function updateListedNote(parent_widget, note, fn)
     parent_widget:refresh()
 end
 
+-- A note from a book still in KOReader's old format can't be changed until KOReader has opened
+-- the book once (it converts the file then). Says so and returns true. An open book is already
+-- converted in memory, so changes go through KOReader as usual.
+function AllNotesViewer.legacyBlocked(note)
+    if not note.legacy or (note.book_path and getLiveReader(note.book_path)) then return false end
+    NotesListWidget.showDialog(InfoMessage:new{
+        text = _("This book still uses KOReader's old format. Open it once in KOReader, then try again."),
+    })
+    return true
+end
 function AllNotesViewer:setHighlightField(note, field, value, parent_widget, done_text)
-    if not note.book_path then return end
+    if not note.book_path or AllNotesViewer.legacyBlocked(note) then return end
     local updated = false
     local ui = getLiveReader(note.book_path)
     if ui then
@@ -7379,12 +7472,13 @@ function AllNotesViewer:updateHighlightColor(note, new_color, parent_widget)
     self:setHighlightField(note, "color", new_color, parent_widget, _("Color updated."))
 end
 function AllNotesViewer:confirmDelete(note, parent_widget)
+    if AllNotesViewer.legacyBlocked(note) then return end
     NotesListWidget.States.confirmDelete(note, function()
         self:deleteAnnotation(note, parent_widget)
     end)
 end
 function AllNotesViewer:deleteAnnotation(note, parent_widget)
-    if not note.book_path then return end
+    if not note.book_path or AllNotesViewer.legacyBlocked(note) then return end
     local deleted = false
     local ui = getLiveReader(note.book_path)
     if ui then
@@ -7444,6 +7538,7 @@ local function cleanHighlightTextForDialog(text)
 end
 -- start_text: what the field starts with instead of the saved note (after a failed save).
 function AllNotesViewer:editNote(note, parent_widget, on_done, start_text)
+    if AllNotesViewer.legacyBlocked(note) then return end
     local InputDialog = require("ui/widget/inputdialog")
     local input_dialog
     local has_note = note.user_note and note.user_note:find("%S") ~= nil
@@ -7492,7 +7587,7 @@ function AllNotesViewer:editNote(note, parent_widget, on_done, start_text)
 end
 -- on_fail: run after the "could not save" message is closed (editNote reopens with the text).
 function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget, on_fail)
-    if not note.book_path then return end
+    if not note.book_path or AllNotesViewer.legacyBlocked(note) then return end
     local value = new_note_text ~= "" and new_note_text or nil -- blank input deletes the note, as in KOReader
     local updated = false
     local ui = getLiveReader(note.book_path)
@@ -7597,6 +7692,7 @@ AllNotesViewer._test = {
     sortModeLabel = sortModeLabel,
     compareByPosition = compareByPosition,
     itemMatchesNote = itemMatchesNote,
+    legacyNotes = AllNotesViewer.legacyNotes,
     notesToMarkdown = Export.notesToMarkdown,
     Export = Export,
     setSetting = setSetting,

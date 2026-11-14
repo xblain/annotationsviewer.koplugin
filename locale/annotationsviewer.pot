@@ -1485,6 +1485,12 @@ msgid ""
 "annotations and try again."
 msgstr ""
 
+#: main.lua:7432
+msgid ""
+"This book still uses KOReader's old format. Open it once in KOReader, then try "
+"again."
+msgstr ""
+
 #: main.lua:7068
 msgid "Cannot find book path."
 msgstr ""
