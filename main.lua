@@ -1695,7 +1695,10 @@ local function colorStyleMatches(af, note)
         elseif t == "style" then has_s = true; if v == d then hit_s = true end end
     end
     if af.cs_exclude then return not (hit_c or hit_s) end
-    -- several colours: any of them; colours and styles together: both must match
+    -- several colours: any of them; colours and styles together: both must match. A highlight
+    -- without a colour (Invert never has one, nor do some older highlights) matches on its style
+    -- alone, or Invert with a colour would never show anything.
+    if has_c and has_s and hit_s and (c == nil or d == "invert") then return true end
     return (not has_c or hit_c) and (not has_s or hit_s)
 end
 
@@ -5967,7 +5970,7 @@ function FilterScreen:build()
             extra = extra + Screen:scaleBySize(18)
         end
         table.insert(content, label)
-        local w = widest + extra + Screen:scaleBySize(28)
+        local w = math.max(widest + extra + Screen:scaleBySize(28), opts.w or 0) -- opts.w: stretch to this width
         return { w = w, widget = TapBox:new{
             Pill:new{ width = w, height = h, fill = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
                 border = on and 0 or thin, border_color = COLORS.line, content },
@@ -6074,12 +6077,28 @@ function FilterScreen:build()
                 table.insert(items, chip(hc[1], af.cs and af.cs[key], function() toggle(key) end, { dot = hc[2] }))
             end
         end
-        for _i, st in ipairs(HIGHLIGHT_STYLES) do
-            local key = "style:" .. st[1]
-            if offered(key) then
+        -- the styles on a row of their own, stretched to equal widths across it; natural widths
+        -- (wrapping) when they would not fit side by side
+        local styles = {}
+        for n = 1, #HIGHLIGHT_STYLES do
+            local st = HIGHLIGHT_STYLES[n]
+            if offered("style:" .. st[1]) then table.insert(styles, st) end
+        end
+        local gap = Screen:scaleBySize(8)
+        local function styleChips(w)
+            local list = {}
+            for n = 1, #styles do
+                local st = styles[n]
+                local key = "style:" .. st[1]
                 local deco = (st[1] == "underscore" and "underline") or (st[1] == "strikeout" and "strike") or nil
-                table.insert(items, chip(st[2], af.cs and af.cs[key], function() toggle(key) end, { deco = deco }))
+                list[n] = chip(st[2], af.cs and af.cs[key], function() toggle(key) end, { deco = deco, w = w })
             end
+            return list
+        end
+        local each = #styles > 0 and math.floor((inner - gap * (#styles - 1)) / #styles) or 0
+        local style_items = styleChips(each)
+        for n = 1, #style_items do
+            if style_items[n].w > each then style_items = styleChips(nil); break end
         end
         local flip = TapBox:new{ underlined(af.cs_exclude and _("Show only these instead") or _("Hide these instead"), face13),
             callback = function()
@@ -6090,6 +6109,8 @@ function FilterScreen:build()
             labelRow(TextWidget:new{ text = af.cs_exclude and _("Hide colour & style") or _("Colour & style"), face = face15 }, flip),
             VerticalSpan:new{ width = Screen:scaleBySize(8) },
             flow(items),
+            (#items > 0 and #style_items > 0) and VerticalSpan:new{ width = gap } or nil,
+            #style_items > 0 and flow(style_items) or nil,
         }, Screen:scaleBySize(14), Screen:scaleBySize(14)))
         table.insert(body, rowLine())
     end
