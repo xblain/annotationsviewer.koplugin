@@ -351,7 +351,12 @@ end
 -- The rule as it applies to a view: in one book only its date or place part counts.
 function SortState.view(mode, single)
     local levels = SortState.parse(mode) or SortState.parse("date:desc")
-    if not single then return levels end
+    if not single then
+        -- a rule saved for one book (chapter) or edited by hand: keep what makes sense here
+        local out = SortState.revalidate(levels, false)
+        if #out == 0 then out = SortState.parse("date:desc") end
+        return out
+    end
     local first = levels[1].key
     if first == "date" or first == "chapter" or first == "pos" then
         local keep = {}
@@ -1501,20 +1506,21 @@ local function filterToString(filter, skip_presence)
     if not filter then return "" end
     local parts = {}
     -- Colour / style
-    if filter.cs and next(filter.cs) then
+    if type(filter.cs) == "table" and next(filter.cs) then
         local names = {}
         for k in pairs(filter.cs) do
-            local t, v = k:match("^(%a+):(.+)$")
+            local t, v
+            if type(k) == "string" then t, v = k:match("^(%a+):(.+)$") end -- a broken key is left out
             local name
             if t == "color" then
                 for _i, hc in ipairs(ReaderHighlight.highlight_colors) do
                     if hc[2] == v then name = hc[1]; break end
                 end
             end
-            table.insert(names, name or (v:sub(1, 1):upper() .. v:sub(2)))
+            if v and filter.cs[k] == true then table.insert(names, name or (v:sub(1, 1):upper() .. v:sub(2))) end
         end
         table.sort(names)
-        table.insert(parts, (filter.cs_exclude and "C≠ " or "C: ") .. table.concat(names, ", "))
+        if #names > 0 then table.insert(parts, (filter.cs_exclude and "C≠ " or "C: ") .. table.concat(names, ", ")) end
     end
     -- Books include / exclude
     if filter.books and next(filter.books) then
@@ -1670,19 +1676,45 @@ end
 -- af.cs_exclude to hide them instead of showing only them. Older saved filters used a single
 -- af.type/af.value (and type_exclude/value_exclude); they are moved into the set here.
 local function normalizeColorStyle(af)
-    if not af then return end
-    if af.type and af.value then
-        af.cs = af.cs or {}
+    if type(af) ~= "table" then return end
+    local function valid(t, v) return (t == "color" or t == "style") and type(v) == "string" and v ~= "" end
+    local inc = valid(af.type, af.value)
+    local exc = valid(af.type_exclude, af.value_exclude)
+    if inc then
+        af.cs = type(af.cs) == "table" and af.cs or {}
         af.cs[af.type .. ":" .. af.value] = true
         af.cs_exclude = false
-    end
-    if af.type_exclude and af.value_exclude then
-        if not (af.cs and next(af.cs)) then
-            af.cs = { [af.type_exclude .. ":" .. af.value_exclude] = true }
-            af.cs_exclude = true
+        -- an old filter that also hid something: "show yellow, hide Underline" is "yellow, with
+        -- any style but Underline" (colours and styles together must both match). Hiding the same
+        -- kind as the one shown adds nothing.
+        if exc and af.type_exclude ~= af.type then
+            if af.type_exclude == "style" then
+                local styles = { "lighten", "underscore", "strikeout", "invert" }
+                for n = 1, #styles do
+                    if styles[n] ~= af.value_exclude then af.cs["style:" .. styles[n]] = true end
+                end
+            else
+                local colors = ReaderHighlight.highlight_colors or {}
+                for n = 1, #colors do
+                    local key = colors[n][2]
+                    if type(key) == "string" and key ~= af.value_exclude then af.cs["color:" .. key] = true end
+                end
+            end
         end
+    elseif exc and not (type(af.cs) == "table" and next(af.cs)) then
+        af.cs = { [af.type_exclude .. ":" .. af.value_exclude] = true }
+        af.cs_exclude = true
     end
     af.type, af.value, af.type_exclude, af.value_exclude = nil, nil, nil, nil
+    -- drop what can't be a colour or style (a hand-edited or broken saved filter)
+    if af.cs ~= nil and type(af.cs) ~= "table" then af.cs = nil end
+    if af.cs then
+        for k in pairs(af.cs) do
+            local t, v
+            if type(k) == "string" then t, v = k:match("^(%a+):(.+)$") end
+            if not valid(t, v) or af.cs[k] ~= true then af.cs[k] = nil end
+        end
+    end
     if af.cs and not next(af.cs) then af.cs, af.cs_exclude = nil, nil end
 end
 local function colorStyleMatches(af, note)
@@ -1914,7 +1946,7 @@ end
 -- Scrollbar marks follow the sort order: a mark where the group changes. Books (or authors) when
 -- sorted by book / author / file, months when sorted by date, chapters in one book sorted by location.
 function NotesListWidget.markKey(note, single)
-    local levels = SortState.parse(SortState.get(single)) or { { key = "date" } }
+    local levels = SortState.view(SortState.get(single), single) -- the order the list really has
     local by = levels[1].key
     if single then
         for _, l in ipairs(levels) do
@@ -2301,10 +2333,10 @@ local function sortModeLabel(mode, single)
         return SortState.SHORT.date[l.dir]
     end
     if not SORT_MODES[mode] then
-        local levels = SortState.parse(mode)
-        if not levels then mode = "date_newest" else
+        -- a rule that can't be read sorts newest first (sortNotesList): say so
+        if not SortState.parse(mode) then mode = "date_newest" else
             local parts = {}
-            for _, l in ipairs(levels) do
+            for _, l in ipairs(SortState.view(mode, false)) do
                 parts[#parts + 1] = SortState.SHORT[l.key][l.dir]
             end
             return table.concat(parts, " › ")
@@ -3202,8 +3234,9 @@ function NotesListWidget:applySort()
 end
 function NotesListWidget:sortNotesList(notes_list, sort_mode, single)
     sort_mode = sort_mode or SortState.get(single)
-    if single then sort_mode = SortState.normView(sort_mode, true) end
-    local comparator = SORT_COMPARATORS[sort_mode]
+    -- the rule as it applies to this view; one that can't be read sorts newest first, as its label says
+    sort_mode = SortState.normView(sort_mode, single)
+    local comparator = SORT_COMPARATORS[sort_mode] or SORT_COMPARATORS["date:desc"]
     local levels = SortState.parse(sort_mode)
     local uses_opened, uses_chapter = false, false
     for _, l in ipairs(levels or {}) do
@@ -6376,7 +6409,10 @@ function FilterScreen:build()
         end
         for i, p in ipairs(presets) do
             local here = sortHere(p)
-            local on = same(p.filter or {}, list.active_filter or {}) and (not here
+            -- compared the way it applies (an old or broken saved filter is cleaned up on applying)
+            local pf = deepCopy(p.filter) or {}
+            normalizeColorStyle(pf)
+            local on = same(pf, list.active_filter or {}) and (not here
                 or SortState.normView(here, single) == SortState.normView(SortState.get(single), single))
             table.insert(chips, chip(p.name, on, function()
                 local presence = list.active_filter and list.active_filter.notes_presence
@@ -7810,6 +7846,7 @@ AllNotesViewer._test = {
     legacyNotes = AllNotesViewer.legacyNotes,
     samePath = AllNotesViewer.samePath,
     getSidecarKey = getSidecarKey,
+    normalizeColorStyle = normalizeColorStyle,
     readSidecar = AllNotesViewer.readSidecar,
     DocSettings = DocSettings,
     notesToMarkdown = Export.notesToMarkdown,

@@ -450,6 +450,66 @@ do
     DS.openSettingsFile = orig_open
 end
 
+-- broken or old sort and filter settings fall back to defaults
+do
+    local SS = T.SortState
+    local ok_d, desc = pcall(SS.describe, SS.view("chapter:asc,date:desc", false), false)
+    check("all books: a one-book rule (chapter) doesn't error", ok_d and type(desc) == "string", tostring(desc))
+    check("all books: chapter dropped, newest first", SS.encode(SS.view("chapter:asc,date:desc", false)) == "date:desc")
+    check("all books: a valid rule is kept", SS.encode(SS.view("author:asc,book:asc,pos:asc", false)) == "author:asc,book:asc,pos:asc")
+    check("all books: an old name still works", SS.encode(SS.view("author_location_asc", false)) ~= "date:desc")
+    -- an unknown rule: the label and the order agree (newest first)
+    check("label for garbage", T.sortModeLabel("garbage") == T.sortModeLabel("date_newest"), T.sortModeLabel("garbage"))
+    local gnotes = { { datetime = "2026-01-01" }, { datetime = "2026-03-01" }, { datetime = "2026-02-01" } }
+    T.NotesListWidget:sortNotesList(gnotes, "garbage", false)
+    check("garbage rule sorts newest first", gnotes[1].datetime == "2026-03-01" and gnotes[3].datetime == "2026-01-01")
+    local notes2 = { { datetime = "2026-01-01" }, { datetime = "2026-03-01" } }
+    T.NotesListWidget:sortNotesList(notes2, "chapter:asc", false)
+    check("chapter rule in all books sorts newest first", notes2[1].datetime == "2026-03-01")
+    T.setSetting("sort_mode", "chapter:asc,date:desc")
+    local k1 = T.NotesListWidget.markKey({ datetime = "2026-03-05", book_title = "A" }, false)
+    check("scrollbar marks follow the order the list really has (months)", k1 == "2026-03", tostring(k1))
+    T.setSetting("sort_mode", nil)
+end
+do
+    local N = T.normalizeColorStyle
+    local f = { cs = { yellow = true, ["color:red"] = true, [3] = true, ["style:"] = true, ["bogus:x"] = true } }
+    N(f)
+    check("colour filter: broken keys dropped", f.cs and f.cs["color:red"] and f.cs.yellow == nil and f.cs[3] == nil
+        and f.cs["style:"] == nil and f.cs["bogus:x"] == nil)
+    local f2 = { cs = { yellow = true } }
+    N(f2)
+    check("colour filter: nothing valid left means no filter", f2.cs == nil and f2.cs_exclude == nil)
+    check("filterToString: a key that is off is not listed", not T.filterToString({ cs = { ["color:red"] = false, ["color:blue"] = true } }):find("Red", 1, true))
+    local ok_s, str = pcall(T.filterToString, { cs = { yellow = true, ["color:red"] = true } })
+    check("filterToString: a broken key is left out", ok_s and str:find("C: ", 1, true) ~= nil and not str:find("ellow", 1, true), tostring(str))
+    local w = setmetatable({ active_filter = { cs = { yellow = true, ["style:underscore"] = true } } }, { __index = T.NotesListWidget })
+    local ok_c, chips = pcall(w.getFilterChips, w)
+    check("chips: a broken colour key doesn't error", ok_c and type(chips) == "table", tostring(chips))
+    -- old saved filters
+    local old1 = { type = "color", value = "yellow", type_exclude = "style", value_exclude = "underscore" }
+    N(old1)
+    check("old filter: show yellow, hide Underline is kept", old1.cs and old1.cs["color:yellow"] and not old1.cs["style:underscore"]
+        and old1.cs["style:lighten"] and old1.cs["style:invert"] and not old1.cs_exclude and old1.type == nil)
+    local old2 = { type_exclude = "color", value_exclude = "red" }
+    N(old2)
+    check("old filter: hide only", old2.cs and old2.cs["color:red"] and old2.cs_exclude == true)
+    local old3 = { type = "style", value = "lighten", type_exclude = "style", value_exclude = "invert" }
+    N(old3)
+    check("old filter: hiding the same kind adds nothing", old3.cs and old3.cs["style:lighten"] and not old3.cs["style:invert"])
+    -- what the old+new filter shows
+    local olist = {
+        { highlighted_text = "a", drawer = "lighten", color = "yellow" },
+        { highlighted_text = "b", drawer = "underscore", color = "yellow" },
+        { highlighted_text = "c", drawer = "lighten", color = "red" },
+    }
+    local lw = { notes_list = olist, active_filter = { type = "color", value = "yellow", type_exclude = "style", value_exclude = "underscore" } }
+    T.NotesListWidget.applyFilter(lw)
+    local shown = {}
+    for _, n in ipairs(lw.filtered_notes) do shown[#shown + 1] = n.highlighted_text end
+    check("old filter: yellow shown, yellow underline hidden", table.concat(shown, "|") == "a", table.concat(shown, "|"))
+end
+
 -- bookmarks: finding them again in the sidecar
 local bnote = { bookmark = true, datetime = "d", page = "/body/p[3]" }
 check("bookmark match", T.itemMatchesNote({ datetime = "d", page = "/body/p[3]", text = "in Two" }, bnote))
