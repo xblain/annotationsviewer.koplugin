@@ -432,8 +432,20 @@ function SortState.build(mode)
 end
 local SORT_COMPARATORS = setmetatable({}, { __index = function(_, mode) return SortState.build(mode) end })
 
+-- A highlight colour's code ("#rrggbb"). Newer KOReader (after 2026.07) lets you give each
+-- colour its own name and code (Highlight color → hold a colour): its code is used then, the
+-- built-in one otherwise. Never inverted for night mode: the list paints true colours itself.
+function COLORS.highlightCode(key)
+    if type(key) ~= "string" then return nil end
+    key = key:lower()
+    if ReaderHighlight.getHighlightColorCode then
+        local ok, code = pcall(ReaderHighlight.getHighlightColorCode, ReaderHighlight, key, nil, false)
+        if ok and type(code) == "string" and code:match("^#%x%x%x%x%x%x$") then return code end
+    end
+    return HIGHLIGHT_COLORS[key]
+end
 local function getHighlightColor(color)
-        local val = HIGHLIGHT_COLORS[color and color:lower() or ""]
+    local val = COLORS.highlightCode(color)
     if val and BlitBuffer.colorFromString then
         return BlitBuffer.colorFromString(val)
     end
@@ -682,6 +694,24 @@ function UnderlineWidget:paintTo(bb, x, y)
     bb:paintRect(x, y + self.height - Size.line.medium, self.width, Size.line.medium, BlitBuffer.COLOR_BLACK)
 end
 local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_parent = nil, is_last = false, is_preview = false, disable_tap = false, skip_title = false, skip_info = false }
+-- A highlight colour as painted, and its name: the name you gave it in KOReader when it has one.
+NoteItemWidget.colorValue = getHighlightColor
+function NoteItemWidget.colorLabel(key)
+    if type(key) ~= "string" or key == "" then return "" end
+    key = key:lower()
+    if ReaderHighlight.getHighlightColorString then
+        local ok, name = pcall(ReaderHighlight.getHighlightColorString, ReaderHighlight, key)
+        -- the key itself comes back for a colour KOReader doesn't know, unless you named it so
+        local own = ReaderHighlight.custom_colors and ReaderHighlight.custom_colors[key]
+        if ok and type(name) == "string" and name ~= "" and (name ~= key or (type(own) == "table" and own.name == key)) then
+            return name
+        end
+    end
+    for _i, v in ipairs(ReaderHighlight.highlight_colors or {}) do
+        if v[2] == key then return v[1] end
+    end
+    return key:sub(1, 1):upper() .. key:sub(2)
+end
 
 -- Longest a note (the text you wrote) is shown in the list; longer ones end with "...".
 NoteItemWidget.DEFAULT_NOTE_LINES = 5
@@ -1512,11 +1542,7 @@ local function filterToString(filter, skip_presence)
             local t, v
             if type(k) == "string" then t, v = k:match("^(%a+):(.+)$") end -- a broken key is left out
             local name
-            if t == "color" then
-                for _i, hc in ipairs(ReaderHighlight.highlight_colors) do
-                    if hc[2] == v then name = hc[1]; break end
-                end
-            end
+            if t == "color" then name = NoteItemWidget.colorLabel(v) end
             if v and filter.cs[k] == true then table.insert(names, name or (v:sub(1, 1):upper() .. v:sub(2))) end
         end
         table.sort(names)
@@ -2350,12 +2376,7 @@ end
 -- Active-filter chips under the tabs: one black chip per filter (tap to remove it),
 -- "Clear all", and "N of M" on the right. Laid out over as many rows as needed.
 local STYLE_NAMES = { lighten = _("Lighten"), underscore = _("Underline"), strikeout = _("Strikeout"), invert = _("Invert") }
-local function colorName(key)
-    for _i, v in ipairs(ReaderHighlight.highlight_colors) do
-        if v[2] == key then return v[1] end
-    end
-    return key and (key:sub(1, 1):upper() .. key:sub(2)) or ""
-end
+local function colorName(key) return NoteItemWidget.colorLabel(key) end
 -- full: every name (sorted), for the filter line of an export; otherwise "3 books" when there are several
 local function setLabel(set, many, full)
     local keys = {}
@@ -4925,7 +4946,7 @@ function AnnotationSheet:build()
     local rows = VerticalGroup:new{ align = "left" }
     local row, row_w = HorizontalGroup:new{}, 0
     for _i, c in ipairs(ReaderHighlight.highlight_colors) do
-        local key, name = c[2], c[1]
+        local key, name = c[2], NoteItemWidget.colorLabel(c[2])
         local on = (cur_color == key)
         local widest = TextWidget:new{ text = name, face = chip_face, bold = true }:getSize().w
         local label = HorizontalGroup:new{ align = "center",
@@ -6308,7 +6329,7 @@ function FilterScreen:build()
         for _i, hc in ipairs(ReaderHighlight.highlight_colors) do
             local key = "color:" .. hc[2]
             if offered(key) then
-                table.insert(items, chip(hc[1], af.cs and af.cs[key], function() toggle(key) end, { dot = hc[2] }))
+                table.insert(items, chip(NoteItemWidget.colorLabel(hc[2]), af.cs and af.cs[key], function() toggle(key) end, { dot = hc[2] }))
             end
         end
         -- the styles on a row of their own, stretched to equal widths across it; natural widths
@@ -7516,10 +7537,10 @@ function AllNotesViewer:showColorPicker(note, parent_widget)
         local colors = {}
         for _, v in ipairs(ReaderHighlight.highlight_colors) do
             if v[2] ~= "gray" then
-                table.insert(colors, { v[2], v[1], BlitBuffer.HIGHLIGHT_COLORS[v[2]] })
+                table.insert(colors, { v[2], NoteItemWidget.colorLabel(v[2]), COLORS.highlightCode(v[2]) })
             end
         end
-        table.insert(colors, { "gray", _("Gray"), BlitBuffer.COLOR_GRAY })
+        table.insert(colors, { "gray", NoteItemWidget.colorLabel("gray"), BlitBuffer.COLOR_GRAY })
     local radio_buttons = {}
     for _, c in ipairs(colors) do
                 table.insert(radio_buttons, {
@@ -7849,6 +7870,8 @@ AllNotesViewer._test = {
     samePath = AllNotesViewer.samePath,
     getSidecarKey = getSidecarKey,
     normalizeColorStyle = normalizeColorStyle,
+    ReaderHighlight = ReaderHighlight,
+    COLORS = COLORS,
     readSidecar = AllNotesViewer.readSidecar,
     DocSettings = DocSettings,
     notesToMarkdown = Export.notesToMarkdown,

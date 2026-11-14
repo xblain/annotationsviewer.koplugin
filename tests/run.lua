@@ -510,6 +510,48 @@ do
     check("old filter: yellow shown, yellow underline hidden", table.concat(shown, "|") == "a", table.concat(shown, "|"))
 end
 
+-- KOReader's own colour names and codes (newer KOReader lets you rename and recolour them)
+do
+    local RH, NIW = T.ReaderHighlight, T.NoteItemWidget
+    local saved = { rawget(RH, "highlight_colors"), rawget(RH, "getHighlightColorString"), rawget(RH, "getHighlightColorCode") }
+    RH.highlight_colors = { { "Red", "red" }, { "Yellow", "yellow" }, { "Gray", "gray" } }
+    -- KOReader 2026.07: no custom colours (getHighlightColorString gives the built-in name)
+    RH.getHighlightColorCode = false
+    RH.getHighlightColorString = function(self, key)
+        for _, c in ipairs(self.highlight_colors) do if c[2] == key then return c[1] end end
+        return key
+    end
+    check("colour label: built-in name", NIW.colorLabel("red") == "Red")
+    check("colour label: unknown key capitalised", NIW.colorLabel("teal") == "Teal")
+    -- newer KOReader: custom names and codes
+    local custom = { red = { name = "Anger", code = "#123456" }, yellow = { name = "Joy" } }
+    RH.getHighlightColorString = function(self, key)
+        if custom[key] and custom[key].name then return custom[key].name end
+        for _, c in ipairs(self.highlight_colors) do if c[2] == key then return c[1] end end
+        return key
+    end
+    local night_asked
+    RH.getHighlightColorCode = function(_, key, _force, honor_night)
+        night_asked = honor_night
+        return custom[key] and custom[key].code or (key == "yellow" and "#FFFF00") or nil
+    end
+    check("colour label: your own name", NIW.colorLabel("red") == "Anger" and NIW.colorLabel("yellow") == "Joy")
+    check("colour label: any case of the key", NIW.colorLabel("RED") == "Anger")
+    check("colour label: no own name keeps the built-in one", NIW.colorLabel("gray") == "Gray")
+    check("colour code: your own code", T.COLORS.highlightCode("red") == "#123456" and T.COLORS.highlightCode("RED") == "#123456")
+    check("colour code: never asks for night mode (the list inverts itself)", night_asked == false)
+    check("colour code: a code without your own one", T.COLORS.highlightCode("yellow") == "#FFFF00")
+    local fstr = T.filterToString({ cs = { ["color:red"] = true, ["style:lighten"] = true } })
+    check("filter line uses your colour name", fstr:find("Anger", 1, true) ~= nil, fstr)
+    local w = setmetatable({ active_filter = { cs = { ["color:yellow"] = true } } }, { __index = T.NotesListWidget })
+    local chips = w:getFilterChips()
+    check("active-filter chip uses your colour name", chips[1] and chips[1].label == "Joy", chips[1] and chips[1].label)
+    RH.getHighlightColorCode = function() error("boom") end
+    RH.getHighlightColorString = function() error("boom") end
+    check("colours: a failing KOReader call falls back", NIW.colorLabel("red") == "Red")
+    RH.highlight_colors, RH.getHighlightColorString, RH.getHighlightColorCode = saved[1], saved[2], saved[3]
+end
+
 -- bookmarks: finding them again in the sidecar
 local bnote = { bookmark = true, datetime = "d", page = "/body/p[3]" }
 check("bookmark match", T.itemMatchesNote({ datetime = "d", page = "/body/p[3]", text = "in Two" }, bnote))
