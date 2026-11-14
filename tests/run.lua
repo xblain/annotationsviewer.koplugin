@@ -964,5 +964,18 @@ do
     check("markKey: parsed once, same keys", same)
 end
 
+-- list entries built in one place for the one-book and all-books lists
+do
+    check("splitTags: string", table.concat(T.splitTags(" a, b ;c|d") or {}, "+") == "a+b+c+d")
+    check("splitTags: list kept, nil for nothing", #T.splitTags({ "x" }) == 1 and T.splitTags(nil) == nil)
+    local book = { title = "T", authors = "A", filename = "t.epub", path = "/b/t.epub" }
+    local e = T.listNote({ text = "hl", notes = "n", tags = "z, a, z", datetime = "d", color = "red" }, book, { "q" })
+    check("listNote: fields", e.book_title == "T" and e.book_path == "/b/t.epub" and e.highlighted_text == "hl"
+        and e.user_note == "n" and e.color == "red")
+    check("listNote: own tags, sorted, no doubles", table.concat(e.tags, ",") == "a,z", table.concat(e.tags, ","))
+    local e2 = T.listNote({ text = "hl" }, book, { "q" })
+    check("listNote: book tags when it has none", table.concat(e2.tags, ",") == "q")
+end
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

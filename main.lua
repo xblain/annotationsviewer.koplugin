@@ -84,9 +84,7 @@ end
 local function getHMargin() return Screen:scaleBySize(getSetting("h_margin", DEFAULT_H_MARGIN)) end
 local function getNoteSpacing() return Screen:scaleBySize(getSetting("note_spacing", DEFAULT_NOTE_SPACING)) end
 local function getTextMargin() return Screen:scaleBySize(getSetting("text_margin", DEFAULT_TEXT_MARGIN)) end
-local preview_truncate_lines = nil
 local function getTruncateLines()
-    if preview_truncate_lines then return preview_truncate_lines end
     return getSetting("truncate_lines", DEFAULT_TRUNCATE_LINES)
 end
 local function getJustify() return getSetting("justify", false) end
@@ -1403,7 +1401,7 @@ function NoteItemWidget:init()
             local is_last = (i == #lines)
             if is_last and truncated then
                 
-                if justify == true and (#lines > 1 or true) then
+                if justify == true then
                     
                     local ell_meas = TextWidget:new{ text = ell, face = content_face }
                     local ell_w = ell_meas:getSize().w
@@ -2687,7 +2685,7 @@ function NotesListWidget:buildHeader()
     local right = HorizontalGroup:new{ align = "center" }
     table.insert(right, newHeaderButton("appbar.search", function() self:showSearchDialog() end, self))
     do -- the filter button is always there (the badge shows how many filters are on)
-        local fbtn = newHeaderButton("appbar.settings", function() self:showFilterMenu(false) end, self,
+        local fbtn = newHeaderButton("appbar.settings", function() self:showFilterMenu() end, self,
             pluginIcon("appbar.filter"))
         local n = #self:getFilterChips()
         if n > 0 then
@@ -2777,7 +2775,7 @@ function NotesListWidget:buildHeader()
     table.insert(sort_label, IconWidget:new{ icon = "chevron.up", rotation_angle = 180, width = arrow_size, height = arrow_size })
     local sort_btn = TapBox:new{
         CenterContainer:new{ dimen = Geom:new{ w = sort_label:getSize().w + h_pad, h = row_h }, sort_label },
-        callback = function() self:showSortMenu(false) end,
+        callback = function() self:showSortMenu() end,
     }
     local tabs_dimen = Geom:new{ w = w, h = row_h }
     table.insert(header, OverlapGroup:new{
@@ -3371,12 +3369,8 @@ function NotesListWidget:copyList()
 end
 NotesListWidget.Export = Export
 
--- back_to_menu == false: opened from the sort button in the tab row, so don't reopen the ☰ menu.
-function NotesListWidget:showSortMenu(_back_to_menu, on_done)
+function NotesListWidget:showSortMenu(on_done)
     NotesListWidget.States.sortMenu(self, on_done)
-end
-function NotesListWidget:showSpinMenu(_menu_key, _parent_callback)
-    self:showSettingsMenu() -- the numbers are rows on the Settings page now
 end
 function NotesListWidget:applySort()
     self:sortNotesList(self.notes_list, SortState.get(self.single_book), self.single_book)
@@ -3450,14 +3444,13 @@ function NotesListWidget:showSpinSetting(title, key, default, min, max, step, ba
         end,
     })
 end
-function NotesListWidget:showFilterMenu(show_back)
+function NotesListWidget:showFilterMenu()
     local function ensureFilter()
         if not self.active_filter or type(self.active_filter) ~= "table" then
             self.active_filter = {}
         end
     end
 
-    local showFilterMenu  -- forward reference
 
     -- Single-book context: launched from the reader (current book only),
     -- or the book filter is narrowed to exactly one book.
@@ -3525,7 +3518,7 @@ function NotesListWidget:showFilterMenu(show_back)
                                 self.active_filter[case_key]   = nil
                             end
                             self:refresh()
-                            showFilterMenu(show_back)
+                            if self.filter_screen then self.filter_screen:rebuild() end
                         end },
                         { text = is_exclude and _("Exclude") or _("Search"), is_enter_default = true, callback = function()
                             local q = input_dialog:getInputText()
@@ -3535,7 +3528,7 @@ function NotesListWidget:showFilterMenu(show_back)
                             self.active_filter[mode_key]   = dialog_mode
                             self.active_filter[case_key]   = dialog_case
                             self:refresh()
-                            showFilterMenu(show_back)
+                            if self.filter_screen then self.filter_screen:rebuild() end
                         end },
                     },
                 },
@@ -3547,10 +3540,7 @@ function NotesListWidget:showFilterMenu(show_back)
     end
 
     -- The full-screen "Filter & sort" screen. The pickers it opens (books, tags, chapters, text)
-    -- call showFilterMenu() when they finish, which just redraws that screen.
-    showFilterMenu = function()
-        if self.filter_screen then self.filter_screen:rebuild() end
-    end
+    -- redraw it when they finish.
     local function back() if self.filter_screen then self.filter_screen:rebuild() end end
     self:showFilterScreen{
         books = function() self:showBookPicker(back) end,
@@ -4312,17 +4302,6 @@ function AllNotesViewer:addToMainMenu(menu_items)
         end
     end
 end
--- Tells an open ReaderUI that the annotation for `note` changed, sending KOReader's own item
--- (not the plugin's copy) so KOReader updates its modification time and redraws it.
-function AllNotesViewer:notifyLiveReader(book_path, note)
-    local ui = getLiveReader(book_path)
-    if not ui then return end
-    local index = findLiveIndex(ui, note)
-    local item = index and ui.annotation.annotations[index]
-    if item then
-        ui:handleEvent(Event:new("AnnotationsModified", { item }))
-    end
-end
 -- "Reload annotations" in the ☰ menu: forget everything read so far (memory and the file in the
 -- cache folder), then open the list again, which reads all books afresh.
 function AllNotesViewer:reloadAnnotations(list)
@@ -4674,42 +4653,44 @@ function AllNotesViewer:findAllNotes()
     savePersistentCache(scanned)
     return notes_data
 end
+-- Tags from a book or an annotation: a list, or one string split at , ; | tab or newline.
+function AllNotesViewer.splitTags(val)
+    if type(val) == "table" then return val end
+    if type(val) ~= "string" then return nil end
+    local t = {}
+    for tag in val:gmatch("[^,;\n|\t]+") do
+        tag = tag:match("^%s*(.-)%s*$")
+        if tag ~= "" then table.insert(t, tag) end
+    end
+    return t
+end
+-- One entry of the list from an annotation read from a book. book: { title, authors, filename,
+-- path }; book_tags: the book's tags as a list (used when the annotation has none of its own).
+function AllNotesViewer.listNote(note, book, book_tags)
+    local tag_set, all_tags = {}, {}
+    for _, tag in ipairs(AllNotesViewer.splitTags(note.tags) or book_tags or {}) do
+        if tag ~= "" then tag_set[tag] = true end
+    end
+    for tag in pairs(tag_set) do table.insert(all_tags, tag) end
+    table.sort(all_tags)
+    return {
+        book_title = book.title, book_authors = book.authors, book_filename = book.filename, book_path = book.path,
+        page = note.page, chapter = note.chapter, order = note.order,
+        pos0 = note.pos0, pos1 = note.pos1,
+        highlighted_text = note.text, user_note = note.notes,
+        datetime = note.datetime, drawer = note.drawer, color = note.color,
+        bookmark = note.bookmark, bm_text = note.bm_text, page_label = note.page_label,
+        legacy = note.legacy, tags = all_tags,
+    }
+end
 function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations, tab)
     local book_info = self:getBookInfo(book_path)
     local notes_list = {}
-    local function split_tags(val)
-        if not val then return nil end
-        if type(val) == "table" then return val end
-        if type(val) == "string" then
-            local t = {}
-            for tag in val:gmatch("[^,;\n|\t]+") do
-                tag = tag:match("^%s*(.-)%s*$")
-                if tag ~= "" then table.insert(t, tag) end
-            end
-            return t
-        end
-        return nil
-    end
-    local book_tags_table = split_tags(book_info and book_info.tags)
+    local book = { title = book_title, authors = book_info and book_info.authors or nil,
+        filename = book_path:match("([^/\\]+)$") or book_path, path = book_path }
+    local book_tags = AllNotesViewer.splitTags(book_info and book_info.tags)
     for _, note in ipairs(raw_annotations) do
-        local note_tags = split_tags(note.tags) or book_tags_table or {}
-        local tag_set = {}
-        for _, tag in ipairs(note_tags) do if tag ~= "" then tag_set[tag] = true end end
-        local all_tags = {}
-        for tag in pairs(tag_set) do table.insert(all_tags, tag) end
-        table.sort(all_tags)
-        table.insert(notes_list, {
-            book_title = book_title,
-            book_authors = book_info and book_info.authors or nil,
-            book_filename = book_path:match("([^/\\]+)$") or book_path,
-            book_path = book_path,
-            page = note.page, chapter = note.chapter, order = note.order,
-            pos0 = note.pos0, pos1 = note.pos1,
-            highlighted_text = note.text, user_note = note.notes,
-            datetime = note.datetime, drawer = note.drawer, color = note.color,
-            bookmark = note.bookmark, bm_text = note.bm_text, page_label = note.page_label,
-            legacy = note.legacy, tags = all_tags,
-        })
+        table.insert(notes_list, AllNotesViewer.listNote(note, book, book_tags))
     end
     SortState.bm_tab = nil -- a new list starts sorted for the annotation tabs (see syncSortTab)
     NotesListWidget:sortNotesList(notes_list, SortState.get(true), true)
@@ -4725,41 +4706,11 @@ function AllNotesViewer:showAllNotes(tab)
     end
     local all_notes_by_book = self:findAllNotes()
     local notes_list = {}
-    
-    local function split_tags(val)
-        if not val then return nil end
-        if type(val) == "table" then return val end
-        if type(val) == "string" then
-            local t = {}
-            for tag in val:gmatch("[^,;\n|\t]+") do
-                tag = tag:match("^%s*(.-)%s*$")
-                if tag ~= "" then table.insert(t, tag) end
-            end
-            return t
-        end
-        return nil
-    end
-    
     for _, book_data in ipairs(all_notes_by_book) do
-        local book_tags_table = split_tags(book_data.tags)
+        local book = { title = book_data.title, authors = book_data.authors, filename = book_data.filename, path = book_data.path }
+        local book_tags = AllNotesViewer.splitTags(book_data.tags)
         for _, note in ipairs(book_data.notes) do
-            local note_tags = split_tags(note.tags) or book_tags_table or {}
-            
-            local tag_set = {}
-            for _, tag in ipairs(note_tags) do if tag ~= "" then tag_set[tag] = true end end
-            local all_tags = {}
-            for tag in pairs(tag_set) do table.insert(all_tags, tag) end
-            table.sort(all_tags)
-            table.insert(notes_list, {
-                book_title = book_data.title, book_authors = book_data.authors,
-                book_filename = book_data.filename,
-                book_path = book_data.path, page = note.page, chapter = note.chapter, order = note.order,
-                pos0 = note.pos0, pos1 = note.pos1,
-                highlighted_text = note.text, user_note = note.notes,
-                datetime = note.datetime, drawer = note.drawer, color = note.color,
-                bookmark = note.bookmark, bm_text = note.bm_text, page_label = note.page_label,
-                legacy = note.legacy, tags = all_tags
-            })
+            table.insert(notes_list, AllNotesViewer.listNote(note, book, book_tags))
         end
     end
     SortState.bm_tab = nil -- a new list starts sorted for the annotation tabs (see syncSortTab)
@@ -5417,46 +5368,6 @@ function Page.footer(cancel_cb, primary_text, primary_cb)
         VerticalSpan:new{ width = Page.FOOTER_BOTTOM },
     }
 end
--- Scrolling body for the full-screen pages. KOReader's scroll container keeps room for its bar
--- on the right (3 bar widths) and would add a horizontal bar when the content is as wide as
--- the screen, so the content is measured that much narrower (the right padding is what gets
--- cut). The bar is drawn like the list's own: a thin line with a rounded, outlined thumb.
--- How much narrower than the screen the content of a scrolling page is laid out, so the right
--- padding plus the scrollbar strip match the list (strip of SB_STRIP_WIDTH, thumb centred).
--- (plus a little slack, so nothing at the right edge can end up under the crop line)
-Page.SCROLL_EXTRA = 0 -- (a wider strip made the right-hand controls get cut off on the device)
-function Page.scrollable(w, h, show_parent, child)
-    if not Page.ScrollClass then
-        local SC = require("ui/widget/container/scrollablecontainer")
-        local C = SC:extend{ scroll_bar_width = SB_THUMB_WIDTH }
-        function C:initState()
-            SC.initState(self)
-            local bar = self._v_scroll_bar
-            if not bar then return end
-            bar.paintTo = function(b, bb, x, y)
-                b.touch_dimen = Geom:new{ x = x - b.extra_touch_on_side, y = y,
-                    w = b.width + 2 * b.extra_touch_on_side, h = b.height }
-                -- thumb centred in the strip, with the same space above and below as the list's
-                local tx = x + math.floor((b.width - SB_THUMB_WIDTH) / 2)
-                local top, th_total = y + SB_MARGIN_V_TOP, b.height - SB_MARGIN_V_TOP - SB_MARGIN_V_BOTTOM
-                if th_total < Screen:scaleBySize(16) then return end -- no room for a thumb
-                bb:paintRect(tx + math.floor((SB_THUMB_WIDTH - SB_TRACK_WIDTH) / 2), top, SB_TRACK_WIDTH, th_total, COLORS.ink)
-                local th = math.max(Screen:scaleBySize(16), math.floor(th_total * (b.high - b.low)))
-                local ty = top + math.min(math.floor(b.low * th_total), th_total - th)
-                local radius = math.floor(SB_THUMB_WIDTH / 2)
-                bb:paintRoundedRect(tx, ty, SB_THUMB_WIDTH, th, BlitBuffer.COLOR_WHITE, radius)
-                bb:paintBorder(tx, ty, SB_THUMB_WIDTH, th, Size.border.default, BlitBuffer.COLOR_BLACK, radius)
-            end
-        end
-        Page.ScrollClass = C
-        Page.ClipClass = WidgetContainer:extend{ clip_w = 0 }
-        function Page.ClipClass:getSize()
-            return Geom:new{ w = self.clip_w, h = self[1]:getSize().h }
-        end
-    end
-    return Page.ScrollClass:new{ dimen = Geom:new{ w = w, h = h }, show_parent = show_parent,
-        Page.ClipClass:new{ clip_w = w - 3 * SB_THUMB_WIDTH, child } }
-end
 -- Live sample of the list for the Text / Spacing pages: two real annotations drawn with the
 -- current settings, clipped to a fixed height so the page below does not move.
 Page.PreviewClip = WidgetContainer:extend{ w = 0, h = 0 }
@@ -5639,6 +5550,39 @@ end
 -- Which rows go on which page: { first, last } per page (rows 1..fixed on every page). A heading
 -- (keep_with_next) never ends a page; a block taller than a page is split into its rows, which
 -- gives a new rows list (returned as the second value).
+-- Pieces shared by the full-screen pages (P: side padding, inner: width between the paddings).
+-- a thin grey line between rows
+function Page.rowLine(P, inner)
+    return HorizontalGroup:new{ HorizontalSpan:new{ width = P },
+        LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light } }
+end
+-- a widget indented by P, with space above and below
+function Page.padded(widget, P, top, bottom)
+    local g = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top or 0 } }
+    if Page.isColumn(widget) then -- each row indented on its own, so a tall column can be split over pages
+        for k = 1, #widget do table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget[k] }) end
+    else
+        table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget })
+    end
+    table.insert(g, VerticalSpan:new{ width = bottom or 0 })
+    return g
+end
+-- section titles as in the mockup: small caps-style grey label with a black line under it. Returns
+-- a function for one page build (the first title has less space above it).
+function Page.sectionBars(P, inner)
+    local first_section = true
+    return function(text)
+        local top = Screen:scaleBySize(first_section and 10 or 20)
+        first_section = false
+        local bar = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = P }, VerticalGroup:new{ align = "left",
+                TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted },
+                VerticalSpan:new{ width = Screen:scaleBySize(6) },
+                LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.medium }, background = COLORS.ink } } } }
+        bar.keep_with_next = true -- Page.paged never leaves a heading alone at the end of a page
+        return bar
+    end
+end
 -- A column of rows that can be split over pages: a left-aligned VerticalGroup
 function Page.isColumn(r)
     if type(r) ~= "table" or r.align ~= "left" then return false end
@@ -5997,7 +5941,7 @@ function States.menu(list)
             value = filtered and _("Filtered") or string.format(_("All %d"), n_books),
             cb = function() list:showBookPicker(function() end) end })
     end
-    table.insert(items, "line")
+    if #items > 0 then table.insert(items, "line") end -- (no line at the top of the one-book menu)
     table.insert(items, { icon = "move.up", label = _("Export"), chevron = true,
         value = string.format(_("%d shown"), #(list.filtered_notes or {})), cb = function() list:showExportPage() end })
     table.insert(items, { icon = "cre.render.reload", label = _("Reload annotations"),
@@ -6019,13 +5963,7 @@ function States.menu(list)
                         LineWidget:new{ dimen = Geom:new{ w = w - side * 2, h = Size.line.thin }, background = COLORS.line_light } })
                     table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(6) })
                 else
-                    local icon_file = it.icon == "filter" and pluginIcon("appbar.filter") or nil
-                    local icon
-                    if icon_file and lfs.attributes(icon_file, "mode") == "file" then
-                        icon = IconWidget:new{ file = icon_file, width = icon_s, height = icon_s }
-                    else
-                        icon = IconWidget:new{ icon = it.icon == "filter" and "appbar.settings" or it.icon, width = icon_s, height = icon_s }
-                    end
+                    local icon = IconWidget:new{ icon = it.icon, width = icon_s, height = icon_s }
                     local value = it.value and TextWidget:new{ text = it.value, face = Font:getFace("cfont", 12),
                         fgcolor = COLORS.muted, max_width = math.floor(w * 0.35) }
                     local right = HorizontalGroup:new{ align = "center" }
@@ -6425,10 +6363,7 @@ function FilterScreen:init()
     self:build()
 end
 function FilterScreen:rebuild()
-    -- keep the scroll position when the page is rebuilt after a change
-    local offset = self.scroller and self.scroller:getScrolledOffset()
     self:build()
-    if offset and self.scroller then self.scroller:setScrolledOffset(offset) end
     UIManager:setDirty(self, "ui")
 end
 function FilterScreen:changed()
@@ -6443,7 +6378,7 @@ function FilterScreen:build()
     normalizeColorStyle(af)
     local W, H = Screen:getWidth(), Screen:getHeight()
     local P = Screen:scaleBySize(24)
-    local inner = W - P * 2 - (self.narrow and Page.SCROLL_EXTRA or 0)
+    local inner = W - P * 2
     local thin = Size.border.button
     local MUTED = COLORS.muted
     local face15 = Font:getFace("cfont", 15)
@@ -6454,33 +6389,9 @@ function FilterScreen:build()
         return VerticalGroup:new{ tw, LineWidget:new{ dimen = Geom:new{ w = tw:getSize().w, h = Size.line.medium },
             background = BlitBuffer.COLOR_BLACK } }
     end
-    local function rowLine()
-        return HorizontalGroup:new{ HorizontalSpan:new{ width = P },
-            LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light } }
-    end
-    local function padded(widget, top, bottom)
-        local g = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top or 0 } }
-        if Page.isColumn(widget) then -- each row indented on its own, so a tall column can be split over pages
-            for k = 1, #widget do table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget[k] }) end
-        else
-            table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget })
-        end
-        table.insert(g, VerticalSpan:new{ width = bottom or 0 })
-        return g
-    end
-    -- section title as in the mockup: small caps-style grey label with a black line under it
-    local first_section = true
-    local function sectionBar(text)
-        local top = Screen:scaleBySize(first_section and 10 or 20)
-        first_section = false
-        local bar = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top },
-            HorizontalGroup:new{ HorizontalSpan:new{ width = P }, VerticalGroup:new{ align = "left",
-                TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted },
-                VerticalSpan:new{ width = Screen:scaleBySize(6) },
-                LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.medium }, background = COLORS.ink } } } }
-        bar.keep_with_next = true -- Page.paged never leaves a heading alone at the end of a page
-        return bar
-    end
+    local function rowLine() return Page.rowLine(P, inner) end
+    local function padded(widget, top, bottom) return Page.padded(widget, P, top, bottom) end
+    local sectionBar = Page.sectionBars(P, inner)
     local function labelRow(left, right)
         local d = Geom:new{ w = inner, h = math.max(left:getSize().h, right and right:getSize().h or 0) }
         return OverlapGroup:new{ dimen = d, allow_mirroring = false,
@@ -6857,9 +6768,7 @@ function SS:init()
     self:build()
 end
 function SS:rebuild()
-    local offset = self.scroller and self.scroller:getScrolledOffset()
     self:build()
-    if offset and self.scroller then self.scroller:setScrolledOffset(offset) end
     UIManager:setDirty(self, "ui")
 end
 -- a changed setting: redraw the list behind, then this page
@@ -6880,38 +6789,14 @@ Page.forwardGestures(SS) -- after onCloseWidget, which it wraps
 function SS:build()
     local W, H = Screen:getWidth(), Screen:getHeight()
     local P = Screen:scaleBySize(24)
-    local inner = W - P * 2 - (self.narrow and Page.SCROLL_EXTRA or 0)
+    local inner = W - P * 2
     local thin = Size.border.button
     local MUTED = COLORS.muted
     local face15, face13 = Font:getFace("cfont", 15), Font:getFace("cfont", 13)
     local face12 = Font:getFace("cfont", 12)
-    local function rowLine()
-        return HorizontalGroup:new{ HorizontalSpan:new{ width = P },
-            LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light } }
-    end
-    -- section title as in the mockup: small caps-style grey label with a black line under it
-    local first_section = true
-    local function sectionBar(text)
-        local top = Screen:scaleBySize(first_section and 10 or 20)
-        first_section = false
-        local bar = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top },
-            HorizontalGroup:new{ HorizontalSpan:new{ width = P }, VerticalGroup:new{ align = "left",
-                TextWidget:new{ text = text, face = Font:getFace("cfont", 11), bold = true, fgcolor = COLORS.muted },
-                VerticalSpan:new{ width = Screen:scaleBySize(6) },
-                LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.medium }, background = COLORS.ink } } } }
-        bar.keep_with_next = true -- Page.paged never leaves a heading alone at the end of a page
-        return bar
-    end
-    local function padded(widget, top, bottom)
-        local g = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top or 0 } }
-        if Page.isColumn(widget) then -- each row indented on its own, so a tall column can be split over pages
-            for k = 1, #widget do table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget[k] }) end
-        else
-            table.insert(g, HorizontalGroup:new{ HorizontalSpan:new{ width = P }, widget })
-        end
-        table.insert(g, VerticalSpan:new{ width = bottom or 0 })
-        return g
-    end
+    local function rowLine() return Page.rowLine(P, inner) end
+    local sectionBar = Page.sectionBars(P, inner)
+    local function padded(widget, top, bottom) return Page.padded(widget, P, top, bottom) end
     -- label (with an optional grey line under it) on the left, a control on the right
     local function row(label, sub, control, callback)
         local ctl_w = control and control:getSize().w or 0
@@ -7327,9 +7212,7 @@ function NotesListWidget.SubPage:init()
     self:build()
 end
 function NotesListWidget.SubPage:rebuild()
-    local offset = self.scroller and self.scroller:getScrolledOffset()
     self:build()
-    if offset and self.scroller then self.scroller:setScrolledOffset(offset) end
     UIManager:setDirty(self, "ui")
 end
 function NotesListWidget.SubPage:onClose()
@@ -7348,10 +7231,7 @@ function NotesListWidget.SubPage:build()
     local P = Screen:scaleBySize(24)
     local inner = W - P * 2
     local face15 = Font:getFace("cfont", 15)
-    local function rowLine()
-        return HorizontalGroup:new{ HorizontalSpan:new{ width = P },
-            LineWidget:new{ dimen = Geom:new{ w = inner, h = Size.line.thin }, background = COLORS.line_light } }
-    end
+    local function rowLine() return Page.rowLine(P, inner) end
     local current = getSetting(self.font_key, nil)
     local body = VerticalGroup:new{ align = "left" }
     local box_h = Screen:scaleBySize(64)
@@ -7465,9 +7345,7 @@ function ListPicker:changed()
         self.books_sig = sig
     end
     self.list:applyFilter() -- count only; the list is redrawn when the picker closes
-    local offset = self.scroller and self.scroller:getScrolledOffset()
     self:build()
-    if offset and self.scroller then self.scroller:setScrolledOffset(offset) end
     UIManager:setDirty(self, "ui")
 end
 function ListPicker:visibleItems()
@@ -7561,7 +7439,7 @@ function ListPicker:build()
         LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line } }
 
     -- rows (grouped when items have a group, e.g. chapters by book)
-    local rinner = inner - (self.narrow and Page.SCROLL_EXTRA or 0)
+    local rinner = inner
     local rows = VerticalGroup:new{ align = "left" }
     local box = Screen:scaleBySize(24)
     local last_group
@@ -7692,15 +7570,13 @@ end
 function SortPicker:changed()
     self.list:applySort()
     self.list:applyFilter()
-    local offset = self.scroller and self.scroller:getScrolledOffset()
     self:build()
-    if offset and self.scroller then self.scroller:setScrolledOffset(offset) end
     UIManager:setDirty(self, "ui")
 end
 function SortPicker:build()
     local W, H = Screen:getWidth(), Screen:getHeight()
     local P = Screen:scaleBySize(24)
-    local inner = W - P * 2 - (self.narrow and Page.SCROLL_EXTRA or 0)
+    local inner = W - P * 2
     local thin = Size.border.button
     local face14 = Font:getFace("cfont", 14)
     local single = self.list.single_book
@@ -8201,6 +8077,8 @@ AllNotesViewer._test = {
     getSetting = getSetting,
     NotesListWidget = NotesListWidget,
     NoteItemWidget = NoteItemWidget,
+    listNote = AllNotesViewer.listNote,
+    splitTags = AllNotesViewer.splitTags,
 }
 
 return AllNotesViewer
