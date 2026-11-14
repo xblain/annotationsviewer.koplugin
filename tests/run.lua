@@ -873,6 +873,20 @@ if lfs_ok and type(lfs) == "table" and lfs.attributes then
     check("write: a file per book", p2 == dir and n2 == 2 and io.open(dir .. "/B.md") ~= nil)
     os.remove(dir .. "/annotations.md"); os.remove(dir .. "/A.md"); os.remove(dir .. "/B.md"); lfs.rmdir(dir)
 end
+-- a full card: writing seems fine, closing fails -> an error, not "Exported"
+do
+    local real_open = io.open
+    T.setSetting("export_dir", "/tmp")
+    io.open = function() return { write = function() return true end, close = function() return nil, "No space left on device" end } end -- luacheck: ignore
+    local fp, ferr = E.write(mixed, opts({ name_date = false }), "")
+    io.open = function() return { write = function() return nil, "Input/output error" end, close = function() return true end } end -- luacheck: ignore
+    local wp, werr = E.write(mixed, opts({ name_date = false }), "")
+    io.open = real_open -- luacheck: ignore
+    check("write: a failed close is an error", fp == nil and tostring(ferr):find("No space", 1, true) ~= nil, tostring(ferr))
+    check("write: a failed write is an error", wp == nil and tostring(werr):find("Input/output", 1, true) ~= nil, tostring(werr))
+end
+check("filterToString: books and tags sorted", T.filterToString({ books = { Zeta = true, Alpha = true }, tags = { b = true, a = true } })
+    :find("B: Alpha, Zeta", 1, true) ~= nil and T.filterToString({ tags = { b = true, a = true } }):find("T: a, b", 1, true) ~= nil)
 T.setSetting("export_dir", "/proc/no/such/folder")
 local bad_path, bad_err = E.write(mixed, opts(), "")
 check("write: unwritable folder gives an error", bad_path == nil and bad_err ~= nil)

@@ -1612,22 +1612,26 @@ local function filterToString(filter, skip_presence)
     if filter.books and next(filter.books) then
         local books = {}
         for k in pairs(filter.books) do table.insert(books, k) end
+        table.sort(books)
         table.insert(parts, "B: " .. table.concat(books, ", "))
     end
     if filter.books_exclude and next(filter.books_exclude) then
         local books = {}
         for k in pairs(filter.books_exclude) do table.insert(books, k) end
+        table.sort(books)
         table.insert(parts, "B≠ " .. table.concat(books, ", "))
     end
     -- Tags include / exclude
     if filter.tags and next(filter.tags) then
         local tags = {}
         for k in pairs(filter.tags) do table.insert(tags, k) end
+        table.sort(tags)
         table.insert(parts, "T: " .. table.concat(tags, ", "))
     end
     if filter.tags_exclude and next(filter.tags_exclude) then
         local tags = {}
         for k in pairs(filter.tags_exclude) do table.insert(tags, k) end
+        table.sort(tags)
         table.insert(parts, "T≠ " .. table.concat(tags, ", "))
     end
     -- Highlight text include / exclude
