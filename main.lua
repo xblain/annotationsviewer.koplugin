@@ -694,6 +694,44 @@ function UnderlineWidget:paintTo(bb, x, y)
     bb:paintRect(x, y + self.height - Size.line.medium, self.width, Size.line.medium, BlitBuffer.COLOR_BLACK)
 end
 local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_parent = nil, is_last = false, is_preview = false, disable_tap = false, skip_title = false, skip_info = false }
+-- Search without capitals in every language, as KOReader's own search does (Utf8Proc folds
+-- "Élan" to "élan", "ÜBER" to "über"); string.lower only knows A-Z. Kept per text.
+NoteItemWidget._lower = {}
+NoteItemWidget._lower_n = 0
+function NoteItemWidget.lower(s)
+    if type(s) ~= "string" or s == "" then return s or "" end
+    local l = NoteItemWidget._lower[s]
+    if l then return l end
+    local ok, r = pcall(function() return require("ffi/utf8proc").lowercase(require("util").fixUtf8(s, "?")) end)
+    l = (ok and type(r) == "string") and r or s:lower()
+    NoteItemWidget._lower[s] = l
+    NoteItemWidget._lower_n = NoteItemWidget._lower_n + 1
+    return l
+end
+-- For marking matches in a drawn line: the text lowered character by character (one character
+-- for one, as TextBoxWidget's own search does), with, for every byte of it, where that character
+-- starts and ends in the text. Returns the text (made valid UTF-8), the lowered text and the map.
+function NoteItemWidget.lowerMap(s)
+    local ok_u, util = pcall(require, "util")
+    if ok_u and util.fixUtf8 then s = util.fixUtf8(s, "?") end
+    local ok, low = pcall(function() return require("ffi/utf8proc").lowercase(s, false) end)
+    if not ok or type(low) ~= "string" then low = s:lower() end
+    if not s:find("[\128-\255]") then return s, low, nil end -- plain ASCII: positions are the same
+    local pat = "[%z\1-\127\192-\253][\128-\191]*"
+    local orig, lowc = {}, {}
+    for c in s:gmatch(pat) do orig[#orig + 1] = c end
+    for c in low:gmatch(pat) do lowc[#lowc + 1] = c end
+    if #orig ~= #lowc then return s, s:lower(), nil end
+    local map, ob, lb = { start = {}, stop = {} }, 1, 1
+    for i = 1, #orig do
+        for k = 0, #lowc[i] - 1 do
+            map.start[lb + k] = ob
+            map.stop[lb + k] = ob + #orig[i] - 1
+        end
+        ob, lb = ob + #orig[i], lb + #lowc[i]
+    end
+    return s, low, map
+end
 -- A highlight colour as painted, and its name: the name you gave it in KOReader when it has one.
 NoteItemWidget.colorValue = getHighlightColor
 function NoteItemWidget.colorLabel(key)
@@ -841,20 +879,23 @@ end
 -- justified line (HorizontalGroup of word widgets and gaps); `text` is the line's text.
 function NoteItemWidget.markLine(widget, text, query, case_sensitive, face)
     if not query or query == "" or not text or text == "" then return widget end
+    local q = query
+    if not case_sensitive then q = select(2, NoteItemWidget.lowerMap(query)) end
     local function words_in(str)
         local found = {}
-        local hay = case_sensitive and str or str:lower()
-        local q = case_sensitive and query or query:lower()
+        local hay, map = str, nil
+        if not case_sensitive then str, hay, map = NoteItemWidget.lowerMap(str) end
         for word in q:gmatch("%S+") do
             local from = 1
             while true do
                 local a, b = hay:find(word, from, true)
                 if not a then break end
+                from = b + 1
+                if map then a, b = map.start[a], map.stop[b] end -- back to the text's own bytes
                 local pre = TextWidget:new{ text = str:sub(1, a - 1), face = face }
                 local mid = TextWidget:new{ text = str:sub(a, b), face = face }
                 table.insert(found, { x = pre:getSize().w, w = mid:getSize().w })
                 pre:free(); mid:free()
-                from = b + 1
             end
         end
         return found
@@ -1831,10 +1872,28 @@ function NotesListWidget:init()
     self:updatePage()
     self.initial_update = true
 end
+-- A search that was cleared leaves no "Exact Phrase" / "Case-Sensitive" behind: they would come
+-- back with the next search, and end up in saved filters.
+NotesListWidget.SEARCH_FIELDS = { "search_any", "search_highlight", "search_highlight_exclude", "search_note", "search_note_exclude" }
+function NotesListWidget.dropStaleSearchOptions(af)
+    if type(af) ~= "table" then return end
+    for i = 1, #NotesListWidget.SEARCH_FIELDS do
+        local k = NotesListWidget.SEARCH_FIELDS[i]
+        if af[k] == nil or af[k] == "" then
+            af[k], af[k .. "_mode"], af[k .. "_case"] = nil, nil, nil
+        end
+    end
+end
+-- The chapter filter names chapters of the books chosen when it was set ("Chapter 1" of book A):
+-- with other books it would pick their chapters of that name, so it goes when the books change.
+function NotesListWidget.booksChanged(af)
+    if type(af) ~= "table" then return end
+    af.chapters, af.chapters_exclude = nil, nil
+end
 function NotesListWidget:applyFilter()
     local function textMatches(raw, query, mode, case_sensitive)
-        local text = case_sensitive and raw or raw:lower()
-        local q    = case_sensitive and query or query:lower()
+        local text = case_sensitive and raw or NoteItemWidget.lower(raw)
+        local q    = case_sensitive and query or NoteItemWidget.lower(query)
         if mode == "phrase" then
             return text:find(q, 1, true) ~= nil
         elseif mode == "any" then
@@ -1850,6 +1909,9 @@ function NotesListWidget:applyFilter()
         end
     end
     normalizeColorStyle(self.active_filter)
+    NotesListWidget.dropStaleSearchOptions(self.active_filter)
+    -- the lowered texts are kept between searches; a very large library starts afresh now and then
+    if NoteItemWidget._lower_n > 100000 then NoteItemWidget._lower, NoteItemWidget._lower_n = {}, 0 end
     self.filtered_notes = {}
     -- counts: what each tab shows with the filters; totals: what it would show without them
     local counts = { all = 0, highlights = 0, notes = 0, bookmarks = 0 }
@@ -2408,9 +2470,9 @@ function NotesListWidget:getFilterChips(full)
             end
         end
     end
-    if af.books and next(af.books) then add(setLabel(af.books, _("%d books"), full), function() af.books = nil end) end
+    if af.books and next(af.books) then add(setLabel(af.books, _("%d books"), full), function() af.books = nil; NotesListWidget.booksChanged(af) end) end
     if af.books_exclude and next(af.books_exclude) then
-        add(_("Hide") .. " " .. setLabel(af.books_exclude, _("%d books"), full), function() af.books_exclude = nil end)
+        add(_("Hide") .. " " .. setLabel(af.books_exclude, _("%d books"), full), function() af.books_exclude = nil; NotesListWidget.booksChanged(af) end)
     end
     if af.chapters and next(af.chapters) then add(setLabel(af.chapters, _("%d chapters"), full), function() af.chapters = nil end) end
     if af.chapters_exclude and next(af.chapters_exclude) then
@@ -6500,6 +6562,7 @@ function FilterScreen:build()
             -- compared the way it applies (an old or broken saved filter is cleaned up on applying)
             local pf = deepCopy(p.filter) or {}
             normalizeColorStyle(pf)
+            NotesListWidget.dropStaleSearchOptions(pf)
             local on = same(pf, list.active_filter or {}) and (not here
                 or SortState.normView(here, single) == SortState.normView(SortState.get(single), single))
             table.insert(chips, chip(p.name, on, function()
@@ -7190,6 +7253,9 @@ function ListPicker:init()
     self.list.active_filter = af
     self.saved_inc = deepCopy(af[self.inc_key])
     self.saved_exc = deepCopy(af[self.exc_key])
+    if self.inc_key == "books" then -- changing the books clears the chapters; Cancel brings them back
+        self.saved_chapters, self.saved_chapters_exc = deepCopy(af.chapters), deepCopy(af.chapters_exclude)
+    end
     self.query = ""
     -- One side at a time: the marked items are either the only ones shown or the hidden ones.
     -- A filter from before that has both keeps its "only" side: with "only these" set, the
@@ -7197,6 +7263,7 @@ function ListPicker:init()
     local has_inc = af[self.inc_key] and next(af[self.inc_key])
     if has_inc then af[self.exc_key] = nil end
     self.mode = has_inc and "inc" or ((af[self.exc_key] and next(af[self.exc_key])) and "exc" or "inc")
+    if self.inc_key == "books" then self.books_sig = self:booksSig() end
     if Device:hasKeys() then self.key_events.Close = { { Input.group.Back } } end
     self:build()
 end
@@ -7217,7 +7284,26 @@ function ListPicker:set(key, st)
         af[k][key] = true
     end
 end
+-- which books are chosen, as one string (a search in the picker changes nothing there)
+NotesListWidget.ListPicker = ListPicker
+function ListPicker:booksSig()
+    local af, parts = self.list.active_filter or {}, {}
+    local keys = { "books", "books_exclude" }
+    for n = 1, 2 do
+        local k = keys[n]
+        local names = {}
+        for name in pairs(af[k] or {}) do names[#names + 1] = name end
+        table.sort(names)
+        parts[#parts + 1] = k .. ":" .. table.concat(names, "\0")
+    end
+    return table.concat(parts, "\1")
+end
 function ListPicker:changed()
+    if self.inc_key == "books" then
+        local sig = self:booksSig()
+        if sig ~= self.books_sig then NotesListWidget.booksChanged(self.list.active_filter) end
+        self.books_sig = sig
+    end
     self.list:applyFilter() -- count only; the list is redrawn when the picker closes
     local offset = self.scroller and self.scroller:getScrolledOffset()
     self:build()
@@ -7414,6 +7500,7 @@ function ListPicker:onClose()
     local af = self.list.active_filter
     af[self.inc_key] = self.saved_inc
     af[self.exc_key] = self.saved_exc
+    if self.inc_key == "books" then af.chapters, af.chapters_exclude = self.saved_chapters, self.saved_chapters_exc end
     self.list:applyFilter()
     UIManager:close(self, "flashui")
     if self.on_done then self.on_done() end

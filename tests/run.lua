@@ -595,6 +595,77 @@ do
     real["dispatcher"] = saved_disp
 end
 
+-- search without capitals in every language
+do
+    local saved_u, saved_util = real["ffi/utf8proc"], real["util"]
+    -- one character for one without normalizing (İ, 2 bytes, becomes i, 1 byte), as utf8proc does
+    local up = { ["É"] = "é", ["Ü"] = "ü", ["İ"] = "i" }
+    real["ffi/utf8proc"] = { lowercase = function(str)
+        local out = str:gsub("[\192-\253][\128-\191]*", function(c) return up[c] or c end):lower()
+        return out
+    end }
+    real["util"] = setmetatable({ fixUtf8 = function(str) return str end }, { __index = saved_util })
+    local NIW, NLW = T.NoteItemWidget, T.NotesListWidget
+    NIW._lower, NIW._lower_n = {}, 0
+    check("lower: accented capitals", NIW.lower("Élan ÜBER") == "élan über", NIW.lower("Élan ÜBER"))
+    local lw = { notes_list = {
+        { highlighted_text = "An Élan vital", user_note = "" },
+        { highlighted_text = "nothing here", user_note = "ÜBER alles" },
+        { highlighted_text = "élan, again" },
+    }, active_filter = { search_any = "élan" } }
+    NLW.applyFilter(lw)
+    check("search: élan finds Élan", #lw.filtered_notes == 2, #lw.filtered_notes)
+    lw.active_filter = { search_note = "über" }
+    NLW.applyFilter(lw)
+    check("search: über finds ÜBER in a note", #lw.filtered_notes == 1 and lw.filtered_notes[1].user_note == "ÜBER alles")
+    lw.active_filter = { search_any = "élan", search_any_case = true }
+    NLW.applyFilter(lw)
+    check("search: case-sensitive still tells them apart", #lw.filtered_notes == 1)
+    -- marks: positions found in the lowered text point at the original characters
+    local str, low, map = NIW.lowerMap("Xİy élan")
+    local a, b = low:find("élan", 1, true)
+    check("marks: plain ASCII needs no map", select(3, NIW.lowerMap("Plain text")) == nil)
+    check("marks: a longer lowered character is mapped back", map and str:sub(map.start[a], map.stop[b]) == "élan",
+        map and str:sub(map.start[a], map.stop[b]))
+    local ai = low:find("xiy", 1, true)
+    check("marks: a character that got shorter maps to the whole original one", map and str:sub(map.start[ai], map.stop[ai + 2]) == "Xİy",
+        map and str:sub(map.start[ai], map.stop[ai + 2]))
+    -- a cleared search leaves no options behind
+    lw.active_filter = { search_highlight = "", search_highlight_mode = "phrase", search_highlight_case = true,
+        search_note = "x", search_note_mode = "any" }
+    NLW.applyFilter(lw)
+    local af = lw.active_filter
+    check("cleared search: mode and case go", af.search_highlight == nil and af.search_highlight_mode == nil
+        and af.search_highlight_case == nil)
+    check("a search still set keeps its mode", af.search_note == "x" and af.search_note_mode == "any")
+    lw.active_filter = { search_any_mode = "phrase", search_any_case = true }
+    NLW.applyFilter(lw)
+    check("no search at all: no options", next(lw.active_filter) == nil)
+    real["ffi/utf8proc"], real["util"] = saved_u, saved_util
+    NIW._lower, NIW._lower_n = {}, 0
+end
+-- the chapter filter goes when the book filter changes
+do
+    local af = { books = { A = true }, chapters = { ["Chapter 1"] = true }, chapters_exclude = { X = true } }
+    T.NotesListWidget.booksChanged(af)
+    check("book filter changed: chapters cleared", af.chapters == nil and af.chapters_exclude == nil and af.books.A)
+    local w = setmetatable({ active_filter = { books = { A = true }, chapters = { ["Chapter 1"] = true } } }, { __index = T.NotesListWidget })
+    local chips = w:getFilterChips()
+    for _, c in ipairs(chips) do if c.label == "A" then c.clear() end end
+    check("removing the book chip clears the chapter filter", w.active_filter.books == nil and w.active_filter.chapters == nil)
+    -- the Books picker: picking a book clears the chapters, searching in it doesn't
+    local lst = { active_filter = { books = { A = true }, chapters = { ["Chapter 1"] = true } }, applyFilter = function() end }
+    local LP = T.NotesListWidget.ListPicker
+    local p = setmetatable({ list = lst, inc_key = "books", exc_key = "books_exclude", build = function() end }, { __index = LP })
+    p.books_sig = p:booksSig()
+    p.query = "smith"
+    p:changed() -- a search in the picker
+    check("books picker: a search keeps the chapter filter", lst.active_filter.chapters ~= nil)
+    p:set("B", "inc")
+    p:changed()
+    check("books picker: picking a book clears it", lst.active_filter.chapters == nil and lst.active_filter.books.B)
+end
+
 -- bookmarks: finding them again in the sidecar
 local bnote = { bookmark = true, datetime = "d", page = "/body/p[3]" }
 check("bookmark match", T.itemMatchesNote({ datetime = "d", page = "/body/p[3]", text = "in Two" }, bnote))
