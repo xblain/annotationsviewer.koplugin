@@ -1807,8 +1807,11 @@ function NotesListWidget:init()
     self:syncSortTab()
     self:applyFilter()
     -- A book (or library) with bookmarks but no highlights or notes opens on the Bookmarks tab
-    -- instead of an empty list
-    if not (self.active_filter and self.active_filter.notes_presence)
+    -- instead of an empty list. Only when it opens: init runs again on rotation, and then the
+    -- tab you chose stays.
+    local first_init = not self._opened
+    self._opened = true
+    if first_init and not (self.active_filter and self.active_filter.notes_presence)
             and self.tab_totals.all == 0 and self.tab_totals.bookmarks > 0 then
         self.active_filter = self.active_filter or {}
         self.active_filter.notes_presence = "bookmarks"
@@ -1821,21 +1824,8 @@ function NotesListWidget:init()
         self.key_events.GotoNextPage = { { Input.group.PgFwd } }
         self.key_events.Close = { { Input.group.Back } }  
     end
-    local swipe_setting = getSwipeSetting()
-    if swipe_setting ~= "disabled" and not G_reader_settings:isTrue("page_turns_disable_swipe") then
-        local swipe_dimen = self.dimen
-        self.ges_events = {}
-        if swipe_setting == "horizontal" or swipe_setting == "both" then
-            self.ges_events.SwipeWest = { GestureRange:new{ ges = "swipe", range = swipe_dimen, direction = "west" } }
-            self.ges_events.SwipeEast = { GestureRange:new{ ges = "swipe", range = swipe_dimen, direction = "east" } }
-        end
-        if swipe_setting == "vertical" or swipe_setting == "both" then
-            self.ges_events.SwipeNorth = { GestureRange:new{ ges = "swipe", range = swipe_dimen, direction = "north" } }
-            self.ges_events.SwipeSouth = { GestureRange:new{ ges = "swipe", range = swipe_dimen, direction = "south" } }
-        end
-    else
-        self.ges_events = {}
-    end
+    -- swipes follow the plugin's own "Swipe to turn pages" setting; updatePage sets them
+    self.ges_events = {}
     
     self:updatePage()
     self.initial_update = true
@@ -2043,7 +2033,10 @@ function NotesListWidget:paginate()
             current_page_notes = {i}
             local st, si = getHeaderSkips(note, true, dedup_prev_title, dedup_prev_info_key, dedup_fields)
             if self.single_book then st = true end
-            current_height = getNoteHeight(note, note_width, st, si, layout_sig) + (has_ch and NoteItemWidget.headingHeight(note.chapter, note_width) or 0)
+            -- as updatePage draws it: the heading at the top of a page only when the chapter
+            -- changes here, or when it is repeated on each page
+            local heading = has_ch and (NoteItemWidget.repeatChapter() or note.chapter ~= prev_chapter)
+            current_height = getNoteHeight(note, note_width, st, si, layout_sig) + (heading and NoteItemWidget.headingHeight(note.chapter, note_width) or 0)
         end
         prev_chapter = note.chapter
         local mark_key = NotesListWidget.markKey(note, self.single_book)
@@ -2751,6 +2744,7 @@ function NotesListWidget:updatePage()
             if prev_note then
                 dedup_prev_title = prev_note.book_title
                 dedup_prev_info_key = getNoteInfoKey(prev_note, dedup_fields)
+                prev_chapter = prev_note.chapter -- a continued chapter gets no heading (unless repeated)
             end
         end
     end
