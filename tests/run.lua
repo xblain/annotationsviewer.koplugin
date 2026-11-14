@@ -359,6 +359,97 @@ do
     end
 end
 
+-- library scans only read sidecars
+do
+    local DS = T.DocSettings
+    local orig_open = rawget(DS, "openSettingsFile")
+    local lfsx = real["libs/libkoreader-lfs"]
+    local dir = os.tmpname(); os.remove(dir); os.execute("mkdir -p '" .. dir .. "/b.sdr' '" .. dir .. "/ds/b.sdr'")
+    local book = dir .. "/b.epub"
+    local side = dir .. "/b.sdr/metadata.epub.lua"          -- "doc" location
+    local dside = dir .. "/ds/b.sdr/metadata.epub.lua"      -- "dir" location
+    local saved = {}
+    for _, k in ipairs({ "findSidecarFile", "getSidecarFilename", "getSidecarDir", "isHashLocationEnabled", "getHistoryPath" }) do
+        saved[k] = rawget(DS, k)
+    end
+    DS.findSidecarFile = function() end
+    DS.getSidecarFilename = function() return "metadata.epub.lua" end
+    DS.getSidecarDir = function(_, _p, loc) return loc == "dir" and (dir .. "/ds/b.sdr") or (dir .. "/b.sdr") end
+    DS.isHashLocationEnabled = function() return false end
+    DS.getHistoryPath = function() return "" end
+    local function write(path, text, mtime)
+        local f = io.open(path, "w"); f:write(text); f:close()
+        if mtime and lfsx and lfsx.touch then lfsx.touch(path, mtime, mtime) end
+    end
+    local function pick() return select(2, T.getSidecarKey(book)) end
+    check("getSidecarKey: no sidecar gives false", pick() == false, tostring(pick()))
+    write(side, "return { a = 1 }", 1000)
+    check("getSidecarKey: the book's own folder", pick() == side, tostring(pick()))
+    if lfsx and lfsx.touch then
+        write(dside, "return { a = 2 }", 2000)
+        check("getSidecarKey: the newest copy wins, as KOReader reads it", pick() == dside, tostring(pick()))
+        os.remove(dside)
+        write(side .. ".old", "return { a = 0 }", 3000)
+        check("getSidecarKey: a newer backup never goes before its file", pick() == side, tostring(pick()))
+        os.remove(side)
+        check("getSidecarKey: only the backup left (crash while saving)", pick() == side .. ".old", tostring(pick()))
+        write(side, "", 4000)
+        check("getSidecarKey: an empty file is skipped", pick() == side .. ".old", tostring(pick()))
+        os.remove(side .. ".old")
+        -- the newest file doesn't load (cut off by a power cut), another copy does
+        write(side, "return {{{ cut off", 5000)
+        write(dside, 'return { annotations = { { text = "good copy", drawer = "lighten" } } }', 1000)
+        DS.openSettingsFile = function(path)
+            local ok, stored = pcall(dofile, path)
+            return { data = (ok and type(stored) == "table") and stored or {} }
+        end
+        local d = T.readSidecar(pick(), book)
+        check("readSidecar: a broken newest file falls back to the next copy", d and d.annotations and d.annotations[1].text == "good copy")
+        check("readSidecar: the broken file is kept", io.open(side) ~= nil)
+        DS.openSettingsFile = orig_open
+        -- the hash folder in use: a newer copy there is the one KOReader reads
+        os.execute("mkdir -p '" .. dir .. "/hash/ab'")
+        local hside = dir .. "/hash/ab/metadata.epub.lua"
+        DS.getSidecarDir = function(_, _p, loc)
+            return (loc == "dir" and (dir .. "/ds/b.sdr")) or (loc == "hash" and (dir .. "/hash/ab")) or (dir .. "/b.sdr")
+        end
+        write(side, "return { a = 1 }", 1000)
+        write(hside, "return { a = 3 }", 6000)
+        check("getSidecarKey: hash folder not in use is not looked at", pick() == side, tostring(pick()))
+        DS.isHashLocationEnabled = function() return true end
+        check("getSidecarKey: a newer copy in the hash folder wins", pick() == hside, tostring(pick()))
+        DS.isHashLocationEnabled = function() return false end
+        os.remove(hside)
+    end
+    os.remove(side); os.remove(dside)
+    DS.findSidecarFile = false -- an older KOReader without it
+    check("getSidecarKey: can't look gives nil", pick() == nil)
+    for k, v in pairs(saved) do DS[k] = v end
+    DS.findSidecarFile = saved.findSidecarFile
+    -- KOReader's own openSettingsFile (docsettings.lua): next() on what dofile gave
+    DS.openSettingsFile = function(path)
+        local ok, stored = pcall(dofile, path)
+        local new = {}
+        if ok and next(stored) ~= nil then new.data = stored else new.data = {} end
+        return new
+    end
+    write(side, 'return { annotations = { { text = "t", drawer = "lighten", datetime = "d" } } }')
+    local data = T.readSidecar(side)
+    check("readSidecar: reads the file", data and data.annotations and data.annotations[1].text == "t")
+    local fh = io.open(side, "w"); fh:close() -- empty file: KOReader's open() would delete it
+    fh = io.open(side .. ".old", "w"); fh:write('return { annotations = { { text = "backup", drawer = "lighten" } } }'); fh:close()
+    local d2 = T.readSidecar(side)
+    check("readSidecar: empty file falls back to .old", d2 and d2.annotations[1].text == "backup")
+    check("readSidecar: the empty file is left alone", io.open(side) ~= nil)
+    os.remove(side .. ".old")
+    fh = io.open(side, "w"); fh:write("return {{{ broken"); fh:close()
+    check("readSidecar: broken file gives nil, no error", T.readSidecar(side) == nil)
+    check("readSidecar: the broken file is left alone", io.open(side) ~= nil)
+    check("readSidecar: no path", T.readSidecar(nil) == nil and T.readSidecar(false) == nil)
+    os.remove(side); os.execute("rm -rf '" .. dir .. "'")
+    DS.openSettingsFile = orig_open
+end
+
 -- bookmarks: finding them again in the sidecar
 local bnote = { bookmark = true, datetime = "d", page = "/body/p[3]" }
 check("bookmark match", T.itemMatchesNote({ datetime = "d", page = "/body/p[3]", text = "in Two" }, bnote))

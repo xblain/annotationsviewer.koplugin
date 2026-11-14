@@ -3609,17 +3609,62 @@ end
 -- Returns a key for the current state of a book's sidecar, plus the sidecar path.
 -- The second value is false when the book definitely has no sidecar (so no annotations),
 -- and nil when that can't be determined (KOReader < 2023).
-local function getSidecarKey(book_path)
-    local ok, sidecar = pcall(DocSettings.findSidecarFile, DocSettings, book_path)
-    if not ok then
-        -- Fallback: KOReader < 2023 API
-        local ok_old, old_sidecar = pcall(DocSettings.getSidecarFile, DocSettings, book_path)
-        sidecar = ok_old and old_sidecar or nil
+-- The sidecar is the one KOReader's DocSettings:open would read, found without its side effects
+-- (open() deletes empty or broken files): every place KOReader keeps one (book folder, docsettings
+-- folder, hash folder when in use, history folder, and their ".old" backups), the most recently
+-- changed first; a backup never goes before its own file.
+-- Returns those files, most recent first, or errors when KOReader has no such API (before 2024).
+function NotesListWidget.sidecarCandidates(book_path)
+    if type(book_path) ~= "string" or book_path == "" or not DocSettings.findSidecarFile then error("no API") end
+    local name = DocSettings.getSidecarFilename(book_path)
+    local list = {}
+    local function add(path, backup)
+        local attr = path and lfs.attributes(path)
+        if not attr or attr.mode ~= "file" then return false end
+        local prev = list[#list]
+        -- a backup is never newer than its file (DocSettings buildCandidates)
+        if backup and prev and prev.path .. ".old" == path then
+            if prev.mtime < attr.modification then prev.mtime = attr.modification end
+        end
+        table.insert(list, { path = path, mtime = attr.modification, size = attr.size, prio = #list + 1 })
+        return true
     end
-    local stamp = sidecar and fileStamp(sidecar)
+    local doc_dir = DocSettings:getSidecarDir(book_path, "doc")
+    add(doc_dir .. "/" .. name); add(doc_dir .. "/" .. name .. ".old", true)
+    add(doc_dir .. "/" .. (book_path:match("([^/]+)$") or "") .. ".lua")
+    local dir_dir = DocSettings:getSidecarDir(book_path, "dir")
+    add(dir_dir .. "/" .. name); add(dir_dir .. "/" .. name .. ".old", true)
+    -- the hash folder when it is in use, as open() does (KOReader reads a few small parts of the
+    -- book for its name once and keeps that in memory)
+    if DocSettings.isHashLocationEnabled and DocSettings.isHashLocationEnabled() then
+        local hash_dir = DocSettings:getSidecarDir(book_path, "hash")
+        add(hash_dir .. "/" .. name); add(hash_dir .. "/" .. name .. ".old", true)
+    end
+    if DocSettings.getHistoryPath then
+        local hist = DocSettings:getHistoryPath(book_path)
+        if hist ~= "" then add(hist); add(hist .. ".old", true) end
+    end
+    add(book_path .. ".kpdfview.lua")
+    table.sort(list, function(a, b)
+        if a.mtime == b.mtime then return a.prio < b.prio end
+        return a.mtime > b.mtime
+    end)
+    return list
+end
+local function getSidecarKey(book_path)
+    local ok, sidecar = pcall(function()
+        local list = NotesListWidget.sidecarCandidates(book_path)
+        for i = 1, #list do
+            if list[i].size > 0 then return list[i].path end -- open() skips empty files
+        end
+    end)
+    local stamp = ok and type(sidecar) == "string" and fileStamp(sidecar)
     if stamp then return stamp, sidecar end
-    -- Fall back to the book file itself
-    return "book:" .. (fileStamp(book_path) or ""), (ok and false or nil)
+    -- Fall back to the book file itself. false: KOReader looked and there is no sidecar;
+    -- nil: it couldn't look (`a and false or nil` would always give nil)
+    local none = nil
+    if ok then none = false end
+    return "book:" .. (fileStamp(book_path) or ""), none
 end
 
 -- Key for the book info (title/authors/tags): the sidecar key plus the custom metadata file,
@@ -4190,6 +4235,41 @@ function AllNotesViewer.legacyNotes(data)
     end
     return out
 end
+-- What a sidecar file holds, read without changing anything on disk (DocSettings:open removes
+-- empty or broken candidates), or nil. A missing or empty file falls back to KOReader's backup
+-- copy (".old"), as DocSettings:open does.
+-- book_path: when the sidecar couldn't be looked for (sidecar nil: KOReader before 2024 has no
+-- findSidecarFile), read the book's settings the old way.
+function AllNotesViewer.readSidecar(sidecar, book_path)
+    if sidecar == nil and type(book_path) == "string" then
+        local ok, ds = pcall(DocSettings.open, DocSettings, book_path)
+        return ok and ds and type(ds.data) == "table" and ds.data or nil
+    end
+    if type(sidecar) ~= "string" or sidecar == "" then return nil end
+    local paths = { sidecar, sidecar .. ".old" }
+    for k = 1, 2 do
+        local path = paths[k]
+        local ok, stored
+        if DocSettings.openSettingsFile then
+            local ok_ds, ds = pcall(DocSettings.openSettingsFile, path)
+            ok, stored = ok_ds and ds ~= nil, ds and ds.data
+        else
+            ok, stored = pcall(dofile, path)
+        end
+        if ok and type(stored) == "table" and next(stored) ~= nil then return stored end
+    end
+    -- that file doesn't load: the next one KOReader would read (it would delete this one)
+    if type(book_path) == "string" then
+        local ok_c, list = pcall(NotesListWidget.sidecarCandidates, book_path)
+        for i = 1, ok_c and #list or 0 do
+            local path = list[i].path
+            if path ~= sidecar and path ~= sidecar .. ".old" and list[i].size > 0 then
+                local ok_r, stored = pcall(dofile, path)
+                if ok_r and type(stored) == "table" and next(stored) ~= nil then return stored end
+            end
+        end
+    end
+end
 -- key/sidecar are optional: pass them when getSidecarKey() was already called for this book.
 function AllNotesViewer:loadBookAnnotations(book_path, key, sidecar)
     local annotations = {}
@@ -4199,11 +4279,9 @@ function AllNotesViewer:loadBookAnnotations(book_path, key, sidecar)
     if cached and cached.mtime == key then
         return cached.data
     end
-    local ok, doc_settings = pcall(DocSettings.open, DocSettings, book_path)
-    if not ok or not doc_settings then return annotations end
     _persist_dirty = true
-    local data = doc_settings.data
-    if not data then return annotations end
+    -- read only: DocSettings:open is for writing (it removes empty or broken sidecar files)
+    local data = AllNotesViewer.readSidecar(sidecar, book_path) or {}
     
     local items = data.annotations
     -- an empty list is a converted book without annotations (KOReader keeps the old keys)
@@ -4231,16 +4309,11 @@ function AllNotesViewer:getBookInfo(book_path, data, key, sidecar)
         return cached.data
     end
     _persist_dirty = true
-    local opened = data ~= nil
-    if not data then
-        local ok, doc_settings = pcall(DocSettings.open, DocSettings, book_path)
-        opened = ok and doc_settings ~= nil
-        data = opened and doc_settings.data or {}
-    end
+    data = data or AllNotesViewer.readSidecar(sidecar, book_path) or {}
     local filename = book_path:match("([^/\\]+)$") or book_path
     
     local custom_metadata = {}
-    if opened then
+    do
         local custom_metadata_file = DocSettings:findCustomMetadataFile(book_path)
         if custom_metadata_file then
             local ok_cm, cm_data = pcall(dofile, custom_metadata_file)
@@ -7736,6 +7809,9 @@ AllNotesViewer._test = {
     itemMatchesNote = itemMatchesNote,
     legacyNotes = AllNotesViewer.legacyNotes,
     samePath = AllNotesViewer.samePath,
+    getSidecarKey = getSidecarKey,
+    readSidecar = AllNotesViewer.readSidecar,
+    DocSettings = DocSettings,
     notesToMarkdown = Export.notesToMarkdown,
     Export = Export,
     setSetting = setSetting,
