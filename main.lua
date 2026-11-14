@@ -3084,6 +3084,23 @@ function Export.dir()
     if type(d) ~= "string" or d == "" then d = Export.defaultDir() end
     return d
 end
+-- the folder as it is shown on the Export page: "koreader/exports", or the chosen folder
+function Export.shortDir()
+    local d = Export.dir()
+    local ok, DataStorage = pcall(require, "datastorage")
+    if ok then
+        local data = DataStorage:getDataDir()
+        local name = data:match("([^/\\]+)[/\\]*$")
+        if not name or name == "." then name = "koreader" end
+        if d:sub(1, #data) == data then return name .. d:sub(#data + 1) end
+    end
+    return d
+end
+-- the Export row on the Settings page: "Markdown · one file"
+function Export.summary()
+    local o = Export.options()
+    return (o.format == "txt" and _("Plain text") or _("Markdown")) .. " · " .. (o.files == "book" and _("One per book") or _("One file"))
+end
 -- Writes the files; returns the file (the folder when there are several) and the number of files,
 -- or nil and the error (saying how many were written already, for a file per book).
 function Export.write(notes, o, filter_label)
@@ -3221,6 +3238,10 @@ function NotesListWidget:showSettingsMenu()
     end
     self.settings_screen = NotesListWidget.SettingsScreen:new{ list = self }
     UIManager:show(self.settings_screen, "flashui")
+end
+-- The Export page: its options with a preview of the file, and Copy / Export at the bottom.
+function NotesListWidget:showExportPage()
+    UIManager:show(NotesListWidget.SettingsScreen:new{ list = self, page = "export", export_action = true }, "flashui")
 end
 function NotesListWidget:showSpinSetting(title, key, default, min, max, step, back_callback)
     NotesListWidget.showDialog(SpinWidget:new{
@@ -4989,7 +5010,7 @@ function Page.PreviewClip:paintTo(bb, x, y)
     self[1]:paintTo(buf, 0, 0)
     bb:blitFrom(buf, x, y, 0, 0, self.w, self.h)
     buf:free()
-    if isScrollbarStyle() then -- the list's scrollbar: thin track and an outlined thumb, as a sample
+    if isScrollbarStyle() and not self.no_bar then -- the list's scrollbar: thin track and an outlined thumb, as a sample
         local cx = self.w - SB_STRIP_WIDTH - SB_MARGIN_RIGHT + math.floor(SB_STRIP_WIDTH / 2)
         local top, bot = Screen:scaleBySize(10), self.h - Screen:scaleBySize(10)
         bb:paintRect(x + cx, y + top, Size.line.thin, bot - top, BlitBuffer.COLOR_BLACK)
@@ -5051,6 +5072,55 @@ function Page.preview(list, h, mark_gap, bookmarks)
     end
     return VerticalGroup:new{ align = "left",
         Page.PreviewClip:new{ w = W, h = h, g },
+        LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line } }
+end
+-- Export page: the start of the file as it will be written (the first annotations of the list, or
+-- Lorem ipsum when the list is empty), in a fixed-width font, cut off at h.
+function Page.exportPreview(list, h)
+    local W = Screen:getWidth()
+    local o = Export.options()
+    local notes = {}
+    -- the first three, long texts cut short (the preview only shows the start anyway)
+    for i, n in ipairs(list.filtered_notes or {}) do
+        if i > 3 then break end
+        local c = {}
+        for k, v in pairs(n) do c[k] = v end
+        for k in pairs({ highlighted_text = true, user_note = true }) do
+            if type(c[k]) == "string" and #c[k] > 400 then c[k] = c[k]:sub(1, 400):gsub("[\192-\255][\128-\191]*$", "") .. "…" end
+        end
+        table.insert(notes, c)
+    end
+    if #notes == 0 then
+        notes = {
+            { book_title = "Lorem Ipsum", book_authors = "Dolor Sit", chapter = "Chapter One", page_label = 12,
+              datetime = "2026-01-09 10:12:00", drawer = "lighten", color = "yellow", tags = { "lorem" },
+              highlighted_text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore.",
+              user_note = "Duis aute irure dolor in reprehenderit." },
+            { book_title = "Lorem Ipsum", book_authors = "Dolor Sit", chapter = "Chapter Two", page_label = 27,
+              datetime = "2026-01-11 08:40:00", drawer = "underscore", color = "blue",
+              highlighted_text = "Excepteur sint occaecat cupidatat non proident." },
+        }
+    end
+    local text
+    if o.files == "book" then
+        local f = Export.files(notes, o, list.exportFilterLabel and list:exportFilterLabel() or "", "20260109-101200")[1]
+        text = f and f.text or ""
+    else
+        text = Export.build(notes, o, list.exportFilterLabel and list:exportFilterLabel() or "")
+    end
+    local P = Screen:scaleBySize(24)
+    local box = TextBoxWidget:new{ text = text, face = Font:getFace("scfont", 13), width = W - P * 2 }
+    local top = Screen:scaleBySize(10)
+    local g = VerticalGroup:new{ align = "left", VerticalSpan:new{ width = top },
+        HorizontalGroup:new{ HorizontalSpan:new{ width = P }, box } }
+    -- end on a whole line, never half of one
+    local lh = tonumber(box.line_height_px)
+    if lh and lh > 0 and g:getSize().h + top > h then
+        h = top + math.max(1, math.floor((h - top * 2) / lh)) * lh
+    end
+    h = math.min(h, g:getSize().h + top)
+    return VerticalGroup:new{ align = "left",
+        Page.PreviewClip:new{ w = W, h = h, no_bar = true, g },
         LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line } }
 end
 -- Pill / RoundedBox with `true_color = true` keep their colours in night mode (see paintTrue).
@@ -5404,8 +5474,8 @@ function States.menu(list)
             cb = function() list:showBookPicker(function() end) end })
     end
     table.insert(items, "line")
-    table.insert(items, { icon = "move.up", label = _("Export to Markdown"),
-        value = string.format(_("%d shown"), #(list.filtered_notes or {})), cb = function() list:exportList() end })
+    table.insert(items, { icon = "move.up", label = _("Export"), chevron = true,
+        value = string.format(_("%d shown"), #(list.filtered_notes or {})), cb = function() list:showExportPage() end })
     table.insert(items, { icon = "cre.render.reload", label = _("Reload annotations"),
         cb = function() list.viewer:reloadAnnotations(list) end })
     table.insert(items, "line")
@@ -6505,6 +6575,65 @@ function SS:build()
         add(toggle(_("Hide duplicate book header"), nil, "hide_dup_title", getHideDupTitle))
         add(toggle(_("Hide duplicate info header"), nil, "hide_dup_info", getHideDupInfo))
         add(fieldChips(_("Duplicate check"), _("Repeated info is hidden when these match"), getDedupInfoFields, "dedup_info_fields"))
+    elseif self.page == "export" then
+        local o = Export.options()
+        local function pick(key) return function(v) setSetting("export_" .. key, v); self:rebuild() end end
+        local function opt(key) return function() return Export.options()[key] end end
+        local function onOff(label, sub, key) return toggle(label, sub, "export_" .. key, opt(key)) end
+        add(sectionBar(_("FORMAT")))
+        add(segment(_("File type"), { { "md", _("Markdown") }, { "txt", _("Plain text") } }, o.format, pick("format")))
+        add(sectionBar(_("INCLUDE")))
+        add(onOff(_("Title and filter at the top"), nil, "header"))
+        add(onOff(_("Author"), _("After the book title"), "author"))
+        add(segment(_("Chapter"), { { "line", _("In the info line") }, { "heading", _("As headings") }, { "none", _("Leave out") } },
+            o.chapter, pick("chapter")))
+        add(segment(_("Date"), { { "date", _("Date") }, { "datetime", _("Date and time") }, { "none", _("Leave out") } },
+            o.date, pick("date")))
+        if o.date ~= "none" then
+            local sample_t = os.time({ year = 2026, month = 9, day = 3, hour = 14 })
+            add(segment(_("Date format"), { { "iso", "2026-09-03" },
+                    { "long", "3 " .. NoteItemWidget.monthName(sample_t) .. " 2026" } }, o.date_style, pick("date_style")))
+        end
+        -- the smaller parts as chips under one label (black when on; several can be on)
+        do
+            local chips = HorizontalGroup:new{ align = "center" }
+            local parts = { { "page", _("Page") }, { "notes", _("Notes") }, { "style", _("Colour and style") }, { "tags", _("Tags") } }
+            for i = 1, #parts do
+                local key, text = parts[i][1], parts[i][2]
+                local on = o[key] == true
+                local w = TextWidget:new{ text = text, face = face13, bold = true }:getSize().w + Screen:scaleBySize(20)
+                if i > 1 then table.insert(chips, HorizontalSpan:new{ width = Screen:scaleBySize(6) }) end
+                table.insert(chips, TapBox:new{
+                    Pill:new{ width = w, height = Screen:scaleBySize(32), fill = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
+                        border = on and 0 or thin, border_color = COLORS.line,
+                        TextWidget:new{ text = text, face = face13, bold = on, fgcolor = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK } },
+                    callback = function() setSetting("export_" .. key, not on); self:rebuild() end })
+            end
+            add(VerticalGroup:new{ align = "left",
+                padded(VerticalGroup:new{ align = "left", TextWidget:new{ text = _("Also include"), face = face15 },
+                    VerticalSpan:new{ width = Screen:scaleBySize(8) }, chips }, Screen:scaleBySize(12), Screen:scaleBySize(14)),
+                rowLine() })
+        end
+        add(sectionBar(_("ORDER")))
+        add(segment(_("Books"), { { "book", _("Each book once") }, { "list", _("As in the list") } }, o.group, pick("group")))
+        if o.format == "md" then
+            add(sectionBar(_("STYLE")))
+            add(segment(_("Highlight"), { { "quote", _("Quote") }, { "italic", _("Italic") }, { "plain", _("Plain") } },
+                o.highlight, pick("highlight")))
+            add(segment(_("Note"), { { "bold", _("Bold label") }, { "quote", _("Quote") }, { "italic", _("Italic") } },
+                o.note_style, pick("note_style")))
+        end
+        add(sectionBar(_("FILES")))
+        add(segment(_("Files"), { { "one", _("One file") }, { "book", _("One per book") } }, o.files, pick("files")))
+        add(onOff(_("Date and time in the file name"), _("Off: exporting again replaces the file"), "name_date"))
+        add(navRow(_("Folder"), Export.shortDir(), function()
+            local start = Export.dir()
+            if lfs.attributes(start, "mode") ~= "directory" then start = require("datastorage"):getDataDir() end
+            UIManager:show(require("ui/widget/pathchooser"):new{
+                select_directory = true, select_file = false, show_files = false, path = start,
+                onConfirm = function(path) setSetting("export_dir", path); self:rebuild() end,
+            })
+        end))
     else
         add(sectionBar(_("LIST")))
         add(navRow(_("Text"), _("Fonts, sizes, capitals"),
@@ -6536,6 +6665,10 @@ function SS:build()
             { "vertical", _("Vertical") }, { "disabled", _("Off") } }, getSwipeSetting(),
             function(v) setSetting("swipe_direction", v); self:changed() end))
 
+        add(sectionBar(_("EXPORT")))
+        add(navRow(_("Export"), NotesListWidget.Export.summary(),
+            function() UIManager:show(SS:new{ list = list, page = "export", parent_screen = self }, "flashui") end))
+
         add(sectionBar(_("KOREADER")))
         add(toggle(_("KOReader's Bookmarks open here"), _("Its menu entries, gestures and Bookmarks buttons open the Bookmarks tab here"),
             "take_over_bookmarks", AllNotesViewer.takeOverOn))
@@ -6545,9 +6678,10 @@ function SS:build()
             function() return getSetting("hide_unused_cs", false) == true end))
     end
 
-    local titles = { text = _("Text"), spacing = _("Spacing"), info = _("Info row and repeats"), bookmarks = _("Bookmarks"), dates = _("Dates") }
+    local titles = { text = _("Text"), spacing = _("Spacing"), info = _("Info row and repeats"), bookmarks = _("Bookmarks"), dates = _("Dates"),
+        export = _("Export") }
     local right_items
-    if self.page == "text" or self.page == "spacing" or self.page == "bookmarks" then
+    if self.page == "text" or self.page == "spacing" or self.page == "bookmarks" or self.page == "export" then
         local keys = ({ text = { "font_size" }, spacing = { "margins", "section_margin" } })[self.page] or {}
         right_items = { TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = Screen:scaleBySize(90), h = TOPBAR_HEIGHT },
                 (function()
@@ -6558,6 +6692,10 @@ function SS:build()
             callback = function()
                 for _i, key in ipairs(keys) do
                     for _j, st in ipairs(SPIN_MENUS[key].settings) do setSetting(st.key, st.default) end
+                end
+                if self.page == "export" then
+                    for k in pairs(NotesListWidget.Export.DEFAULTS) do setSetting("export_" .. k, nil) end
+                    setSetting("export_dir", nil)
                 end
                 if self.page == "bookmarks" then
                     setSetting("bm_line_size", nil); setSetting("bm_spacing", nil); setSetting("bm_date", nil)
@@ -6573,17 +6711,40 @@ function SS:build()
                 self:changed()
             end } }
     end
+    -- opened from ☰ → Export: a page of its own (only ✕), with Copy / Export at the bottom
     local header = Page.header(self, titles[self.page] or _("Settings"), function() self:onClose() end, right_items,
-        not self.page, function() Page.exitAll(self) end)
+        not self.page or self.export_action, function() Page.exitAll(self) end)
     local top_group = VerticalGroup:new{ align = "left", header }
     if self.page == "text" or self.page == "spacing" or self.page == "bookmarks" or self.page == "dates" then
         table.insert(top_group, Page.preview(self.list, math.floor(H * 0.26), self.page == "spacing", self.page == "bookmarks"))
+    elseif self.page == "export" then
+        table.insert(top_group, Page.exportPreview(self.list, math.floor(H * 0.26)))
     end
-    local avail = H - top_group:getSize().h
+    local footer
+    if self.export_action then
+        local n = #(list.filtered_notes or {})
+        local bm = NotesListWidget.Export.allBookmarks(list.filtered_notes or {})
+        local label = n == 0 and _("Nothing to export") or bm and (n == 1 and _("Export 1 bookmark") or string.format(_("Export %d bookmarks"), n))
+            or (n == 1 and _("Export 1 annotation") or string.format(_("Export %d annotations"), n))
+        local P2 = Screen:scaleBySize(24)
+        local inner2 = W - P2 * 2
+        local gap = Screen:scaleBySize(10)
+        local bw1 = math.floor((inner2 - gap) / 3)
+        footer = VerticalGroup:new{
+            LineWidget:new{ dimen = Geom:new{ w = W, h = Size.line.thin }, background = COLORS.line },
+            VerticalSpan:new{ width = Page.FOOTER_TOP },
+            HorizontalGroup:new{ HorizontalSpan:new{ width = P2 },
+                Page.button(_("Copy"), false, bw1, function() self:onClose(); list:copyList() end),
+                HorizontalSpan:new{ width = gap },
+                Page.button(label, true, inner2 - gap - bw1, function() self:onClose(); list:exportList() end) },
+            VerticalSpan:new{ width = Page.FOOTER_BOTTOM },
+        }
+    end
+    local avail = H - top_group:getSize().h - (footer and footer:getSize().h or 0)
     local body_widget = Page.paged(self, W, avail, body)
     self[1] = FrameContainer:new{ width = W, height = H, padding = 0, margin = 0, bordersize = 0,
         background = BlitBuffer.COLOR_WHITE,
-        VerticalGroup:new{ align = "left", top_group, body_widget } }
+        VerticalGroup:new{ align = "left", top_group, body_widget, footer } }
 end
 end
 
