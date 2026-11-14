@@ -3901,8 +3901,10 @@ function AllNotesViewer.registerGestures()
     local Dispatcher = require("dispatcher")
     for n = 1, #AllNotesViewer.GESTURES do
         local g = AllNotesViewer.GESTURES[n]
+        -- "general": KOReader runs it in the file browser and in a book. An action marked
+        -- reader = true is switched off in the file browser (Dispatcher:isActionEnabled).
         Dispatcher:registerAction(g.id, { category = "none", event = g.event, title = g.title,
-            filemanager = true, reader = true })
+            general = true })
     end
     for _, g in ipairs(AllNotesViewer.LEGACY_GESTURES) do
         Dispatcher:registerAction(g.id, { category = "none", event = g.event, title = g.title })
