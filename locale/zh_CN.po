@@ -1505,6 +1505,12 @@ msgstr "你对这段文字的笔记"
 msgid "Note saved."
 msgstr "笔记已保存。"
 
+#: main.lua:7371
+msgid ""
+"Could not save: this annotation was not found in the book's file. Tap Reload "
+"annotations and try again."
+msgstr ""
+
 #: main.lua:7068
 msgid "Cannot find book path."
 msgstr "找不到书籍路径。"

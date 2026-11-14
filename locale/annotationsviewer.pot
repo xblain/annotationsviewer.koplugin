@@ -1479,6 +1479,12 @@ msgstr ""
 msgid "Note saved."
 msgstr ""
 
+#: main.lua:7371
+msgid ""
+"Could not save: this annotation was not found in the book's file. Tap Reload "
+"annotations and try again."
+msgstr ""
+
 #: main.lua:7068
 msgid "Cannot find book path."
 msgstr ""

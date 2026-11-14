@@ -3693,7 +3693,8 @@ end
 -- Matches on date, highlighted text and position, so two highlights saved in the same
 -- second with the same text are told apart.
 local function itemMatchesNote(item, note)
-    if item.datetime ~= note.datetime then return false end
+    -- the list keeps "" for an item without a date, so compare both the same way
+    if (item.datetime or "") ~= (note.datetime or "") then return false end
     if note.bookmark then -- a bookmark has no text of its own: match on its place
         return item.drawer == nil and positionsEqual(item.page or item.pageno, note.page)
     end
@@ -7359,7 +7360,17 @@ function AllNotesViewer:setHighlightField(note, field, value, parent_widget, don
         self:clearBookCache(note.book_path)
         updateListedNote(parent_widget, note, function(n) n[field] = value end)
         if done_text then NotesListWidget.showDialog(InfoMessage:new{ text = done_text, timeout = 1 }) end
+    else
+        AllNotesViewer.saveFailed()
     end
+end
+-- Nothing was changed because the annotation is no longer in the book's file (changed elsewhere,
+-- book moved ...): say so. on_dismiss runs when the message is closed.
+function AllNotesViewer.saveFailed(on_dismiss)
+    NotesListWidget.showDialog(InfoMessage:new{
+        text = _("Could not save: this annotation was not found in the book's file. Tap Reload annotations and try again."),
+        dismiss_callback = on_dismiss,
+    })
 end
 function AllNotesViewer:updateHighlightStyle(note, new_style, parent_widget)
     self:setHighlightField(note, "drawer", new_style, parent_widget, _("Style updated."))
@@ -7416,6 +7427,8 @@ function AllNotesViewer:deleteAnnotation(note, parent_widget)
     if deleted then
         self:clearBookCache(note.book_path)
         updateListedNote(parent_widget, note, function(_, i) table.remove(parent_widget.notes_list, i) end)
+    else
+        AllNotesViewer.saveFailed()
     end
 end
 -- First lines of the highlight, for the edit-note dialog (about three lines' worth).
@@ -7429,7 +7442,8 @@ local function cleanHighlightTextForDialog(text)
     end
     return t
 end
-function AllNotesViewer:editNote(note, parent_widget, on_done)
+-- start_text: what the field starts with instead of the saved note (after a failed save).
+function AllNotesViewer:editNote(note, parent_widget, on_done, start_text)
     local InputDialog = require("ui/widget/inputdialog")
     local input_dialog
     local has_note = note.user_note and note.user_note:find("%S") ~= nil
@@ -7442,8 +7456,11 @@ function AllNotesViewer:editNote(note, parent_widget, on_done)
     local description = table.concat(about, " · ")
     if quote ~= "" then description = description .. (description ~= "" and "\n\n" or "") .. quote end
     local function save(text)
+        local typed = input_dialog:getInputText() -- kept if the save fails
         UIManager:close(input_dialog)
-        self:saveNoteEdit(note, text, parent_widget)
+        self:saveNoteEdit(note, text, parent_widget, function()
+            self:editNote(note, parent_widget, on_done, typed)
+        end)
         if on_done then on_done() end
     end
     local row = {}
@@ -7455,7 +7472,7 @@ function AllNotesViewer:editNote(note, parent_widget, on_done)
     input_dialog = InputDialog:new{
         title = has_note and _("Edit note") or _("Add note"),
         description = description ~= "" and description or nil,
-        input = note.user_note or "",
+        input = start_text or note.user_note or "",
         input_hint = note.bookmark and _("Your note on this page") or _("Your note on this passage"),
         input_type = "text",
         text_height = Screen:scaleBySize(120),
@@ -7473,7 +7490,8 @@ function AllNotesViewer:editNote(note, parent_widget, on_done)
     NotesListWidget.showDialog(input_dialog)
     input_dialog:onShowKeyboard()
 end
-function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget)
+-- on_fail: run after the "could not save" message is closed (editNote reopens with the text).
+function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget, on_fail)
     if not note.book_path then return end
     local value = new_note_text ~= "" and new_note_text or nil -- blank input deletes the note, as in KOReader
     local updated = false
@@ -7509,6 +7527,8 @@ function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget)
         self:clearBookCache(note.book_path)
         updateListedNote(parent_widget, note, function(n) n.user_note = value end)
         NotesListWidget.showDialog(InfoMessage:new{ text = _("Note saved."), timeout = 1 })
+    else
+        AllNotesViewer.saveFailed(on_fail)
     end
 end
 function AllNotesViewer:openBookAtNote(note)

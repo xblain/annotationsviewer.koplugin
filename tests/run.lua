@@ -171,6 +171,13 @@ check("match same", T.itemMatchesNote({ datetime = "d", text = "t", pos0 = "x0",
 check("no match other position", not T.itemMatchesNote({ datetime = "d", text = "t", pos0 = "y0", pos1 = "x1" }, note))
 check("match pdf positions", T.itemMatchesNote({ datetime = "d", text = "t", pos0 = { x = 1, y = 2, page = 3 }, pos1 = { x = 4, y = 5, page = 3 } },
     { datetime = "d", highlighted_text = "t", pos0 = { x = 1, y = 2, page = 3 }, pos1 = { x = 4, y = 5, page = 3 } }))
+-- an item without a date: the list keeps "" for it, so it must still be found
+check("match item without datetime", T.itemMatchesNote({ text = "t", pos0 = "x0", pos1 = "x1" },
+    { datetime = "", highlighted_text = "t", pos0 = "x0", pos1 = "x1" }))
+check("match bookmark without datetime", T.itemMatchesNote({ page = 5 }, { bookmark = true, datetime = "", page = 5 }))
+check("missing item gives false", not T.itemMatchesNote({ datetime = "other", text = "t", pos0 = "x0", pos1 = "x1" }, note))
+check("dated item does not match undated note", not T.itemMatchesNote({ datetime = "d", text = "t", pos0 = "x0", pos1 = "x1" },
+    { datetime = "", highlighted_text = "t", pos0 = "x0", pos1 = "x1" }))
 
 -- applyFilter
 local list = {
