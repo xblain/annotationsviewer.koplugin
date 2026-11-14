@@ -1799,6 +1799,7 @@ function NotesListWidget:setNoteColumn()
     self.note_x_offset = math.floor((avail - self.note_width) / 2) + NoteItemWidget.scrollInset(no_sb)
 end
 function NotesListWidget:init()
+    NotesListWidget._current = self
     self.width = Screen:getWidth()
     self.height = Screen:getHeight()
     self.dimen = Geom:new{ w = self.width, h = self.height }
@@ -3457,11 +3458,85 @@ function NotesListWidget:onSwipeWest()  return self:onGotoNextPage() end
 function NotesListWidget:onSwipeNorth() return self:onGotoNextPage() end
 function NotesListWidget:onSwipeEast()  return self:onGotoPrevPage() end
 function NotesListWidget:onSwipeSouth() return self:onGotoPrevPage() end
+-- The plugin's own gesture events: a gesture set to one of these does nothing while the list is
+-- open (it would open a second list on top).
+NotesListWidget.OWN_EVENTS = { ShowAnnotationsHere = true, ShowBookmarksHere = true, ShowAllAnnotations = true,
+    ShowCurrentBookAnnotations = true, ShowAllBookmarksList = true, ShowCurrentBookBookmarksList = true }
+-- Actions that leave this screen (file browser, open a book): the list closes first, so it isn't
+-- left on top of what comes next.
+NotesListWidget.LEAVE_EVENTS = { Home = true, OpenLastDoc = true, OpenNextOrPreviousFileInFolder = true }
+-- the list on screen (one at a time); its windows are closed before a leave action
+function NotesListWidget:onCloseWidget()
+    if NotesListWidget._current == self then NotesListWidget._current = nil end
+end
+-- The plugin's other windows on screen (sheet, cards, full-screen pages, KOReader dialogs shown
+-- through showDialog), in the order they were shown, so a leave action can close them all.
+NotesListWidget._windows = setmetatable({}, { __mode = "k" })
+NotesListWidget._window_n = 0
+function NotesListWidget.trackWindow(w)
+    if type(w) ~= "table" or w._av_tracked then return end
+    w._av_tracked = true
+    local on_show, on_close = w.onShow, w.onCloseWidget
+    w.onShow = function(self, ...)
+        NotesListWidget._window_n = NotesListWidget._window_n + 1
+        NotesListWidget._windows[self] = NotesListWidget._window_n
+        if on_show then return on_show(self, ...) end
+    end
+    w.onCloseWidget = function(self, ...)
+        NotesListWidget._windows[self] = nil
+        if on_close then return on_close(self, ...) end
+    end
+end
+-- Closes every window of the plugin, the newest first, then the list.
+function NotesListWidget.closeAll(from)
+    local open = {}
+    for w, n in pairs(NotesListWidget._windows) do open[#open + 1] = { w = w, n = n } end
+    table.sort(open, function(a, b) return a.n > b.n end)
+    local done = {}
+    for i = 1, #open do UIManager:close(open[i].w); done[open[i].w] = true end
+    local w = from -- and anything shown in a way that wasn't tracked: the pages it came from
+    while w and w ~= NotesListWidget._current do
+        if not done[w] then UIManager:close(w); done[w] = true end
+        w = w.parent_screen or w.parent
+    end
+    if NotesListWidget._current then UIManager:close(NotesListWidget._current) end
+end
+-- Runs KOReader's gesture action fn() for a gesture the plugin's windows don't use. Its events go
+-- to every window (KOReader only sends them to the top one, which is the list), so frontlight,
+-- night mode, refresh and the like work. While it runs, KOReader is told that some actions are
+-- off: the plugin's own (no second list), and the book's own (Reader: page turns, chapters,
+-- bookmarks ...), which would act on the book hidden behind the list. A leave action closes the
+-- plugin's windows first. from: the plugin window that got the gesture.
+function NotesListWidget.runForwarded(fn, from)
+    local Dispatcher = require("dispatcher")
+    local orig_send, orig_enabled = UIManager.sendEvent, Dispatcher.isActionEnabled
+    local closed = false
+    UIManager.sendEvent = function(_um, ev)
+        -- a leave action: close the plugin's windows when it is really sent (a QuickMenu only
+        -- checks its actions while building the menu)
+        local name = type(ev) == "table" and type(ev.handler) == "string" and ev.handler:match("^on(.+)$")
+        if name and NotesListWidget.LEAVE_EVENTS[name] and not closed then
+            closed = true
+            NotesListWidget.closeAll(from)
+        end
+        return UIManager:broadcastEvent(ev)
+    end
+    if type(orig_enabled) == "function" then Dispatcher.isActionEnabled = function(d, action)
+        if type(action) == "table" then
+            if NotesListWidget.OWN_EVENTS[action.event] then return false end
+            if action.reader or action.rolling or action.paging then return false end
+        end
+        return orig_enabled(d, action)
+    end end
+    local ok, err = pcall(fn)
+    UIManager.sendEvent, Dispatcher.isActionEnabled = orig_send, orig_enabled
+    if not ok then logger.warn("annotationsviewer: forwarded gesture:", err) end
+end
 -- Forward an unhandled gesture to the KOReader gestures plugin by directly
 -- resolving the canonical gesture name and calling gestureAction(). This
 -- bypasses the event-stack limitation where UIManager only propagates events
 -- to is_always_active widgets after the top widget.
-local function _forwardGestureToPlugin(ges_event)
+local function _forwardGestureToPlugin(ges_event, from)
     local g
     local ReaderUI = require("apps/reader/readerui")
     if ReaderUI.instance then g = ReaderUI.instance.gestures end
@@ -3527,10 +3602,7 @@ local function _forwardGestureToPlugin(ges_event)
         }
         if map[dir] then candidates[#candidates+1] = map[dir] end
     elseif gt == "multiswipe" then
-        local orig = UIManager.sendEvent
-        UIManager.sendEvent = function(um, ev) return UIManager:broadcastEvent(ev) end
-        pcall(g.multiswipeAction, g, ges_event.multiswipe_directions, ges_event)
-        UIManager.sendEvent = orig
+        NotesListWidget.runForwarded(function() g:multiswipeAction(ges_event.multiswipe_directions, ges_event) end, from)
         return true
     elseif gt == "spread" then candidates[#candidates+1] = "spread_gesture"
     elseif gt == "pinch"  then candidates[#candidates+1] = "pinch_gesture"
@@ -3546,10 +3618,7 @@ local function _forwardGestureToPlugin(ges_event)
         if g.gestures and g.gestures[name] ~= nil then ges_name = name; break end
     end
 
-    local orig = UIManager.sendEvent
-    UIManager.sendEvent = function(um, ev) return UIManager:broadcastEvent(ev) end
-    pcall(g.gestureAction, g, ges_name, ges_event)
-    UIManager.sendEvent = orig
+    NotesListWidget.runForwarded(function() g:gestureAction(ges_name, ges_event) end, from)
     return true
 end
 
@@ -3558,9 +3627,10 @@ end
 function NotesListWidget.showDialog(w, ...)
     local IC = require("ui/widget/container/inputcontainer")
     if type(w) == "table" and not w.toast and w.onGesture == IC.onGesture then
+        NotesListWidget.trackWindow(w)
         w.onGesture = function(self, ev)
             if IC.onGesture(self, ev) then return true end
-            return _forwardGestureToPlugin(ev)
+            return _forwardGestureToPlugin(ev, self)
         end
     end
     return UIManager:show(w, ...)
@@ -3569,7 +3639,7 @@ function NotesListWidget:onGesture(ev)
     -- Let InputContainer handle registered ges_events / touch zones first
     local InputContainer = require("ui/widget/container/inputcontainer")
     if InputContainer.onGesture(self, ev) then return true end
-    return _forwardGestureToPlugin(ev)
+    return _forwardGestureToPlugin(ev, self)
 end
 function NotesListWidget:onTap(_, ges)
     if not ges or not ges.pos then return end
@@ -5392,10 +5462,11 @@ end
 -- Menus, sheets and dropdowns sit above the list: pass the gestures they don't use on to the
 -- KOReader gestures plugin, as the list does (corner taps, edge swipes, ...).
 function Page.forwardGestures(cls)
+    NotesListWidget.trackWindow(cls)
     function cls:onGesture(ev)
         if self.toast then return false end -- toasts let everything through anyway
         if InputContainer.onGesture(self, ev) then return true end
-        return _forwardGestureToPlugin(ev)
+        return _forwardGestureToPlugin(ev, self)
     end
 end
 Page.forwardGestures(AnnotationSheet)
@@ -5551,7 +5622,6 @@ States.Card = InputContainer:extend{
     anchor = "center", build = nil, modal = false, toast = false, timeout = nil, cancel_cb = nil,
     width = nil, pad_h = nil, pad_v = nil, left = nil, top = nil, -- for the ☰ menu: own size and place
 }
-Page.forwardGestures(States.Card)
 function States.Card:init()
     local W, H = Screen:getWidth(), Screen:getHeight()
     local col_w = W > H and math.min(W, math.floor(H * 1.1)) or W
@@ -5592,6 +5662,7 @@ end
 function States.Card:onCloseWidget()
     if self.timeout_cb then UIManager:unschedule(self.timeout_cb) end
 end
+Page.forwardGestures(States.Card) -- after onShow / onCloseWidget, which it wraps
 function States.Card:onTapOutside(_arg, ges)
     if ges and ges.pos and ges.pos:intersectWith(self.dimen) then return true end
     self:onClose()
@@ -6562,7 +6633,6 @@ end
 do -- own scope: keeps the main chunk under Lua's 200-locals limit
 local SS = InputContainer:extend{ list = nil, page = nil, parent_screen = nil, covers_fullscreen = true }
 Page.watchResize(SS)
-Page.forwardGestures(SS)
 NotesListWidget.SettingsScreen = SS
 function SS:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
@@ -6589,6 +6659,7 @@ end
 function SS:onCloseWidget()
     if self.list.settings_screen == self then self.list.settings_screen = nil end
 end
+Page.forwardGestures(SS) -- after onCloseWidget, which it wraps
 function SS:build()
     local W, H = Screen:getWidth(), Screen:getHeight()
     local P = Screen:scaleBySize(24)
@@ -7865,6 +7936,7 @@ AllNotesViewer._test = {
     getSidecarKey = getSidecarKey,
     normalizeColorStyle = normalizeColorStyle,
     ReaderHighlight = ReaderHighlight,
+    UIManager = UIManager,
     COLORS = COLORS,
     readSidecar = AllNotesViewer.readSidecar,
     DocSettings = DocSettings,

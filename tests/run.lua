@@ -552,6 +552,49 @@ do
     RH.highlight_colors, RH.getHighlightColorString, RH.getHighlightColorCode = saved[1], saved[2], saved[3]
 end
 
+-- gestures passed on from the list
+do
+    local UI, NLW = T.UIManager, T.NotesListWidget
+    local saved_ui = { rawget(UI, "sendEvent"), rawget(UI, "broadcastEvent"), rawget(UI, "close") }
+    local saved_disp = real["dispatcher"]
+    local disp = { isActionEnabled = function() return true end }
+    real["dispatcher"] = disp
+    local orig_enabled = disp.isActionEnabled
+    local broadcast, closed = {}, {}
+    UI.sendEvent = function() error("not replaced") end
+    UI.broadcastEvent = function(_, ev) broadcast[#broadcast + 1] = ev end
+    UI.close = function(_, w) closed[#closed + 1] = w end
+    local list = { name = "list" }
+    local sheet = { name = "sheet" }
+    NLW._current = list
+    local seen = {}
+    NLW.runForwarded(function()
+        seen.page_turn = disp:isActionEnabled({ category = "incrementalnumber", event = "GotoViewRel", reader = true })
+        seen.rolling = disp:isActionEnabled({ event = "X", rolling = true })
+        seen.own = disp:isActionEnabled({ category = "none", event = "ShowAnnotationsHere", general = true })
+        seen.old_own = disp:isActionEnabled({ category = "none", event = "ShowCurrentBookAnnotations" })
+        seen.frontlight = disp:isActionEnabled({ category = "none", event = "IncreaseFlIntensity", screen = true })
+        seen.home = disp:isActionEnabled({ category = "none", event = "Home", general = true })
+        seen.closed_on_check = #closed -- a QuickMenu checks actions while building the menu
+        UI:sendEvent("refresh")
+        UI:sendEvent({ handler = "onHome" })
+    end, sheet)
+    check("forwarded: a page turn doesn't reach the book", seen.page_turn == false and seen.rolling == false)
+    check("forwarded: the plugin's own gesture opens no second list", seen.own == false and seen.old_own == false)
+    check("forwarded: frontlight and the like still run", seen.frontlight == true)
+    check("forwarded: events go to every window (refresh)", broadcast[1] == "refresh")
+    check("forwarded: checking the file browser action closes nothing", seen.closed_on_check == 0 and seen.home == true)
+    check("forwarded: sending it closes the plugin's windows first", closed[1] == sheet and closed[2] == list
+        and broadcast[2] and broadcast[2].handler == "onHome")
+    check("forwarded: KOReader's functions are put back", disp.isActionEnabled == orig_enabled and UI.sendEvent ~= nil
+        and select(1, pcall(UI.sendEvent)) == false)
+    NLW.runForwarded(function() error("gesture failed") end, list)
+    check("forwarded: an error in the action is caught and things put back", disp.isActionEnabled == orig_enabled)
+    NLW._current = nil
+    UI.sendEvent, UI.broadcastEvent, UI.close = saved_ui[1], saved_ui[2], saved_ui[3]
+    real["dispatcher"] = saved_disp
+end
+
 -- bookmarks: finding them again in the sidecar
 local bnote = { bookmark = true, datetime = "d", page = "/body/p[3]" }
 check("bookmark match", T.itemMatchesNote({ datetime = "d", page = "/body/p[3]", text = "in Two" }, bnote))
