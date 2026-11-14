@@ -1015,6 +1015,18 @@ msgstr "文本筛选"
 msgid "Highlight contains"
 msgstr "高亮包含"
 
+msgid "Filter by Highlight Text"
+msgstr ""
+
+msgid "Exclude by Highlight Text"
+msgstr ""
+
+msgid "Filter by Note Text"
+msgstr ""
+
+msgid "Exclude by Note Text"
+msgstr ""
+
 #: main.lua:5913 main.lua:5914
 msgid "Words in highlighted text…"
 msgstr "高亮文本中的词语…"
@@ -1419,6 +1431,15 @@ msgstr "已选 %d / %d"
 msgid "Nothing found."
 msgstr "未找到结果。"
 
+msgid "No books"
+msgstr ""
+
+msgid "No chapters"
+msgstr ""
+
+msgid "No tags"
+msgstr ""
+
 #: main.lua:6711
 #, fuzzy
 msgid "Sort"
@@ -1516,6 +1537,9 @@ msgstr ""
 #: main.lua:7068
 msgid "Cannot find book path."
 msgstr "找不到书籍路径。"
+
+msgid "Unknown book"
+msgstr ""
 
 #~ msgid "1 annotation"
 #~ msgstr "1 条标注"

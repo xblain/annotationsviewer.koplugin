@@ -582,7 +582,7 @@ local function wrapParagraph(text, face, max_width, lines)
     local function wrapTokens(txt)
         local tokens = {}
         for word in txt:gmatch("%S+") do
-            if word:find("[\227-\237\239]") then
+            if word:find("[\227-\237\239\240]") then -- also 4-byte characters (CJK beyond U+20000)
                 for i, piece in ipairs(require("util").splitToWords(word)) do
                     table.insert(tokens, { piece, i > 1 })
                 end
@@ -594,8 +594,29 @@ local function wrapParagraph(text, face, max_width, lines)
     end
     local widths = getWordWidths(face)
     local space_w = widths[" "]
+    -- a word wider than the column (a long URL) is broken between characters
+    local tokens, src = {}, wrapTokens(text)
+    for t = 1, #src do
+        local tok = src[t]
+        local word = tok[1]
+        local ww = widths[word]
+        if not ww then ww = measureTextWidth(word, face); widths[word] = ww end
+        if ww <= max_width or not word:find("[^\128-\191].*[^\128-\191]") then
+            table.insert(tokens, tok)
+        else
+            local piece, joined = "", tok[2]
+            for ch in word:gmatch("[^\128-\191][\128-\191]*") do
+                if piece ~= "" and measureTextWidth(piece .. ch, face) > max_width then
+                    table.insert(tokens, { piece, joined })
+                    piece, joined = "", true
+                end
+                piece = piece .. ch
+            end
+            if piece ~= "" then table.insert(tokens, { piece, joined }) end
+        end
+    end
     local current_line, current_w, words_since_exact = "", 0, 0
-    for _t, tok in ipairs(wrapTokens(text)) do
+    for _t, tok in ipairs(tokens) do
         local word, joined = tok[1], tok[2]
         local sep, sep_w = joined and "" or " ", joined and 0 or space_w
         local ww = widths[word]
@@ -802,16 +823,23 @@ function NoteItemWidget.noteLinesMax()
     if not v or v < 1 then return NoteItemWidget.DEFAULT_NOTE_LINES end
     return v
 end
--- First `max` lines, the last one shortened to take the "..." (cutting whole characters).
-function NoteItemWidget.cutLines(lines, max, face, width)
+-- A line shortened until it fits `width` with `ell` after it, by whole characters (never half
+-- of one). Returns the line without the ell.
+function NoteItemWidget.cutLine(line, ell, face, width)
+    while #line > 0 and measureTextWidth(line .. ell, face) > width do
+        local shorter = line:gsub("[^\128-\191][\128-\191]*$", "")
+        if shorter == line then shorter = line:sub(1, -2) end -- broken UTF-8: a byte at a time
+        line = shorter
+    end
+    return line
+end
+-- First `max` lines, the last one shortened to take the ell ("..." unless given).
+function NoteItemWidget.cutLines(lines, max, face, width, ell)
     if #lines <= max then return lines, false end
+    ell = ell or "..."
     local out = {}
     for i = 1, max do out[i] = lines[i] end
-    local last = out[max]
-    while #last > 0 and measureTextWidth(last .. "...", face) > width do
-        last = last:gsub("[\128-\191]*[^\128-\191]$", "")
-    end
-    out[max] = last .. "..."
+    out[max] = NoteItemWidget.cutLine(out[max], ell, face, width) .. ell
     return out, true
 end
 -- Night mode inverts the whole screen. Things that must keep their real colours (highlight
@@ -967,7 +995,7 @@ local function getHeaderLayout(title_text, author_text, title_face, info_face, c
     return title_w, author_w, title_h + HEADER_LINE_GAP + Size.line.thin
 end
 
-local NOTE_ICON_CHAR = "\u{EAEA}" -- pencil (Material Design, in KOReader's symbol font)
+local NOTE_ICON_CHAR = "\238\171\170" -- U+EAEA, pencil (Material Design, in KOReader's symbol font)
 
 -- Height NoteItemWidget:init() would produce for these params, computed without building
 -- any widgets. Must mirror the layout in NoteItemWidget:init().
@@ -1022,7 +1050,7 @@ end
 -- ribbon and chapter on the left, "Page 34 · 8 Jan" on the right. Under a chapter heading (one
 -- book) the chapter is left out and the page moves to the left. The date only shows when the
 -- order goes by date. Bookmarks keep no text from the page, so this line and the note are all.
-NoteItemWidget.BOOKMARK_CHAR = "\u{F097}" -- KOReader's own bookmark mark (same font as the note icon)
+NoteItemWidget.BOOKMARK_CHAR = "\239\130\151" -- U+F097, KOReader's own bookmark mark (same font as the note icon)
 function NoteItemWidget.pageText(note)
     local label = note.page_label
     if label == nil and type(note.page) == "number" and note.page > 0 then label = note.page end
@@ -1142,7 +1170,7 @@ local function measureNoteHeight(note, width, skip_title, skip_info)
 
     local h = 0
     if not skip_title then
-        local _tw, _aw, header_h = getHeaderLayout(NoteItemWidget.titleText(note.book_title or "Unknown"),
+        local _tw, _aw, header_h = getHeaderLayout(NoteItemWidget.titleText(note.book_title or _("Unknown book")),
             getHeaderAuthor(note_wrapper), title_face, NoteItemWidget.authorFace(), content_width)
         h = h + header_h + getTitleMargin()
     end
@@ -1234,7 +1262,7 @@ function NoteItemWidget:init()
     local justify = getJustify()
 
     local note_wrapper = NoteWrapper:new(self.note)
-    local title_text = NoteItemWidget.titleText(self.note.book_title or "Unknown")
+    local title_text = NoteItemWidget.titleText(self.note.book_title or _("Unknown book"))
 
     local title_face, info_face, content_face = getNoteFaces()
     local header_widget
@@ -1358,15 +1386,7 @@ function NoteItemWidget:init()
             lines = {}
             for i = 1, max_lines do lines[i] = full_lines[i] end
             
-            local last = lines[#lines] or ""
-            local tw = TextWidget:new{ text = last .. ell, face = content_face }
-            while tw:getSize().w > line_width and #last > 0 do
-                tw:free()
-                last = last:sub(1, -2)
-                tw = TextWidget:new{ text = last .. ell, face = content_face }
-            end
-            tw:free()
-            last_line_no_ell = last
+            last_line_no_ell = NoteItemWidget.cutLine(lines[#lines] or "", ell, content_face, line_width)
         end
 
         local lines_group = VerticalGroup:new{ align = "left" }
@@ -3452,7 +3472,7 @@ function NotesListWidget:showFilterMenu(show_back)
                 }
             end
             input_dialog = InputDialog:new{
-                title = _(dialog_title),
+                title = dialog_title, -- translated by the caller
                 input = saved_query,
                 input_hint = hint,
                 buttons = {
@@ -4760,9 +4780,7 @@ local function buildHighlightLines(text, face, width, drawer, color, max_lines, 
     if cut then
         local kept = {}
         for i = 1, max_lines do kept[i] = lines[i] end
-        local last = kept[max_lines]
-        while #last > 0 and measureTextWidth(last .. "…", face) > line_width do last = last:sub(1, -2) end
-        kept[max_lines] = last .. "…"
+        kept[max_lines] = NoteItemWidget.cutLine(kept[max_lines], "…", face, line_width) .. "…"
         lines = kept
     end
     local justify = getJustify() == true
@@ -5807,7 +5825,7 @@ function States.Card:paintTo(bb)
 end
 function States.Card:onShow()
     if self.timeout then
-        self.timeout_cb = function() UIManager:close(self, "ui") end
+        self.timeout_cb = function() UIManager:close(self, "ui", self.dimen) end -- only its own area
         UIManager:scheduleIn(self.timeout, self.timeout_cb)
     end
 end
@@ -6775,10 +6793,10 @@ function FilterScreen:showTextFilters()
     dialog = ButtonDialog:new{
         title = _("Text filters"),
         buttons = {
-            { entry("search_highlight", false, _("Highlight contains"), "Filter by Highlight Text", _("Words in highlighted text…")) },
-            { entry("search_highlight", true, _("Highlight doesn't contain"), "Exclude by Highlight Text", _("Words in highlighted text…")) },
-            { entry("search_note", false, _("Note contains"), "Filter by Note Text", _("Words in your notes…")) },
-            { entry("search_note", true, _("Note doesn't contain"), "Exclude by Note Text", _("Words in your notes…")) },
+            { entry("search_highlight", false, _("Highlight contains"), _("Filter by Highlight Text"), _("Words in highlighted text…")) },
+            { entry("search_highlight", true, _("Highlight doesn't contain"), _("Exclude by Highlight Text"), _("Words in highlighted text…")) },
+            { entry("search_note", false, _("Note contains"), _("Filter by Note Text"), _("Words in your notes…")) },
+            { entry("search_note", true, _("Note doesn't contain"), _("Exclude by Note Text"), _("Words in your notes…")) },
             { { text = _("Close"), callback = function() UIManager:close(dialog) end } },
         },
     }
@@ -7579,7 +7597,12 @@ function ListPicker:build()
     end
     if #visible == 0 then
         table.insert(rows, VerticalSpan:new{ width = Screen:scaleBySize(24) })
-        table.insert(rows, TextWidget:new{ text = _("Nothing found."), face = face14, fgcolor = COLORS.muted })
+        -- with a search: nothing matches it; without one there is nothing to pick from
+        local empty = _("Nothing found.")
+        if self.query == "" then
+            empty = ({ books = _("No books"), chapters = _("No chapters"), tags = _("No tags") })[self.inc_key] or empty
+        end
+        table.insert(rows, TextWidget:new{ text = empty, face = face14, fgcolor = COLORS.muted })
     end
 
     local footer = Page.footer(function() self:onClose() end, Page.countText(#(self.list.filtered_notes or {}), self.list),

@@ -95,7 +95,15 @@ local function naiveWrap(text, max)
     for word in text:gmatch("%S+") do
         local test = cur == "" and word or (cur .. " " .. word)
         if 10 * #test <= max then cur = test
-        else if cur ~= "" then table.insert(lines, cur) end; cur = word end
+        else
+            if cur ~= "" then table.insert(lines, cur) end
+            cur = word
+            -- a word wider than the line is broken between characters
+            while 10 * #cur > max and #cur > 1 do
+                local n = math.max(1, math.floor(max / 10))
+                table.insert(lines, cur:sub(1, n)); cur = cur:sub(n + 1)
+            end
+        end
     end
     if cur ~= "" then table.insert(lines, cur) end
     return lines
@@ -920,6 +928,24 @@ do
     local wide = { row(150) } -- a single tall row that isn't a column stays whole
     local _, flat2 = P.splitPages({ row(10), wide[1] }, 130, 30, 0)
     check("pages: a single tall row stays whole", #flat2 == 2)
+end
+
+-- long words, cut lines, glyphs
+do
+    local url = "https://example.com/" .. string.rep("abcdefghij", 8)
+    local ulines = T.wrapText("see " .. url .. " here", face, 200)
+    local ok_w = #ulines > 2
+    for k = 1, #ulines do if 10 * #ulines[k] > 200 then ok_w = false end end
+    check("wrap: a URL wider than the column is split, no line too wide", ok_w, join(ulines))
+    check("wrap: nothing of the URL lost", join(ulines):gsub("|", ""):find(url, 1, true) ~= nil)
+    local cut = NIW.cutLine("abcé", "…", face, 60)
+    check("cut: whole characters only", cut == "abc", cut)
+    local cut2 = NIW.cutLine("abé", "…", face, 70)
+    check("cut: a 2-byte character kept when it fits", cut2 == "abé", cut2)
+    local out, was = NIW.cutLines({ "one", "twé", "three" }, 2, face, 50, "…")
+    check("cutLines: valid UTF-8 at the end", was and out[2] == "tw…", tostring(out[2]))
+    check("cut: broken UTF-8 still ends", NIW.cutLine("\128\128abc", "…", face, 10) == "")
+    check("bookmark glyph is 3 bytes", #NIW.BOOKMARK_CHAR == 3 and NIW.BOOKMARK_CHAR:byte(1) == 239)
 end
 
 print(string.format("%d passed, %d failed", passed, failed))

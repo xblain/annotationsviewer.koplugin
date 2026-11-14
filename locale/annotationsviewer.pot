@@ -1000,6 +1000,18 @@ msgstr ""
 msgid "Highlight contains"
 msgstr ""
 
+msgid "Filter by Highlight Text"
+msgstr ""
+
+msgid "Exclude by Highlight Text"
+msgstr ""
+
+msgid "Filter by Note Text"
+msgstr ""
+
+msgid "Exclude by Note Text"
+msgstr ""
+
 #: main.lua:5913 main.lua:5914
 msgid "Words in highlighted text…"
 msgstr ""
@@ -1393,6 +1405,15 @@ msgstr ""
 
 #: main.lua:6603
 msgid "Nothing found."
+msgstr ""
+
+msgid "No books"
+msgstr ""
+
+msgid "No chapters"
+msgstr ""
+
+msgid "No tags"
 msgstr ""
 
 #: main.lua:6711
