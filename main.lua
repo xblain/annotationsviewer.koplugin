@@ -5617,7 +5617,9 @@ function Page.watchResize(cls)
                 self._resize_pending = nil
                 self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
                 if self.rebuild then self:rebuild() else self:build() end
-                UIManager:setDirty(self, "full")
+                -- the whole screen: a popup (the sheet) moved, and what was under its old place
+                -- must be drawn again too
+                UIManager:setDirty("all", "full")
             end)
         end
         InputContainer.paintTo(self, bb, x, y)
@@ -5876,7 +5878,7 @@ function States.Card:paintTo(bb)
             if self.timeout_cb then UIManager:unschedule(self.timeout_cb) end
             self:init()
             if self.timeout then self:onShow() end
-            UIManager:setDirty(self, "full")
+            UIManager:setDirty("all", "full") -- also where the card was before
         end)
     end
     self.box:paintTo(bb, self.box_x, self.box_y)

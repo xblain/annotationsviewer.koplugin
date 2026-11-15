@@ -1012,5 +1012,30 @@ do
     check("chips: author and hidden series", table.concat(labels, "|") == "Bob|Hide None, Saga", table.concat(labels, "|"))
 end
 
+-- rotation: a popup rebuilt for the new size repaints the whole screen, so nothing of its old
+-- place stays behind
+do
+    local UI, LW = T.UIManager, T.NotesListWidget
+    local saved = { rawget(UI, "nextTick"), rawget(UI, "setDirty"), rawget(UI, "isWidgetShown") }
+    local dirty = {}
+    UI.nextTick = function(_, f) f() end
+    UI.setDirty = function(_, w, mode) dirty[#dirty + 1] = { w = w, mode = mode } end
+    UI.isWidgetShown = function() return true end
+    local cls = {}
+    LW.Page.watchResize(cls)
+    local built = 0
+    local w = setmetatable({ dimen = { w = 800, h = 600 }, build = function() built = built + 1 end }, { __index = cls })
+    pcall(cls.paintTo, w, nil, 0, 0)
+    check("rotation: page rebuilt once", built == 1, built)
+    check("rotation: whole screen repainted", dirty[1] and dirty[1].w == "all" and dirty[1].mode == "full")
+    dirty = {}
+    local Card = LW.States.Card
+    local card = setmetatable({ screen_w = 800, screen_h = 600, init = function() end, left = false, top = false, timeout = false, timeout_cb = false, _resize_pending = false,
+        box = { paintTo = function() end } }, { __index = Card })
+    card:paintTo(nil)
+    check("rotation: card repaints the whole screen", dirty[1] and dirty[1].w == "all", dirty[1] and tostring(dirty[1].w))
+    UI.nextTick, UI.setDirty, UI.isWidgetShown = saved[1], saved[2], saved[3]
+end
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
