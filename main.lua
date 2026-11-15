@@ -1601,14 +1601,18 @@ function NoteItemWidget.shortDate(note_time, full)
     if NoteItemWidget._today_key ~= today_key then
         NoteItemWidget._today_key = today_key
         NoteItemWidget._today_start = os.time({ year = today.year, month = today.month, day = today.day })
+        -- from the calendar, not ± 24 h: a day with a clock change is 23 or 25 hours long
+        NoteItemWidget._tomorrow_start = os.time({ year = today.year, month = today.month, day = today.day + 1 })
+        NoteItemWidget._yesterday_start = os.time({ year = today.year, month = today.month, day = today.day - 1 })
     end
     local today_start = NoteItemWidget._today_start
     if full then
         local d = os.date("*t", note_time)
         return tostring(d.day) .. " " .. NoteItemWidget.monthName(note_time) .. " " .. d.year
     end
-    if note_time >= today_start then return _("Today")
-    elseif note_time >= today_start - 86400 then return _("Yesterday")
+    -- after today (a device clock that was wrong when it was made): the date, not "Today"
+    if note_time >= today_start and note_time < NoteItemWidget._tomorrow_start then return _("Today")
+    elseif note_time >= NoteItemWidget._yesterday_start and note_time < today_start then return _("Yesterday")
     else
         -- "3 Feb" this year, "3 Feb 2025" for older ones
         local d = os.date("*t", note_time)

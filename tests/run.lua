@@ -1058,6 +1058,17 @@ do
     check("offered: authors follow the tab", view("all", {}):offeredCount("authors", "authors_exclude", authors) == 2)
 end
 
+-- dates: today and yesterday by name, a date after today (wrong device clock) as a date
+do
+    local ItemW = T.NoteItemWidget
+    local t = os.date("*t")
+    local noon = os.time({ year = t.year, month = t.month, day = t.day, hour = 12 })
+    check("date: today", ItemW.shortDate(noon) == "Today", ItemW.shortDate(noon))
+    check("date: yesterday", ItemW.shortDate(noon - 86400) == "Yesterday", ItemW.shortDate(noon - 86400))
+    local later = ItemW.shortDate(noon + 5 * 86400)
+    check("date: after today is a date", later ~= "Today" and later ~= "Yesterday" and later:find("%d") ~= nil, later)
+end
+
 -- Chapters picker: chapters in book order, whatever the list's sort
 do
     local UI, LW = T.UIManager, T.NotesListWidget
