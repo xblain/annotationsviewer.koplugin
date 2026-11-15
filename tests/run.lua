@@ -143,6 +143,11 @@ do
         local flat = join(got):gsub("|", ""):gsub("%s+", "")
         check(name .. ": all characters kept", flat == text:gsub("%s+", ""), flat)
     end
+    -- closing punctuation stays with the character before it, never at the start of a line
+    local kin = T.wrapText("一二三四五六七八。九十", face, 240)
+    local starts_ok = true
+    for i = 2, #kin do if kin[i]:sub(1, 3) == "。" then starts_ok = false end end
+    check("cjk: no line starts with 。", starts_ok and join(kin) == "一二三四五六七|八。九十", join(kin))
     -- Latin text is wrapped exactly as before
     check("latin unchanged", join(T.wrapText("one two three four", face, 100)) == "one two|three four",
         join(T.wrapText("one two three four", face, 100)))

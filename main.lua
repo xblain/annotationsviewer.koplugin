@@ -577,12 +577,18 @@ end
 local function wrapParagraph(text, face, max_width, lines)
 -- Words to wrap: split at spaces; Chinese / Japanese / Korean text has none, so such words are
 -- cut into their characters with KOReader's util.splitToWords (the pieces join without a space).
+    -- closing punctuation never starts a line: it stays with the character before it
+    local closing = "。，、；：？！）」』】》〉〕］｝”’…"
     local function wrapTokens(txt)
         local tokens = {}
         for word in txt:gmatch("%S+") do
             if word:find("[\227-\237\239\240]") then -- also 4-byte characters (CJK beyond U+20000)
                 for i, piece in ipairs(require("util").splitToWords(word)) do
-                    table.insert(tokens, { piece, i > 1 })
+                    if i > 1 and closing:find(piece, 1, true) then
+                        tokens[#tokens][1] = tokens[#tokens][1] .. piece
+                    else
+                        table.insert(tokens, { piece, i > 1 })
+                    end
                 end
             else
                 table.insert(tokens, { word, false })
