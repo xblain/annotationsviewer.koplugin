@@ -2425,7 +2425,8 @@ function SortState.dirName(key, dir, single)
     return SortState.DIR_NAMES[key][dir]
 end
 SortState.SHORT = {
-    date = { asc = _("Oldest"), desc = _("Newest") },
+    -- the same words as the default order's label, so one order never has two names
+    date = { asc = _("Oldest first"), desc = _("Newest first") },
     opened = { asc = _("Opened long ago"), desc = _("Opened recently") },
     author = { asc = _("Authors A–Z"), desc = _("Authors Z–A") },
     book = { asc = _("Titles A–Z"), desc = _("Titles Z–A") },

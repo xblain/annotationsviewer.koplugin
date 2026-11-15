@@ -160,6 +160,9 @@ check("trim paragraph ends", join(trimmed) == "1778|Frances", join(trimmed))
 check("sort label date", T.sortModeLabel("date_newest") == "Newest first")
 check("sort label book location", T.sortModeLabel("book_location_desc") == "Book · end to start", T.sortModeLabel("book_location_desc"))
 check("sort label unknown", T.sortModeLabel("nope") == "Newest first")
+check("sort label: one order, one name", T.sortModeLabel("date:desc") == T.sortModeLabel("date_newest")
+    and T.sortModeLabel("chapter:asc,date:desc") == "Newest first" and T.sortModeLabel("date:asc") == "Oldest first",
+    T.sortModeLabel("date:desc") .. " / " .. T.sortModeLabel("chapter:asc,date:desc"))
 
 -- normalizeBookTitle
 check("title article", T.normalizeBookTitle("  The Hobbit ") == "hobbit")
