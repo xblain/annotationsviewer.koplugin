@@ -1037,5 +1037,23 @@ do
     UI.nextTick, UI.setDirty, UI.isWidgetShown = saved[1], saved[2], saved[3]
 end
 
+-- "N of M" on Filter & sort and "All M" in ☰ count what the picker offers on this tab
+do
+    local LW = T.NotesListWidget
+    local notes = {
+        { book_title = "A", book_authors = "Ann" },
+        { book_title = "B", book_authors = "Bob" },
+        { book_title = "C", book_authors = "Cy", bookmark = true }, -- only bookmarks
+    }
+    local function view(tab, af)
+        return setmetatable({ notes_list = notes, active_filter = af, tabKey = function() return tab end }, { __index = LW })
+    end
+    check("offered: books on the All tab", view("all", {}):offeredCount("books", "books_exclude", LW.bookKeys) == 2)
+    check("offered: books on the Bookmarks tab", view("bookmarks", {}):offeredCount("books", "books_exclude", LW.bookKeys) == 1)
+    check("offered: a chosen book still counts", view("all", { books = { C = true } }):offeredCount("books", "books_exclude", LW.bookKeys) == 3)
+    local authors = function(n) return LW.metaValues(n, "authors") end
+    check("offered: authors follow the tab", view("all", {}):offeredCount("authors", "authors_exclude", authors) == 2)
+end
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

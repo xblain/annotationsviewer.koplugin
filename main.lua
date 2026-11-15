@@ -6024,10 +6024,7 @@ function States.menu(list)
     local af = list.active_filter or {}
     local items = {}
     if not list.single_book then
-        local seen, n_books = {}, 0
-        for _i, n in ipairs(list.notes_list) do
-            if n.book_title and not seen[n.book_title] then seen[n.book_title] = true; n_books = n_books + 1 end
-        end
+        local n_books = list:offeredCount("books", "books_exclude", NotesListWidget.bookKeys)
         local filtered = (af.books and next(af.books)) or (af.books_exclude and next(af.books_exclude))
         table.insert(items, { icon = "book.opened", label = _("Books"),
             value = filtered and _("Filtered") or string.format(_("All %d"), n_books),
@@ -6565,14 +6562,7 @@ function FilterScreen:build()
     local body = VerticalGroup:new{ align = "left" }
     table.insert(body, sectionBar(_("FILTER")))
     -- books / tags / chapters (the existing pickers: tap an item to show only it, again to hide it)
-    local book_count
-    do
-        local seen = {}
-        book_count = 0
-        for _i, n in ipairs(list.notes_list) do
-            if n.book_title and not seen[n.book_title] then seen[n.book_title] = true; book_count = book_count + 1 end
-        end
-    end
+    local book_count = list:offeredCount("books", "books_exclude", NotesListWidget.bookKeys)
     if not list.single_book then
         local v, on = setSummary(af.books, af.books_exclude, book_count)
         table.insert(body, navRow(_("Books"), v, on, function() self.helpers.books() end))
@@ -6581,18 +6571,16 @@ function FilterScreen:build()
         for i = 1, #NotesListWidget.META_KINDS do
             local kind = NotesListWidget.META_KINDS[i]
             local exc = kind .. "_exclude"
-            local values, has_value = {}, false
+            local has_value = false
             for ni = 1, #list.notes_list do
                 local vals = NotesListWidget.metaValues(list.notes_list[ni], kind)
                 for j = 1, #vals do
-                    values[vals[j]] = true
                     if vals[j] ~= "" then has_value = true end
                 end
             end
             local filtered = (type(af[kind]) == "table" and next(af[kind])) or (type(af[exc]) == "table" and next(af[exc]))
             if has_value or filtered then
-                local count = 0
-                for _ in pairs(values) do count = count + 1 end
+                local count = list:offeredCount(kind, exc, function(n) return NotesListWidget.metaValues(n, kind) end)
                 local mv, mon = setSummary(af[kind], af[exc], count)
                 table.insert(body, navRow(labels[kind], mv, mon, function() self.helpers.meta(kind) end))
             end
@@ -7764,6 +7752,28 @@ end
 function NotesListWidget:countsHere(n)
     return (n.bookmark == true) == (self:tabKey() == "bookmarks")
 end
+-- How many entries a picker offers on this tab (what pickerItems keeps): values with something on
+-- this tab, plus the ones chosen in the filter. keysOf(note) gives a note's values. Used for the
+-- "N of M" / "All M" on Filter & sort and the ☰ menu, so they match the picker.
+function NotesListWidget:offeredCount(inc_key, exc_key, keysOf)
+    local af = self.active_filter or {}
+    local inc, exc = af[inc_key], af[exc_key]
+    local seen, count = {}, 0
+    for i = 1, #(self.notes_list or {}) do
+        local n = self.notes_list[i]
+        local here = self:countsHere(n)
+        local keys = keysOf(n)
+        for j = 1, #keys do
+            local k = keys[j]
+            if not seen[k] and (here or (type(inc) == "table" and inc[k]) or (type(exc) == "table" and exc[k])) then
+                seen[k] = true
+                count = count + 1
+            end
+        end
+    end
+    return count
+end
+function NotesListWidget.bookKeys(n) return { n.book_title or _("Unknown") } end
 function NotesListWidget:pickerItems(items, inc_key, exc_key)
     local af = self.active_filter or {}
     local out = {}
