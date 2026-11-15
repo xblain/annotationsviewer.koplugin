@@ -1055,5 +1055,25 @@ do
     check("offered: authors follow the tab", view("all", {}):offeredCount("authors", "authors_exclude", authors) == 2)
 end
 
+-- Chapters picker: chapters in book order, whatever the list's sort
+do
+    local UI, LW = T.UIManager, T.NotesListWidget
+    local saved_show = rawget(UI, "show")
+    local shown
+    UI.show = function(_, w) shown = w end
+    local cnotes = { -- newest first, as the all-books list sorts by default
+        { book_title = "A", chapter = "One", order = 8, datetime = "2026-11-09" },
+        { book_title = "A", chapter = "Three", order = 7, datetime = "2026-11-08" },
+        { book_title = "A", chapter = "Two", order = 3, datetime = "2026-11-07" },
+        { book_title = "A", chapter = "One", order = 1, datetime = "2026-11-01" },
+    }
+    local v = setmetatable({ notes_list = cnotes, active_filter = {}, tabKey = function() return "all" end }, { __index = LW })
+    v:showChapterPicker(function() end)
+    local titles = {}
+    for i, it in ipairs(shown and shown.items or {}) do titles[i] = it.title end
+    check("chapters: in book order", table.concat(titles, ",") == "One,Two,Three", table.concat(titles, ","))
+    UI.show = saved_show
+end
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

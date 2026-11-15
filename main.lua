@@ -7849,12 +7849,22 @@ function NotesListWidget:showChapterPicker(on_done)
         end
     end
     items = self:pickerItems(items, "chapters", "chapters_exclude")
-    -- grouped by book, chapters in reading order where known
-    local first_pos = {}
-    for i, n in ipairs(self.notes_list) do if n.chapter and not first_pos[n.chapter] then first_pos[n.chapter] = i end end
+    -- grouped by book, chapters in reading order: each chapter by its first annotation in the
+    -- book (not by the list's sort, which may be by date)
+    local first = {}
+    for i = 1, #self.notes_list do
+        local n = self.notes_list[i]
+        local c = n.chapter
+        if c and (not first[c] or compareByPosition(n, first[c])) then first[c] = n end
+    end
     table.sort(items, function(a, b)
         if a.group ~= b.group then return normalizeBookTitle(a.group or "") < normalizeBookTitle(b.group or "") end
-        return (first_pos[a.key] or 0) < (first_pos[b.key] or 0)
+        local na, nb = first[a.key], first[b.key]
+        if na and nb then
+            if compareByPosition(na, nb) then return true end
+            if compareByPosition(nb, na) then return false end
+        end
+        return a.title < b.title
     end)
     UIManager:show(ListPicker:new{ list = self, title = _("Chapters"), items = items, inc_key = "chapters", exc_key = "chapters_exclude",
         mode_labels = { _("Only these chapters"), _("Hide these chapters") }, on_done = on_done })
