@@ -31,7 +31,7 @@ local logger = require("logger")
 local FontList = require("fontlist")
 local DocSettings = require("docsettings")
 local ReadHistory = require("readhistory")
-local G_reader_settings = require("luasettings"):open(require("datastorage"):getSettingsDir() .. "/settings.annotationsviewer.lua")
+local G_reader_settings = require("luasettings"):open(require("datastorage"):getSettingsDir() .. "/annotationsviewer.lua")
 local lfs = require("libs/libkoreader-lfs")
 local Font = require("ui/font")
 local Size = require("ui/size")
@@ -98,6 +98,38 @@ local function getTopPadding() return Screen:scaleBySize(getSetting("top_padding
 local function getHideDupTitle() return getSetting("hide_dup_title", true) ~= false end
 local function getHideDupInfo() return getSetting("hide_dup_info", true) ~= false end
 local function getSwipeSetting() return getSetting("swipe_direction", "both") end
+-- What a tap on an annotation in the list does: "goto" jumps straight to the highlight in the
+-- book (the annotation card then opens on a long press), "card" opens the card on a tap.
+local function getTapSetting() return getSetting("tap_action", "goto") == "card" and "card" or "goto" end
+-- What holding an annotation does: "card" (the default) opens its card, "goto" jumps to it in the
+-- book. Set apart from the tap so both can be chosen freely (tap to jump / hold for the card, or
+-- the other way round).
+local function getHoldSetting() return getSetting("hold_action", "card") == "goto" and "goto" or "card" end
+-- Review mode: highlight text in the list is covered, one row at a time is revealed on a tap.
+-- "review_cover_styles" says which styles (KOReader's `drawer` names) are covered. A missing
+-- setting means every style: a fresh install covers all four, and the switches in Settings show
+-- all four on. Choosing none covers no highlight text (the mode then only hides the notes; see
+-- "Always cover notes", which is turned on along with that choice).
+local REVIEW_STYLES = { "lighten", "underscore", "strikeout", "invert" }
+local function getReviewCoverStyles()
+    local v = G_reader_settings:readSetting("annotationsviewer_review_cover_styles")
+    if type(v) ~= "table" then return nil end -- nil: every style
+    local out = {}
+    for _i, k in ipairs(REVIEW_STYLES) do if v[k] == true then out[k] = true end end
+    return out -- may be empty: nothing chosen
+end
+local function reviewCoversDrawer(drawer)
+    drawer = drawer or "lighten"
+    local chosen = getReviewCoverStyles()
+    if not chosen then return true end -- nothing set: all styles
+    return chosen[drawer] == true
+end
+-- Phrases a reader picked inside a highlight to be covered on their own ("excavated"), so review
+-- mode tests just those words instead of the whole line. Kept per book and per annotation:
+-- { [book_path] = { [annotation key] = { phrase, phrase, ... } } }.
+-- The annotation key is the item's datetime plus its position, which is what tells two
+-- annotations of one book apart across a reload.
+-- The functions live on NoteItemWidget: the main chunk is at its 200-local limit.
 local function getDedupInfoFields() return getSetting("dedup_info_fields", "date,author,chapter") end
 local function getShowInfo() return getSetting("show_info", true) ~= false end
 local function getInfoFields() return getSetting("info_fields", "date,author,chapter") end
@@ -738,6 +770,261 @@ function UnderlineWidget:paintTo(bb, x, y)
     bb:paintRect(x, y + self.height - Size.line.medium, self.width, Size.line.medium, BlitBuffer.COLOR_BLACK)
 end
 local NoteItemWidget = InputContainer:extend{ width = nil, note = nil, show_parent = nil, is_last = false, is_preview = false, disable_tap = false, skip_title = false, skip_info = false }
+NoteItemWidget.review_on = false -- set by the list (NotesListWidget:setReviewMode)
+-- Custom cover: the words a reader picked inside a highlight, kept per book and per annotation.
+-- In review mode a highlight that has any covers just those words instead of the whole line (it is
+-- the finer-grained counterpart of the whole-line cover); a highlight with none is covered whole.
+-- { [book_path] = { [annotation key] = { phrase, phrase, ... } } }
+-- The key is the annotation's datetime plus its position, which tells two annotations of one book
+-- apart across a reload. Kept in the settings file, not in the book: this is a display choice.
+NoteItemWidget.CLOZE_KEY = "annotationsviewer_cloze"
+-- The notes that carry a copy of their phrases (weak keys: a note that goes away takes its entry
+-- with it). Used by "Remove all" to clear the copies along with the saved setting.
+NoteItemWidget._cloze_notes = setmetatable({}, { __mode = "k" })
+function NoteItemWidget.clozeStore()
+    local v = G_reader_settings:readSetting(NoteItemWidget.CLOZE_KEY)
+    if type(v) ~= "table" then return {} end
+    return v
+end
+function NoteItemWidget.clozeKeyFor(note)
+    if not note then return nil end
+    local pos = note.pos0
+    if type(pos) == "table" then pos = tostring(pos.x) .. "," .. tostring(pos.y) end
+    return tostring(note.datetime or "") .. "|" .. tostring(pos or note.page or "")
+end
+-- The phrases picked for this note, or nil when there are none (the whole line is covered then).
+-- The note object carries its own copy while the list is open (`_av_cloze`), which is what the row
+-- is drawn from; the settings file is the fallback across a reload. The exact key is tried first,
+-- then an entry whose key starts with the note's datetime (the position half of a key can be
+-- written differently after a reload).
+function NoteItemWidget.clozePhrases(note)
+    if not note then return nil end
+    local own = note._av_cloze
+    if type(own) == "table" and #own > 0 then return own end
+    local book = note.book_path and NoteItemWidget.clozeStore()[note.book_path]
+    if type(book) ~= "table" then return nil end
+    local list = book[NoteItemWidget.clozeKeyFor(note)]
+    if type(list) == "table" and #list > 0 then
+        note._av_cloze = list -- remembered on the note for the rows drawn from it
+        return list
+    end
+    local stamp = tostring(note.datetime or "")
+    if stamp == "" then return nil end
+    for key, value in pairs(book) do
+        if type(value) == "table" and #value > 0 and type(key) == "string" and key:sub(1, #stamp) == stamp then
+            note._av_cloze = value
+            return value
+        end
+    end
+    return nil
+end
+function NoteItemWidget.setClozePhrases(note, phrases)
+    if not note then return end
+    -- on the note itself first: the list is drawn from that object, and it is the same object the
+    -- card was opened for, so the change shows as soon as the row is redrawn
+    note._av_cloze = (phrases and #phrases > 0) and phrases or nil
+    NoteItemWidget._cloze_notes[note] = note._av_cloze and true or nil
+    if not note.book_path then return end
+    local store = NoteItemWidget.clozeStore()
+    local key = NoteItemWidget.clozeKeyFor(note)
+    local book = store[note.book_path]
+    if type(book) ~= "table" then book = {} store[note.book_path] = book end
+    if phrases and #phrases > 0 then
+        book[key] = phrases
+    else
+        book[key] = nil
+        if next(book) == nil then store[note.book_path] = nil end
+    end
+    if next(store) == nil then
+        G_reader_settings:delSetting(NoteItemWidget.CLOZE_KEY)
+    else
+        G_reader_settings:saveSetting(NoteItemWidget.CLOZE_KEY, store)
+    end
+    G_reader_settings:flush() -- saveSetting only changes memory; without this the pick is lost
+end
+-- Question cover: one question written for a whole annotation. In review mode the annotation's
+-- text is replaced by its question (in bold) instead of an empty colour bar, so the reader has
+-- something to answer; a tap swaps between the question and the text, and back.
+-- Kept like the picked words: { [book_path] = { [annotation key] = "question" } }, on the settings
+-- file. When an annotation has both, the question wins (its whole text is replaced anyway).
+NoteItemWidget.QUESTION_KEY = "annotationsviewer_question"
+function NoteItemWidget.questionStore()
+    local v = G_reader_settings:readSetting(NoteItemWidget.QUESTION_KEY)
+    if type(v) ~= "table" then return {} end
+    return v
+end
+-- The question written for this note, or nil. Same lookup as the picked words: the copy on the
+-- note first, then the exact key, then an entry starting with the note's datetime.
+function NoteItemWidget.noteQuestion(note)
+    if not note then return nil end
+    local own = note._av_question
+    if type(own) == "string" and own ~= "" then return own end
+    local book = note.book_path and NoteItemWidget.questionStore()[note.book_path]
+    if type(book) ~= "table" then return nil end
+    local q = book[NoteItemWidget.clozeKeyFor(note)]
+    if type(q) == "string" and q ~= "" then
+        note._av_question = q
+        return q
+    end
+    local stamp = tostring(note.datetime or "")
+    if stamp == "" then return nil end
+    for key, value in pairs(book) do
+        if type(value) == "string" and value ~= "" and type(key) == "string" and key:sub(1, #stamp) == stamp then
+            note._av_question = value
+            return value
+        end
+    end
+    return nil
+end
+function NoteItemWidget.setNoteQuestion(note, question)
+    if not note then return end
+    question = (type(question) == "string" and question:gsub("^%s+", ""):gsub("%s+$", "")) or ""
+    note._av_question = (question ~= "") and question or nil
+    NoteItemWidget._cloze_notes[note] = note._av_cloze or note._av_question or nil
+    if not note.book_path then return end
+    local store = NoteItemWidget.questionStore()
+    local key = NoteItemWidget.clozeKeyFor(note)
+    local book = store[note.book_path]
+    if type(book) ~= "table" then book = {} store[note.book_path] = book end
+    if question ~= "" then
+        book[key] = question
+    else
+        book[key] = nil
+        if next(book) == nil then store[note.book_path] = nil end
+    end
+    if next(store) == nil then
+        G_reader_settings:delSetting(NoteItemWidget.QUESTION_KEY)
+    else
+        G_reader_settings:saveSetting(NoteItemWidget.QUESTION_KEY, store)
+    end
+    G_reader_settings:flush()
+end
+-- Whether this note has a question that review mode can show as the question.
+function NoteItemWidget.questionFor(note)
+    if not NoteItemWidget.review_on or not note then return nil end
+    if note.bookmark or note._av_revealed then return nil end
+    if not (note.highlighted_text and note.highlighted_text ~= "") then return nil end
+    if getSetting("review_question_always", true) ~= true and not reviewCoversDrawer(note.drawer) then
+        return nil
+    end
+    return NoteItemWidget.noteQuestion(note)
+end
+-- Removes the picked words (and/or the questions) from every note in `notes`, which is what the
+-- list is showing right now: "Remove all" in Settings clears what the reader can see, not every book
+-- behind their back. Within one book that is that book's annotations; in the whole-library list it
+-- is whatever the filters leave (a book filter, a search ...). Returns true when anything went.
+function NoteItemWidget.clearClozeFor(notes, what)
+    local went = false
+    local cloze_store = NoteItemWidget.clozeStore()
+    local q_store = NoteItemWidget.questionStore()
+    for _i, note in ipairs(notes or {}) do
+        local book = note.book_path
+        local key = book and NoteItemWidget.clozeKeyFor(note)
+        if book and key then
+            if what ~= "question" and type(cloze_store[book]) == "table" and cloze_store[book][key] then
+                cloze_store[book][key] = nil
+                if next(cloze_store[book]) == nil then cloze_store[book] = nil end
+                went = true
+            end
+            if what ~= "cloze" and type(q_store[book]) == "table" and q_store[book][key] then
+                q_store[book][key] = nil
+                if next(q_store[book]) == nil then q_store[book] = nil end
+                went = true
+            end
+        end
+        if what ~= "question" then note._av_cloze = nil end
+        if what ~= "cloze" then note._av_question = nil end
+    end
+    if what ~= "question" then
+        if next(cloze_store) == nil then
+            G_reader_settings:delSetting(NoteItemWidget.CLOZE_KEY)
+        else
+            G_reader_settings:saveSetting(NoteItemWidget.CLOZE_KEY, cloze_store)
+        end
+    end
+    if what ~= "cloze" then
+        if next(q_store) == nil then
+            G_reader_settings:delSetting(NoteItemWidget.QUESTION_KEY)
+        else
+            G_reader_settings:saveSetting(NoteItemWidget.QUESTION_KEY, q_store)
+        end
+    end
+    G_reader_settings:flush()
+    return went
+end
+-- How many of `notes` have picked words / a question (what the two "Remove all" rows say).
+function NoteItemWidget.countClozeFor(notes, what)
+    local n = 0
+    for _i, note in ipairs(notes or {}) do
+        local hit = false
+        if what ~= "question" and NoteItemWidget.clozePhrases(note) then hit = true end
+        if not hit and what ~= "cloze" and NoteItemWidget.noteQuestion(note) then hit = true end
+        if hit then n = n + 1 end
+    end
+    return n
+end
+-- Anything picked or asked at all, in any book (for the Settings page while no list is open).
+function NoteItemWidget.hasAnyCloze() return next(NoteItemWidget.clozeStore()) ~= nil end
+function NoteItemWidget.hasAnyQuestion() return next(NoteItemWidget.questionStore()) ~= nil end
+-- [byte] = true for every byte of `text` that one of the picked phrases covers, or nil when none
+-- of them occurs. Worked out on the whole highlight (not on a drawn line), so a phrase that wraps
+-- across two lines is still found.
+function NoteItemWidget.clozeMarks(text, phrases)
+    if not text or text == "" or not phrases or #phrases == 0 then return nil end
+    local sorted = {}
+    for _i, ph in ipairs(phrases) do
+        if type(ph) == "string" and ph ~= "" then table.insert(sorted, ph) end
+    end
+    if #sorted == 0 then return nil end
+    -- longest first, so a phrase inside a longer one does not take its characters
+    table.sort(sorted, function(a, b) return #a > #b end)
+    local marks = {}
+    for _i, ph in ipairs(sorted) do
+        local from = 1
+        while true do
+            local s = text:find(ph, from, true)
+            if not s then break end
+            for b = s, s + #ph - 1 do marks[b] = true end
+            from = s + 1
+        end
+    end
+    return next(marks) and marks or nil
+end
+-- Splits a line into { text, covered } runs: what the reader left in the field is covered byte for
+-- byte, everything around it is not. The text is never re-cut here: each run is a slice of the
+-- original line, so the pieces joined back together are exactly the line again (no character can
+-- be split in two, and the line keeps its width and wrapping).
+-- phrases: the picked phrases, matched against `line` itself.
+-- marks/base: instead of that, marks already worked out on the whole highlight, and where this
+-- line starts in it (so a phrase wrapped across lines still covers its part of each).
+-- A line nothing covers comes back as one uncovered run.
+function NoteItemWidget.splitClozeRuns(line, phrases, marks, base)
+    if not line or line == "" then return {} end
+    local shift = 0
+    if not marks then
+        marks = NoteItemWidget.clozeMarks(line, phrases)
+        if not marks then return { { text = line, covered = false } } end
+    else
+        shift = (base or 1) - 1
+    end
+    -- walk the bytes and group them; a character is never split because the marks come from whole
+    -- phrase occurrences, which always start and end on character boundaries
+    local runs = {}
+    local i = 1
+    while i <= #line do
+        local covered = marks[i + shift] == true
+        local j = i
+        while j <= #line and (marks[j + shift] == true) == covered do j = j + 1 end
+        local last = runs[#runs]
+        if last and last.covered == covered then
+            last.text = last.text .. line:sub(i, j - 1)
+        else
+            table.insert(runs, { text = line:sub(i, j - 1), covered = covered })
+        end
+        i = j
+    end
+    return runs
+end
 -- Search without capitals in every language, as KOReader's own search does (Utf8Proc folds
 -- "Élan" to "élan", "ÜBER" to "über"); string.lower only knows A-Z. Kept per text.
 NoteItemWidget._lower = {}
@@ -822,6 +1109,63 @@ function NoteItemWidget.LineBox:paintTo(bb, x, y)
 end
 -- extra space between the lines of a highlight and of a note (Spacing page)
 function NoteItemWidget.lineSpacing() return Screen:scaleBySize(getSetting("line_spacing", 0)) end
+-- Review mode. Whether an annotation's text is hidden right now: only while review mode is on,
+-- only for the styles chosen in Settings, only for a real highlight (not a bookmark or a bare
+-- note) and only until that row is tapped again (note._av_revealed).
+function NoteItemWidget.isCovered(note)
+    if not NoteItemWidget.review_on or not note then return false end
+    if note.bookmark or note._av_revealed then return false end
+    if not (note.highlighted_text and note.highlighted_text ~= "") then return false end
+    return reviewCoversDrawer(note.drawer)
+end
+-- "Cover only the note when there is one" (on by default): a highlight that has a note keeps its
+-- text and only the note below it is hidden, so the highlight can be read and the note recalled
+-- from it. Off: the highlight and its note are both hidden.
+-- Words the reader picked inside the highlight win over this: those words are what is being
+-- recalled, so they are covered even when the rest of the line (and its note) stay readable —
+-- the two add up rather than replace each other.
+function NoteItemWidget.coverHighlight(note)
+    if not NoteItemWidget.isCovered(note) then return false end
+    if NoteItemWidget.clozePhrases(note) then return true end
+    if note.user_note and note.user_note ~= "" and getSetting("review_note_only", true) == true then
+        return false
+    end
+    return true
+end
+-- The words picked inside this highlight, when review mode should cover them: only while review
+-- mode is on and the row has not been tapped open.
+-- "Cover the picked words even when their style is not covered" (on by default) lets them through
+-- whatever the styles in Settings say — the reader picked those words on purpose, so a style left
+-- unticked is not a reason to show them. Off, they follow the style choice like the whole line.
+function NoteItemWidget.clozeCovered(note)
+    if not NoteItemWidget.review_on or not note then return false end
+    if note.bookmark or note._av_revealed then return false end
+    if not (note.highlighted_text and note.highlighted_text ~= "") then return false end
+    if getSetting("review_cloze_always", true) == true then return true end
+    return reviewCoversDrawer(note.drawer)
+end
+-- The note (the text you wrote) under an annotation is hidden in review mode:
+--   - a bookmark's note, always (it has no highlight to read);
+--   - with "Always cover notes" on (the default), whatever the style choice is: a note is what
+--     is recalled from the highlight, so it is hidden even when its own style is not covered.
+--     Choosing no style at all turns this on by itself, so "notes only" always hides the notes;
+--   - off: a note is hidden only when its own style is covered.
+function NoteItemWidget.coverNote(note)
+    if not note or not NoteItemWidget.review_on or note._av_revealed then return false end
+    if not (note.user_note and note.user_note ~= "") then return false end
+    if note.bookmark then return true end -- no highlight to read: the note is the annotation
+    if getSetting("review_notes_always", true) == true then return true end
+    return NoteItemWidget.isCovered(note)
+end
+-- What a covered line is drawn in: the same text in its own highlight's colour, so it reads as
+-- an empty coloured bar (a yellow highlight stays yellow, an underlined one just goes blank)
+-- instead of a black block. The colour is the one the row already paints behind the text.
+function NoteItemWidget.maskColor(note)
+    local drawer = note and note.drawer
+    if drawer == "invert" then return BlitBuffer.COLOR_BLACK end
+    if isNoBackgroundStyle(drawer) then return BlitBuffer.COLOR_WHITE end -- no fill: just blank
+    return getHighlightColor(note and note.color)
+end
 function NoteItemWidget.noteLinesMax()
     local v = tonumber(getSetting("truncate_note_lines", NoteItemWidget.DEFAULT_NOTE_LINES))
     if not v or v < 1 then return NoteItemWidget.DEFAULT_NOTE_LINES end
@@ -1205,8 +1549,7 @@ local function measureNoteHeight(note, width, skip_title, skip_info)
         local max_lines = getTruncateLines() or math.huge
         if n > max_lines then n = max_lines end
         h = h + n * (line_h + 2 + NoteItemWidget.lineSpacing()) -- each line has 1px padding above and below, plus the line spacing
-    end
-    if note_wrapper:hasUserNote() then
+    end    if note_wrapper:hasUserNote() then
         -- a bookmark's note sits where a highlight's text would: the info margin below its line
         h = h + (note.bookmark and getInfoMargin() or NoteItemWidget.noteOffset())
         local note_face = NoteItemWidget.noteFace()
@@ -1242,6 +1585,7 @@ local function getLayoutSignature(width)
         os.date("%Y%m%d"), -- "Today"/"Yesterday" labels change the info row text
         getSetting("date_year_list", "relevant"), getSetting("date_time_list", "never"), getSetting("date_month", "short"), tostring(NoteItemWidget.twelveHour()),
         getSetting("info_date_when", "always"), SortState.get(NoteItemWidget.list_single), tostring(getSetting("bm_line_size", nil)), tostring(getSetting("bm_font", nil)), tostring(NoteItemWidget.bmNoteIcon()),
+        tostring(NoteItemWidget.review_on), -- covered text changes what is drawn on each row
     }, "|")
 end
 
@@ -1262,8 +1606,7 @@ local function getNoteHeight(note, width, skip_title, skip_info, signature)
 end
 
 function NoteItemWidget:init()
-    local h_margin = getHMargin()
-    local text_margin = getTextMargin()
+    local h_margin = getHMargin()    local text_margin = getTextMargin()
     local title_margin = getTitleMargin()
     local info_margin = getInfoMargin()
     local inner_width = self.width - h_margin * 2
@@ -1401,32 +1744,101 @@ function NoteItemWidget:init()
             last_line_no_ell = NoteItemWidget.cutLine(lines[#lines] or "", ell, content_face, line_width)
         end
 
+        -- Review mode: hidden text keeps its own colour, so a yellow highlight reads as an empty
+        -- yellow bar and the row measures exactly as before (the page layout does not move).
+        -- With "cover only the note when there is one" on, a highlight that has a note keeps its
+        -- text: the note below it is the thing to recall.
+        local cover_highlight = NoteItemWidget.coverHighlight(self.note)
+        local mask_fg = cover_highlight and NoteItemWidget.maskColor(self.note) or nil
+        -- Question cover: the annotation's text is replaced by its own question (in bold), so the
+        -- reader has something to answer instead of an empty colour bar. A tap swaps it for the
+        -- text (and back), which is what _av_revealed does for the other cover styles.
+        -- The question wins over picked words: it replaces the whole text anyway.
+        local question = NoteItemWidget.questionFor(self.note)
+        if question then
+            -- the question takes the place of the highlight's lines; the rest of the row (the
+            -- note, the style and colour choices) goes on as usual
+            -- a question mark is added at the end unless the reader wrote one already (so it reads
+            -- as a question in the list, not as a statement)
+            local asked = question
+            if not asked:find("[?？]%s*$") then asked = asked .. "?" end
+            lines = wrapText(asked, content_face, line_width)
+            truncated = false
+            last_line_no_ell = nil
+        end
+        -- Custom cover: the phrases picked inside this highlight. When there are any, only those
+        -- words are covered and the rest of the line stays readable. They are covered on their own
+        -- even when the rest of the line is not (a note keeps it readable, or the style is not
+        -- covered): the two add up rather than replace each other, and a covered word is no use
+        -- without its colour.
+        local cloze = not question and NoteItemWidget.clozeCovered(self.note)
+            and NoteItemWidget.clozePhrases(self.note) or nil
+        local cloze_fg = NoteItemWidget.maskColor(self.note)
+
         local lines_group = VerticalGroup:new{ align = "left" }
+        -- A question is drawn in the normal text colour and bold (it is text to read, not a cover);
+        -- with a custom cover only the picked words are hidden and every other character is normal;
+        -- without either the whole line is hidden (or shown) as one.
+        local plain_fg = (question or cloze) and text_fgcolor or (mask_fg or text_fgcolor)
+        local fg = plain_fg
+        local question_bold = question and true or false
+        -- One line as widgets: with no custom cover it is a single run, so nothing changes for a
+        -- highlight the reader has not picked words in.
+        -- The picked phrase is matched against the whole highlight, not one drawn line: a phrase
+        -- longer than a line is wrapped across two of them, and matching per line found nothing
+        -- there (which is why only short picks worked). Each drawn line takes the part of those
+        -- matches that falls in it, found by walking the lines in order.
+        local whole = (cloze and (self.note.highlighted_text or "")) or nil
+        local marks = whole and NoteItemWidget.clozeMarks(whole, cloze) or nil
+        local search_from = 1 -- where the current line starts looking in `whole`
+        local function buildRuns(line)
+            if not marks then
+                return markw(TextWidget:new{ text = line, face = content_face, bold = question_bold,
+                    fgcolor = fg }, line)
+            end
+            -- where this drawn line sits in the highlight (the wrapping drops and joins spaces, so
+            -- the line is searched for rather than counted)
+            local at = whole:find(line, search_from, true)
+            if not at then at = whole:find(line, 1, true) end
+            if at then search_from = at + #line end
+            local runs = NoteItemWidget.splitClozeRuns(line, nil, marks, at or 1)
+            if #runs <= 1 and not (runs[1] and runs[1].covered) then
+                return markw(TextWidget:new{ text = line, face = content_face, fgcolor = plain_fg }, line)
+            end
+            local group = HorizontalGroup:new{ align = "top" }
+            for _i, run in ipairs(runs) do
+                table.insert(group, markw(TextWidget:new{
+                    text = run.text, face = content_face,
+                    fgcolor = run.covered and cloze_fg or plain_fg,
+                }, run.text))
+            end
+            return group
+        end
         for i, line in ipairs(lines) do
             local line_widget
             local is_last = (i == #lines)
             if is_last and truncated then
                 
-                if justify == true then
+                if justify == true and not cloze and not question then
                     
                     local ell_meas = TextWidget:new{ text = ell, face = content_face }
                     local ell_w = ell_meas:getSize().w
                     ell_meas:free()
                     if last_line_no_ell and #last_line_no_ell > 0 then
-                        local justified_part = markw(createJustifiedLine(last_line_no_ell, content_face, math.max(0, line_width - ell_w), text_fgcolor), last_line_no_ell)
+                        local justified_part = markw(createJustifiedLine(last_line_no_ell, content_face, math.max(0, line_width - ell_w), fg), last_line_no_ell)
                         local ell_widget = TextWidget:new{ text = ell, face = content_face, fgcolor = text_fgcolor }
                         line_widget = HorizontalGroup:new{ justified_part, ell_widget }
                     else
                         line_widget = TextWidget:new{ text = ell, face = content_face, fgcolor = text_fgcolor }
                     end
                 else
-                    line_widget = markw(TextWidget:new{ text = (last_line_no_ell or line) .. ell, face = content_face, fgcolor = text_fgcolor }, (last_line_no_ell or line) .. ell)
+                    line_widget = buildRuns((last_line_no_ell or line) .. ell)
                 end
             else
-                if justify == true and i < #lines and #lines > 1 and not para_end[i] then
-                    line_widget = markw(createJustifiedLine(line, content_face, line_width, text_fgcolor), line)
+                if justify == true and i < #lines and #lines > 1 and not para_end[i] and not cloze and not question then
+                    line_widget = markw(createJustifiedLine(line, content_face, line_width, fg), line)
                 else
-                    line_widget = markw(TextWidget:new{ text = line, face = content_face, fgcolor = text_fgcolor }, line)
+                    line_widget = buildRuns(line)
                 end
             end
             local line_size = line_widget:getSize()
@@ -1506,12 +1918,16 @@ function NoteItemWidget:init()
         end
         local note_lines = NoteItemWidget.cutLines(wrapText(self.note.user_note, note_face, note_text_width),
             NoteItemWidget.noteLinesMax(), note_face, note_text_width)
+        -- Review mode: the note is drawn in white on white, so the rows keep their height and the
+        -- note reads as a blank block (the pencil icon stays, so the line is still recognisable)
+        local note_covered = NoteItemWidget.coverNote(self.note)
+        local note_fg = note_covered and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK
         local note_text_group = VerticalGroup:new{ align = "left" }
         for li, line in ipairs(note_lines) do
             local ls = NoteItemWidget.lineSpacing()
             if li > 1 and ls > 0 then table.insert(note_text_group, VerticalSpan:new{ width = ls }) end
             local line_widget = markw(TextWidget:new{
-                text = line, face = note_face, fgcolor = BlitBuffer.COLOR_BLACK,
+                text = line, face = note_face, fgcolor = note_fg,
             }, line, note_face)
             if ls < 0 then
                 local lsz = line_widget:getSize()
@@ -1736,6 +2152,8 @@ local function filterToString(filter, skip_presence)
             table.insert(parts, _("Without notes"))
         elseif filter.notes_presence == "bookmarks" then
             table.insert(parts, _("Bookmarks"))
+        elseif filter.notes_presence == "custom" then
+            table.insert(parts, _("Custom cover"))
         end
     end
     return #parts > 0 and table.concat(parts, "; ") or ""
@@ -1880,7 +2298,19 @@ local NotesListWidget = InputContainer:extend{
     viewer = nil, current_page = 1, pages = nil, active_filter = nil,
     single_book = false,
     covers_fullscreen = true,
+    review_on = false, -- review mode: covered text, a tap reveals one row instead of jumping
 }
+-- The value shown next to "Review mode" in the ☰ menu: which styles get covered. Nothing set
+-- means every style; an empty choice covers no highlight text (the notes only).
+function NotesListWidget.reviewStylesSummary()
+    local chosen = getReviewCoverStyles()
+    if not chosen then return _("All styles") end
+    local names = { lighten = _("Highlight"), underscore = _("Underline"),
+        strikeout = _("Strikeout"), invert = _("Invert") }
+    local out = {}
+    for _i, k in ipairs(REVIEW_STYLES) do if chosen[k] then out[#out + 1] = names[k] end end
+    return #out > 0 and table.concat(out, " · ") or _("Notes only")
+end
 -- Sizes that depend on the screen and on whether a filter row is shown.
 function NotesListWidget:computeLayout()
     NoteItemWidget.list_single = self.single_book and true or false -- whose sort order decides the dates
@@ -1928,6 +2358,12 @@ function NotesListWidget:init()
     -- tab you chose stays.
     local first_init = not self._opened
     self._opened = true
+    -- Review mode is per list (a reading state, not a setting): a list opened with the "Start
+    -- the list in review mode" setting on starts covered. Rotation re-runs init, and then the
+    -- state the list already had is kept.
+    if first_init then self.review_on = getSetting("review_start_on", false) == true end
+    self.review_on = self.review_on and true or false
+    NoteItemWidget.review_on = self.review_on
     if first_init and not (self.active_filter and self.active_filter.notes_presence)
             and self.tab_totals.all == 0 and self.tab_totals.bookmarks > 0 then
         self.active_filter = self.active_filter or {}
@@ -1936,6 +2372,9 @@ function NotesListWidget:init()
         self:applyFilter()
     end
     self:calculatePages()
+    -- A list opened for one annotation (editing it from the file browser) starts on the page that
+    -- holds it instead of the first page.
+    if self.focus_note and first_init then self:gotoNotePage(self.focus_note) end
     if Device:hasKeys() then
         self.key_events.GotoPrevPage = { { Input.group.PgBack } }
         self.key_events.GotoNextPage = { { Input.group.PgFwd } }
@@ -2028,8 +2467,8 @@ function NotesListWidget:applyFilter()
     if NoteItemWidget._lower_n > 100000 then NoteItemWidget._lower, NoteItemWidget._lower_n = {}, 0 end
     self.filtered_notes = {}
     -- counts: what each tab shows with the filters; totals: what it would show without them
-    local counts = { all = 0, highlights = 0, notes = 0, bookmarks = 0 }
-    local totals = { all = 0, highlights = 0, notes = 0, bookmarks = 0 }
+    local counts = { all = 0, highlights = 0, notes = 0, bookmarks = 0, custom = 0 }
+    local totals = { all = 0, highlights = 0, notes = 0, bookmarks = 0, custom = 0 }
     for _, note in ipairs(self.notes_list) do
         local match = true
         local is_bm = note.bookmark == true
@@ -2101,16 +2540,23 @@ function NotesListWidget:applyFilter()
         end
         -- Notes presence (the tab) last, so the tab counts can be taken before it.
         -- Bookmarks only show in their own tab; All, Highlights and Notes leave them out.
+        -- "Custom": the annotations that have picked words or a question of their own
         local has_note = note.user_note ~= nil and note.user_note ~= ""
+        local has_cloze = not is_bm and (NoteItemWidget.clozePhrases(note) ~= nil
+            or NoteItemWidget.noteQuestion(note) ~= nil)
         local tab = is_bm and "bookmarks" or (has_note and "notes" or "highlights")
         totals[tab] = totals[tab] + 1
+        if has_cloze then totals.custom = totals.custom + 1 end
         if not is_bm then totals.all = totals.all + 1 end
         if match then
             counts[tab] = counts[tab] + 1
+            if has_cloze then counts.custom = counts.custom + 1 end
             if not is_bm then counts.all = counts.all + 1 end
             local presence = self.active_filter and self.active_filter.notes_presence
             if presence == "bookmarks" then
                 match = is_bm
+            elseif presence == "custom" then
+                match = has_cloze
             elseif is_bm then
                 match = false
             elseif presence == "only" then
@@ -2136,7 +2582,7 @@ end
 -- Key of the open tab in tab_counts / tab_totals.
 function NotesListWidget:tabKey()
     local presence = self.active_filter and self.active_filter.notes_presence
-    return ({ only = "notes", exclude = "highlights", bookmarks = "bookmarks" })[presence or ""] or "all"
+    return ({ only = "notes", exclude = "highlights", bookmarks = "bookmarks", custom = "custom" })[presence or ""] or "all"
 end
 -- Scrollbar marks follow the sort order: a mark where the group changes. Books (or authors) when
 -- sorted by book / author / file, months when sorted by date, chapters in one book sorted by location.
@@ -2153,6 +2599,45 @@ function NotesListWidget.markKey(note, single, levels)
     if by == "date" then return (note.datetime or ""):sub(1, 7) end
     if by == "author" then return note.book_authors or "" end
     return note.book_title or ""
+end
+-- Moves to the page that holds `note`, so a list opened for one annotation starts on its page
+-- instead of the first one. The annotation is looked up by its date, highlighted text and
+-- position — never by a page number, since the list this came from held every book and this one
+-- holds a single book, so the two page numbering do not match.
+-- (Written out here rather than calling itemMatchesNote: that is a later local in this chunk.)
+-- Returns true when the annotation is in the list.
+function NotesListWidget:gotoNotePage(note)
+    if not note or not self.pages then return false end
+    local function samePos(a, b)
+        if a == b then return true end
+        if type(a) == "table" and type(b) == "table" then
+            return a.x == b.x and a.y == b.y and a.page == b.page
+        end
+        return false
+    end
+    local function matches(n)
+        if (n.datetime or "") ~= (note.datetime or "") then return false end
+        if note.bookmark then
+            return n.bookmark and samePos(n.page, note.page)
+        end
+        if (n.highlighted_text or "") ~= (note.highlighted_text or "") then return false end
+        if note.pos0 ~= nil then
+            return samePos(n.pos0, note.pos0) and samePos(n.pos1, note.pos1)
+        end
+        return true
+    end
+    local index
+    for i, n in ipairs(self.filtered_notes or {}) do
+        if n == note or matches(n) then index = i break end
+    end
+    if not index then return false end
+    for p, indices in ipairs(self.pages) do
+        if indices[1] and indices[1] <= index and index <= indices[#indices] then
+            self.current_page = p
+            return true
+        end
+    end
+    return false
 end
 -- Splits the list into pages. With a scrollbar style it first measures at the width beside the
 -- scrollbar; when everything fits on one page there is no scrollbar, so it measures again at the
@@ -2768,6 +3253,19 @@ function NotesListWidget:buildHeader()
     end
     local right = HorizontalGroup:new{ align = "center" }
     table.insert(right, newHeaderButton("appbar.search", function() self:showSearchDialog() end, self))
+    do -- Review mode: one tap covers every annotation's text (tap a row to reveal it)
+        local rbtn = newHeaderButton("appbar.plus", function() self:toggleReviewMode() end, self,
+            pluginIcon("appbar.review"))
+        if self.review_on then
+            -- on: black dot in the corner, so the state is visible at a glance on e-ink
+            local d = Screen:scaleBySize(12)
+            local dot = Pill:new{ width = d, height = d, fill = BlitBuffer.COLOR_BLACK, border = 0 }
+            local rs = rbtn:getSize()
+            dot.overlap_offset = { rs.w - d - Screen:scaleBySize(5), Screen:scaleBySize(5) }
+            rbtn = OverlapGroup:new{ dimen = Geom:new{ w = rs.w, h = rs.h }, allow_mirroring = false, rbtn, dot }
+        end
+        table.insert(right, rbtn)
+    end
     do -- the filter button is always there (the badge shows how many filters are on)
         local fbtn = newHeaderButton("appbar.settings", function() self:showFilterMenu() end, self,
             pluginIcon("appbar.filter"))
@@ -2801,7 +3299,7 @@ function NotesListWidget:buildHeader()
 
     -- 2. tabs: All / Highlights (no note) / Notes / Bookmarks, plus the sort button. The
     -- Bookmarks tab is only there when some book has bookmarks.
-    local counts = self.tab_counts or { all = 0, highlights = 0, notes = 0, bookmarks = 0 }
+    local counts = self.tab_counts or { all = 0, highlights = 0, notes = 0, bookmarks = 0, custom = 0 }
     local presence = self.active_filter and self.active_filter.notes_presence
     local show_counts = getShowTotalNotes()
     local tab_face = Font:getFace("cfont", 15)
@@ -2814,6 +3312,11 @@ function NotesListWidget:buildHeader()
         { key = "exclude", label = _("Highlights"), n = counts.highlights },
         { key = "only",    label = _("Notes"),      n = counts.notes },
     }
+    -- "Custom": only there once some annotation has picked words, since the tab would be empty
+    -- otherwise (and take room from the others on a narrow screen)
+    if (self.tab_totals and self.tab_totals.custom or 0) > 0 or presence == "custom" then
+        table.insert(tab_list, { key = "custom", label = _("Custom"), n = counts.custom or 0 })
+    end
     if (self.tab_totals and self.tab_totals.bookmarks or 0) > 0 or presence == "bookmarks" then
         table.insert(tab_list, { key = "bookmarks", label = _("Bookmarks"), n = counts.bookmarks or 0 })
     end
@@ -2832,7 +3335,7 @@ function NotesListWidget:buildHeader()
                 or VerticalSpan:new{ width = underline_h },
         }
         if tab.key == "bookmarks" then
-            -- Bookmarks are not annotations: a dot sets that tab apart from the three before it
+            -- Bookmarks are not annotations: a dot sets that tab apart from the ones before it
             local dot_gap = Screen:scaleBySize(12)
             table.insert(tabs, HorizontalSpan:new{ width = dot_gap })
             table.insert(tabs, CenterContainer:new{ dimen = Geom:new{ w = Screen:scaleBySize(8), h = row_h - underline_h },
@@ -3090,6 +3593,9 @@ function NotesListWidget:updatePage()
         tap_width = self.sb_x
     end
     self.ges_events.Tap = { GestureRange:new{ ges = "tap", range = Geom:new{ x = 0, y = self.title_height, w = tap_width, h = tap_height } } }
+    -- A hold is always taken (both what it does and what the tap does are settings, so the list has
+    -- to handle it whichever way round they are).
+    self.ges_events.Hold = { GestureRange:new{ ges = "hold", range = Geom:new{ x = 0, y = self.title_height, w = tap_width, h = tap_height } } }
     -- Narrow swipe range so the scrollbar column isn't claimed by page-turn swipes
     local swipe_range = Geom:new{ x = 0, y = 0, w = tap_width, h = self.height }
     local swipe_setting = getSwipeSetting()
@@ -3402,7 +3908,7 @@ end
 function NotesListWidget:exportFilterLabel()
     local af = self.active_filter or {}
     local parts = {}
-    local tabs = { exclude = _("Highlights"), only = _("Notes"), bookmarks = _("Bookmarks") }
+    local tabs = { exclude = _("Highlights"), only = _("Notes"), bookmarks = _("Bookmarks"), custom = _("Custom") }
     if af.notes_presence and tabs[af.notes_presence] then table.insert(parts, tabs[af.notes_presence]) end
     local chips = self:getFilterChips(true)
     for k = 1, #chips do
@@ -3849,7 +4355,9 @@ function NotesListWidget:onGesture(ev)
     if InputContainer.onGesture(self, ev) then return true end
     return _forwardGestureToPlugin(ev, self)
 end
-function NotesListWidget:onTap(_, ges)
+-- The row drawn at this gesture position: the annotation or the link under it (nil when the
+-- gesture isn't on a row). Rows are the positions recorded when the page was drawn.
+function NotesListWidget:rowAt(ges)
     if not ges or not ges.pos then return end
     -- exclude scrollbar column
     local pag_style = getPaginationStyle()
@@ -3857,25 +4365,75 @@ function NotesListWidget:onTap(_, ges)
         return
     end
     local tap_y = ges.pos.y
-    if tap_y < self.title_height then
-        return
-    end
-
-    -- Use the positions recorded when the page was drawn
+    if tap_y < self.title_height then return end
     local rel_y = tap_y - (self.tap_rows_origin_y or self.title_height)
     for _, row in ipairs(self.tap_rows or {}) do
-        if rel_y >= row.top and rel_y < row.bottom then
-            if row.action then row.action() return true end
-            self:onNoteSelected(row.note)
-            return true
-        end
+        if rel_y >= row.top and rel_y < row.bottom then return row end
     end
-    return false
+end
+function NotesListWidget:onTap(_, ges)
+    local row = self:rowAt(ges)
+    if not row then return false end
+    if row.action then row.action() return true end
+    -- Review mode: a tap flips the row it is on between covered and shown, and nothing else. The
+    -- list only goes back to jumping to the highlight when review mode is switched off from the
+    -- eye in the top bar, so a row can be covered and uncovered as often as you like.
+    if self.review_on then
+        self:toggleNoteCover(row.note)
+        return true
+    end
+    -- "Tap to go to the highlight" (the default): a tap jumps to it in the book and a long
+    -- press opens the card, so nothing is opened here.
+    if getTapSetting() == "goto" then self:onNoteGoto(row.note) return true end
+    self:onNoteSelected(row.note)
+    return true
+end
+function NotesListWidget:onHold(_, ges)
+    local row = self:rowAt(ges)
+    if not row or row.action then return end
+    -- In review mode the tap is taken (cover / show) but the hold is not: it still opens the card
+    -- (or jumps, as set), which is the only way to reach an annotation's card while reviewing.
+    if getHoldSetting() == "goto" then self:onNoteGoto(row.note) return true end
+    self:onNoteSelected(row.note)
+    return true
+end
+-- Flip one row between covered and shown. Only the list is redrawn and the wrapped lines are the
+-- same either way, so the page stays where it is.
+-- For a row with a question this is the "tap the question to see the answer, tap it again to go
+-- back" swap: shown is the text, covered is the question in its place.
+function NotesListWidget:toggleNoteCover(note)
+    if not note then return end
+    if note._av_revealed then note._av_revealed = nil else note._av_revealed = true end
+    self:refresh()
+end
+-- Review mode on / off: cover every annotation's text (the styles chosen in Settings), forget
+-- which rows were revealed before, and redraw. Returns the new state.
+function NotesListWidget:setReviewMode(on)
+    self.review_on = on and true or false
+    NoteItemWidget.review_on = self.review_on
+    -- switching either way starts from nothing revealed: on again covers everything
+    for _i, n in ipairs(self.notes_list or {}) do n._av_revealed = nil end
+    self:refresh()
+    return self.review_on
+end
+function NotesListWidget:toggleReviewMode()
+    return self:setReviewMode(not self.review_on)
 end
 function NotesListWidget:onNoteSelected(note)
     if self.viewer and self.viewer.showNoteDetails then
         self.viewer:showNoteDetails(note, self)
     end
+end
+-- Jump straight to the annotation in its book. With no book on the device to open there is
+-- nothing to jump to, so the card opens instead (it says where the book was).
+function NotesListWidget:onNoteGoto(note)
+    if not note then return end
+    if self.viewer and note.book_path and lfs.attributes(note.book_path, "mode") ~= nil then
+        self:onClose()
+        self.viewer:openBookAtNote(note)
+        return
+    end
+    self:onNoteSelected(note)
 end
 function NotesListWidget:onClose()
     -- full-screen widget: refresh what was underneath, or e-ink keeps showing the list
@@ -4126,29 +4684,6 @@ local function findLiveIndex(ui, note)
     end
 end
 
--- Finds the annotation for `note` in its (closed) book's sidecar, calls fn(item, list, index)
--- on it and saves the sidecar. Returns true if the annotation was found.
-local function editStoredAnnotation(note, fn)
-    local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
-    if not ok or not doc_settings or not doc_settings.data then return false end
-    local data = doc_settings.data
-    local found = false
-    if type(data.annotations) == "table" then
-        for i, item in ipairs(data.annotations) do
-            if itemMatchesNote(item, note) then
-                fn(item, data.annotations, i)
-                found = true
-                break
-            end
-        end
-    end
-    -- an old-format sidecar (no `annotations` list) is never written: see AllNotesViewer.legacyBlocked
-    if found then doc_settings:flush() end
-    return found
-end
-
-local function nowStamp() return os.date("%Y-%m-%d %H:%M:%S") end
-
 -- Changes the style or colour of a highlight in the open book, the way ReaderHighlight does
 -- (including the PDF annotation), and tells KOReader about the real item.
 local function setLiveHighlightField(ui, index, field, value)
@@ -4337,9 +4872,12 @@ function AllNotesViewer:showBookFile(path, tab)
         self:loadBookAnnotations(path) or {}, tab)
 end
 -- tab: "bookmarks" opens the list on the Bookmarks tab; nil on All
-function AllNotesViewer:showCurrentBookNotes(tab)
+function AllNotesViewer:showCurrentBookNotes(tab, focus_note)
     local ReaderUI = require("apps/reader/readerui")
-    local ui = self.ui or (ReaderUI and ReaderUI.instance)
+    -- the book open right now wins: this plugin instance may have been created in the file browser
+    -- (self.ui is the file manager there), and the list has to be built from the reader that is
+    -- actually open — that is also the one whose annotations are live
+    local ui = (ReaderUI and ReaderUI.instance) or self.ui
     if not ui or not ui.document then return end
     local book_path = ui.document.file
     if not book_path then return end
@@ -4355,7 +4893,7 @@ function AllNotesViewer:showCurrentBookNotes(tab)
     end
     local book_info = self:getBookInfo(book_path)
     local book_title = book_info and book_info.title or (book_path:match("([^/\\]+)$") or book_path)
-    self:showNotesForBook(book_path, book_title, annotations, tab)
+    return self:showNotesForBook(book_path, book_title, annotations, tab, focus_note)
 end
 function AllNotesViewer:addToMainMenu(menu_items)
     if self.ui and self.ui.document then
@@ -4782,7 +5320,7 @@ function AllNotesViewer.listNote(note, book, book_tags)
         legacy = note.legacy, tags = all_tags,
     }
 end
-function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations, tab)
+function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations, tab, focus_note)
     local book_info = self:getBookInfo(book_path)
     local notes_list = {}
     local book = { title = book_title, authors = book_info and book_info.authors or nil,
@@ -4794,8 +5332,12 @@ function AllNotesViewer:showNotesForBook(book_path, book_title, raw_annotations,
     end
     SortState.bm_tab = nil -- a new list starts sorted for the annotation tabs (see syncSortTab)
     NotesListWidget:sortNotesList(notes_list, SortState.get(true), true)
-    UIManager:show(NotesListWidget:new{ notes_list = notes_list, viewer = self, single_book = true, book_title = book_title,
-        active_filter = tab and { notes_presence = tab } or nil })
+    -- focus_note: the list opens on the page that holds this annotation
+    local list = NotesListWidget:new{ notes_list = notes_list, viewer = self, single_book = true, book_title = book_title,
+        focus_note = focus_note,
+        active_filter = tab and { notes_presence = tab } or nil }
+    UIManager:show(list)
+    return list
 end
 -- tab: "bookmarks" opens on the Bookmarks tab
 function AllNotesViewer:showAllNotes(tab)
@@ -5119,7 +5661,114 @@ function AnnotationSheet:build()
             table.insert(group, TextWidget:new{ text = _("Tap the highlight to read all of it"),
                 face = Font:getFace("cfont", 12), fgcolor = MUTED })
         end
-        table.insert(group, VerticalSpan:new{ width = gap })
+        -- Custom cover, both modes in one block:
+        --   row 1  "Custom cover:" with the links right after it (add/change the question, choose
+        --          words, remove every picked word)
+        --   row 2  the question badge, in the same white pill with a black outline as the colour
+        --          chips below (a "?" before the question, a ✕ after it)
+        --   row 3+ the picked words, one chip each with a ✕
+        -- Tapping the question badge or a word chip drops just that one.
+        do
+            local picked = NoteItemWidget.clozePhrases(note)
+            local question = NoteItemWidget.noteQuestion(note)
+            local small_face = Font:getFace("cfont", 12)
+            local gap_s = Screen:scaleBySize(6)
+            table.insert(group, VerticalSpan:new{ width = gap_s })
+            -- row 1: the label and the links, all on one line
+            local head = HorizontalGroup:new{ align = "center" }
+            table.insert(head, TextWidget:new{ text = _("Custom cover:"), face = small_face, fgcolor = MUTED })
+            local function link(text, cb)
+                table.insert(head, HorizontalSpan:new{ width = Screen:scaleBySize(10) })
+                table.insert(head, TapBox:new{
+                    decoratedText(TextWidget:new{ text = text, face = small_face }, "underline", MUTED),
+                    callback = cb,
+                })
+            end
+            link(question and _("Change question…") or _("Add a question…"), function()
+                viewer:editQuestion(note, function() self:rebuild() end)
+            end)
+            link(_("Choose words…"), function()
+                viewer:editCloze(note, function() self:rebuild() end)
+            end)
+            if picked then
+                link(_("Remove all picked words"), function()
+                    NoteItemWidget.setClozePhrases(note, nil)
+                    self:rebuild()
+                end)
+            end
+            table.insert(group, head)
+            -- row 2: the question badge, drawn exactly like a picked-word chip (black pill with a
+            -- ✕), with a "?" in front of the question
+            if question then
+                table.insert(group, VerticalSpan:new{ width = Screen:scaleBySize(4) })
+                local q_face = Font:getFace("cfont", 12)
+                local q_chip_h = Screen:scaleBySize(24)
+                local q_close_w = TextWidget:new{ text = "✕", face = q_face }:getSize().w
+                local q_mark_w = TextWidget:new{ text = "?", face = q_face, bold = true }:getSize().w
+                local q_text_w = math.min(TextWidget:new{ text = question, face = q_face }:getSize().w,
+                    inner - q_close_w - q_mark_w - Screen:scaleBySize(34))
+                table.insert(group, TapBox:new{
+                    Pill:new{ width = q_text_w + q_close_w + q_mark_w + Screen:scaleBySize(34),
+                        height = q_chip_h, fill = BlitBuffer.COLOR_BLACK, border = 0,
+                        HorizontalGroup:new{ align = "center",
+                            TextWidget:new{ text = "?", face = q_face, bold = true,
+                                fgcolor = BlitBuffer.COLOR_WHITE },
+                            HorizontalSpan:new{ width = Screen:scaleBySize(6) },
+                            TextWidget:new{ text = question, face = q_face,
+                                fgcolor = BlitBuffer.COLOR_WHITE, max_width = q_text_w },
+                            HorizontalSpan:new{ width = Screen:scaleBySize(5) },
+                            TextWidget:new{ text = "✕", face = q_face, fgcolor = BlitBuffer.COLOR_WHITE },
+                        } },
+                    callback = function()
+                        NoteItemWidget.setNoteQuestion(note, nil)
+                        self:rebuild()
+                    end,
+                })
+            end
+            -- row 3+: the picked words, wrapped
+            if picked then
+                table.insert(group, VerticalSpan:new{ width = Screen:scaleBySize(4) })
+                local chip_gap = gap_s
+                local chip_h = Screen:scaleBySize(24)
+                local close_w = TextWidget:new{ text = "✕", face = small_face }:getSize().w
+                local rows = VerticalGroup:new{ align = "left" }
+                local row, row_w = HorizontalGroup:new{ align = "center" }, 0
+                local function newRow()
+                    table.insert(rows, row)
+                    table.insert(rows, VerticalSpan:new{ width = chip_gap })
+                    row, row_w = HorizontalGroup:new{ align = "center" }, 0
+                end
+                for _i, word in ipairs(picked) do
+                    local text_w = math.min(TextWidget:new{ text = word, face = small_face }:getSize().w,
+                        inner - close_w - Screen:scaleBySize(28))
+                    local chip_w = text_w + close_w + Screen:scaleBySize(22)
+                    if row_w > 0 and row_w + chip_gap + chip_w > inner then newRow() end
+                    if row_w > 0 then
+                        table.insert(row, HorizontalSpan:new{ width = chip_gap })
+                        row_w = row_w + chip_gap
+                    end
+                    table.insert(row, TapBox:new{
+                        Pill:new{ width = chip_w, height = chip_h, fill = BlitBuffer.COLOR_BLACK, border = 0,
+                            HorizontalGroup:new{ align = "center",
+                                TextWidget:new{ text = word, face = small_face,
+                                    fgcolor = BlitBuffer.COLOR_WHITE, max_width = text_w },
+                                HorizontalSpan:new{ width = Screen:scaleBySize(5) },
+                                TextWidget:new{ text = "✕", face = small_face, fgcolor = BlitBuffer.COLOR_WHITE },
+                                HorizontalSpan:new{ width = Screen:scaleBySize(1) },
+                            } },
+                        callback = function()
+                            local left = {}
+                            for _j, p in ipairs(picked) do if p ~= word then table.insert(left, p) end end
+                            NoteItemWidget.setClozePhrases(note, left)
+                            self:rebuild()
+                        end,
+                    })
+                    row_w = row_w + chip_w
+                end
+                if row_w > 0 then table.insert(rows, row) end
+                table.insert(group, rows)
+            end
+        end
     end
 
     -- 3. note, with an underlined Edit / Add note link
@@ -5128,7 +5777,7 @@ function AnnotationSheet:build()
     local edit_link = TapBox:new{
         decoratedText(link, "underline", BlitBuffer.COLOR_BLACK),
         callback = function()
-            viewer:editNote(note, parent, function() self:rebuild() end)
+            viewer:editNote(note, parent, function() self:rebuild() end, nil, self)
         end,
     }
     table.insert(group, sectionLabel(_("YOUR NOTE"), edit_link))
@@ -5174,7 +5823,7 @@ function AnnotationSheet:build()
             },
             callback = function()
                 if not on then
-                    viewer:setHighlightField(note, "drawer", key, parent)
+                    viewer:setHighlightField(note, "drawer", key, parent, nil, self)
                     self:rebuild()
                 end
             end,
@@ -5218,7 +5867,7 @@ function AnnotationSheet:build()
             },
             callback = function()
                 if not on then
-                    viewer:setHighlightField(note, "color", key, parent)
+                    viewer:setHighlightField(note, "color", key, parent, nil, self)
                     self:rebuild()
                 end
             end,
@@ -5256,7 +5905,7 @@ function AnnotationSheet:build()
     end
     table.insert(btn_row, actionButton(_("Delete"), function()
         -- the card opens over the sheet: Cancel goes back to it, Delete closes both
-        viewer:confirmDelete(note, parent, function() self:onClose() end)
+        viewer:confirmDelete(note, parent, function() self:onClose() end, self)
     end, false, can_open and unit or inner))
     table.insert(group, btn_row)
 
@@ -6041,6 +6690,12 @@ function States.menu(list)
             value = filtered and _("Filtered") or string.format(_("All %d"), n_books),
             cb = function() list:showBookPicker(function() end) end })
     end
+    -- Review mode sits right under Books (both are about what the list shows), so it is found
+    -- without hunting through Settings. The eye in the top bar switches it on and off.
+    table.insert(items, { icon = "appbar.review", file = pluginIcon("appbar.review"),
+        label = _("Review mode"), chevron = true,
+        value = list.review_on and _("On") or NotesListWidget.reviewStylesSummary(),
+        cb = function() UIManager:show(NotesListWidget.SettingsScreen:new{ list = list, page = "review" }, "flashui") end })
     if #items > 0 then table.insert(items, "line") end -- (no line at the top of the one-book menu)
     table.insert(items, { icon = "move.up", label = _("Export"), chevron = true,
         value = string.format(_("%d shown"), #(list.filtered_notes or {})), cb = function() list:showExportPage() end })
@@ -6063,7 +6718,13 @@ function States.menu(list)
                         LineWidget:new{ dimen = Geom:new{ w = w - side * 2, h = Size.line.thin }, background = COLORS.line_light } })
                     table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(6) })
                 else
-                    local icon = IconWidget:new{ icon = it.icon, width = icon_s, height = icon_s }
+                    -- it.file: one of the plugin's own icons (icons/<name>.svg), else a KOReader icon name
+                    local icon
+                    if it.file and lfs.attributes(it.file, "mode") == "file" then
+                        icon = IconWidget:new{ file = it.file, width = icon_s, height = icon_s }
+                    else
+                        icon = IconWidget:new{ icon = it.icon, width = icon_s, height = icon_s }
+                    end
                     local value = it.value and TextWidget:new{ text = it.value, face = Font:getFace("cfont", 12),
                         fgcolor = COLORS.muted, max_width = math.floor(w * 0.35) }
                     local right = HorizontalGroup:new{ align = "center" }
@@ -7088,6 +7749,120 @@ function SS:build()
         rowsFor({ "text_margin", "line_spacing" })
         add(sectionBar(_("YOUR NOTE")))
         rowsFor({ "note_offset", "note_indent" })
+    elseif self.page == "review" then
+        -- Review mode: which styles of highlight get covered when the mode is switched on in the
+        -- list's top bar. Nothing set means every style, which is what a fresh install shows.
+        add(sectionBar(_("COVER THESE STYLES")))
+        local chosen = getReviewCoverStyles()
+        for _i, st in ipairs({ { "lighten", _("Highlight") }, { "underscore", _("Underline") },
+                { "strikeout", _("Strikeout") }, { "invert", _("Invert") } }) do
+            local key, label = st[1], st[2]
+            local on = (chosen == nil) or chosen[key] == true -- nothing set: every style is on
+            local sw_w, sw_h, knob, m = Screen:scaleBySize(50), Screen:scaleBySize(28), Screen:scaleBySize(20), Screen:scaleBySize(4)
+            local track = Pill:new{ width = sw_w, height = sw_h, fill = on and BlitBuffer.COLOR_BLACK or BlitBuffer.COLOR_WHITE,
+                border = on and 0 or thin, border_color = BlitBuffer.COLOR_BLACK }
+            local k = Pill:new{ width = knob, height = knob, border = 0, fill = on and BlitBuffer.COLOR_WHITE or BlitBuffer.COLOR_BLACK }
+            k.overlap_offset = { on and (sw_w - knob - m) or m, math.floor((sw_h - knob) / 2) }
+            local sw = OverlapGroup:new{ dimen = Geom:new{ w = sw_w, h = sw_h }, allow_mirroring = false, track, k }
+            add(row(label, nil, sw, function()
+                local cur = getReviewCoverStyles()
+                local next_styles = {}
+                for _j, name in ipairs(REVIEW_STYLES) do
+                    local was_on = (cur == nil) or cur[name] == true -- nothing set: all on
+                    if name == key then was_on = not was_on end
+                    if was_on then next_styles[name] = true end
+                end
+                if next(next_styles) == nil then
+                    -- nothing chosen covers no annotation text: only the notes, the picked words
+                    -- and the questions are hidden, so their "always" switches are turned on too
+                    G_reader_settings:saveSetting("annotationsviewer_review_cover_styles", {}) -- empty: none
+                    setSetting("review_notes_always", true)
+                    setSetting("review_cloze_always", true)
+                    setSetting("review_question_always", true)
+                else
+                    G_reader_settings:saveSetting("annotationsviewer_review_cover_styles", next_styles)
+                end
+                self:changed()
+            end))
+        end
+        add(VerticalSpan:new{ width = Screen:scaleBySize(12) })
+        add(padded(VerticalGroup:new{ align = "left",
+            TextBoxWidget:new{ text = _("With nothing chosen, only the notes and the custom cover (question and picked words) are covered."),
+                face = face12, fgcolor = MUTED, width = inner } }, Screen:scaleBySize(12), Screen:scaleBySize(14)))
+        add(rowLine())
+        -- What happens to the notes: whether a note is hidden at all, then how the highlight and
+        -- its note share the hiding
+        add(sectionBar(_("NOTES")))
+        add(toggle(_("Always cover notes"),
+            _("Notes are hidden even when their style is not covered above"), "review_notes_always",
+            function() return getSetting("review_notes_always", true) == true end))
+        add(toggle(_("Cover only the note when there is one"),
+            _("A highlight with a note keeps its text: only the note is hidden. Off: both are hidden"),
+            "review_note_only", function() return getSetting("review_note_only", true) == true end))
+        add(rowLine())
+        -- Custom cover: the finer-grained counterpart of the whole-line cover above. Two modes:
+        -- "picked words" (only some words of an annotation are covered) and "question" (the whole
+        -- text is replaced by a question written for it). One reader-facing block, split in two.
+        add(sectionBar(_("CUSTOM COVER")))
+        -- What it is for, then each mode with how it is used, its own setting and its own clear.
+        -- The counts and "Remove all" cover what the list is showing (this book, or the whole
+        -- library as its filters leave it), not every book on the device.
+        add(padded(VerticalGroup:new{ align = "left",
+            TextBoxWidget:new{ text = _("A separate way of covering, more precise than the whole line. It has two modes, question and picked words; the list's “Custom” tab shows the annotations that have either."),
+                face = face12, fgcolor = MUTED, width = inner } },
+            Screen:scaleBySize(10), Screen:scaleBySize(6)))
+        -- 1. question
+        add(padded(VerticalGroup:new{ align = "left",
+            TextWidget:new{ text = _("Question"), face = face15 },
+            VerticalSpan:new{ width = Screen:scaleBySize(3) },
+            TextBoxWidget:new{ text = _("Open an annotation's card and add a question for it, with the annotation itself as the answer. In review mode its text is replaced by the question, in bold; tap the row to swap question and text."),
+                face = face12, fgcolor = MUTED, width = inner } },
+            Screen:scaleBySize(10), Screen:scaleBySize(6)))
+        add(toggle(_("Always show questions"),
+            _("A question replaces the text even when its style is not covered above"), "review_question_always",
+            function() return getSetting("review_question_always", true) == true end))
+        do
+            local notes = (self.list and (self.list.filtered_notes or self.list.notes_list)) or {}
+            local n = NoteItemWidget.countClozeFor(notes, "question")
+            local link = TextWidget:new{ text = _("Remove all"), face = face15,
+                fgcolor = n > 0 and BlitBuffer.COLOR_BLACK or MUTED }
+            local underline = LineWidget:new{ dimen = Geom:new{ w = link:getSize().w, h = Size.line.medium },
+                background = n > 0 and BlitBuffer.COLOR_BLACK or MUTED }
+            add(row(_("Annotations with a question"),
+                n > 0 and (n == 1 and _("1 in this list") or string.format(_("%d in this list"), n))
+                    or _("None in this list"),
+                VerticalGroup:new{ align = "right", link, underline },
+                n > 0 and function() NoteItemWidget.clearClozeFor(notes, "question"); self:changed() end or nil))
+        end
+        add(rowLine())
+        -- 2. picked words
+        add(padded(VerticalGroup:new{ align = "left",
+            TextWidget:new{ text = _("Picked words"), face = face15 },
+            VerticalSpan:new{ width = Screen:scaleBySize(3) },
+            TextBoxWidget:new{ text = _("Open an annotation's card, delete everything that should stay readable and tap Add; in review mode only those words are covered, the rest of the line stays readable."),
+                face = face12, fgcolor = MUTED, width = inner } },
+            Screen:scaleBySize(10), Screen:scaleBySize(6)))
+        add(toggle(_("Always cover picked words"),
+            _("Picked words are hidden even when their style is not covered above"), "review_cloze_always",
+            function() return getSetting("review_cloze_always", true) == true end))
+        do
+            local notes = (self.list and (self.list.filtered_notes or self.list.notes_list)) or {}
+            local n = NoteItemWidget.countClozeFor(notes, "cloze")
+            local link = TextWidget:new{ text = _("Remove all"), face = face15,
+                fgcolor = n > 0 and BlitBuffer.COLOR_BLACK or MUTED }
+            local underline = LineWidget:new{ dimen = Geom:new{ w = link:getSize().w, h = Size.line.medium },
+                background = n > 0 and BlitBuffer.COLOR_BLACK or MUTED }
+            add(row(_("Annotations with picked words"),
+                n > 0 and (n == 1 and _("1 in this list") or string.format(_("%d in this list"), n))
+                    or _("None in this list"),
+                VerticalGroup:new{ align = "right", link, underline },
+                n > 0 and function() NoteItemWidget.clearClozeFor(notes, "cloze"); self:changed() end or nil))
+        end
+        add(rowLine())
+        add(sectionBar(_("MODE")))
+        add(toggle(_("Start the list in review mode"),
+            _("The list opens with the text already covered"), "review_start_on",
+            function() return getSetting("review_start_on", false) == true end))
     elseif self.page == "bookmarks" then
         -- only what is a bookmark's own; fonts, capitals, margins and the note are the annotations'
         add(sectionBar(_("BOOKMARK LINE")))
@@ -7228,6 +8003,12 @@ function SS:build()
         add(segment(_("Swipe to turn pages"), { { "both", _("Both") }, { "horizontal", _("Horizontal") },
             { "vertical", _("Vertical") }, { "disabled", _("Off") } }, getSwipeSetting(),
             function(v) setSetting("swipe_direction", v); self:changed() end))
+        add(segment(_("Tapping an annotation"), { { "goto", _("Goes to the highlight") },
+            { "card", _("Opens the card") } }, getTapSetting(),
+            function(v) setSetting("tap_action", v); self:changed() end))
+        add(segment(_("Holding an annotation"), { { "card", _("Opens the card") },
+            { "goto", _("Goes to the highlight") } }, getHoldSetting(),
+            function(v) setSetting("hold_action", v); self:changed() end))
 
         add(sectionBar(_("EXPORT")))
         add(navRow(_("Export"), NotesListWidget.Export.summary(),
@@ -7243,7 +8024,7 @@ function SS:build()
     end
 
     local titles = { text = _("Text"), spacing = _("Spacing"), info = _("Info row and repeats"), bookmarks = _("Bookmarks"), dates = _("Dates"),
-        export = _("Export") }
+        export = _("Export"), review = _("Review mode") }
     local right_items
     if self.page == "text" or self.page == "spacing" or self.page == "bookmarks" or self.page == "export" then
         local keys = ({ text = { "font_size" }, spacing = { "margins", "section_margin" } })[self.page] or {}
@@ -7958,6 +8739,8 @@ function AllNotesViewer:showStylePicker(note, parent_widget)
 end
 -- Updates the plugin's own list after a change and redraws it.
 local function updateListedNote(parent_widget, note, fn)
+    -- no list: the change was made after the list had to close to open the book
+    if type(parent_widget) ~= "table" or type(parent_widget.notes_list) ~= "table" then return end
     for i, n in ipairs(parent_widget.notes_list) do
         if n == note or (n.book_path == note.book_path and itemMatchesNote(
                 { datetime = n.datetime, text = n.highlighted_text, pos0 = n.pos0, pos1 = n.pos1,
@@ -7979,24 +8762,74 @@ function AllNotesViewer.legacyBlocked(note)
     })
     return true
 end
-function AllNotesViewer:setHighlightField(note, field, value, parent_widget, done_text)
-    if not note.book_path or AllNotesViewer.legacyBlocked(note) then return end
-    local updated = false
-    local ui = getLiveReader(note.book_path)
-    if ui then
+-- Copies the live annotation's style, colour and note back onto the list's note, so the card that
+-- is opened afterwards shows them as they now are (the chosen style/colour filled in, not the
+-- values the note had while the book was closed).
+function AllNotesViewer:syncNoteFromLive(note, item)
+    if not note or type(item) ~= "table" then return end
+    if item.drawer ~= nil then note.drawer = item.drawer end
+    if item.color ~= nil then note.color = item.color end
+    if item.note ~= nil then note.user_note = item.note else note.user_note = "" end
+end
+-- The book isn't open: opening it and then doing the edit through KOReader's live annotations is
+-- the only way the change holds. A change written straight into a closed book's sidecar was lost:
+-- KOReader read its own copy of the annotation back when the book was opened (the style reverted,
+-- a new note showed up as a second copy of the highlight).
+-- The book is opened where it was left (no jump), then this book's annotation list is opened again
+-- on top of it so the reader can carry on with any other annotation once the card is closed.
+-- do_edit(ui, index) applies what the reader already asked for (a style, a colour) to the live
+-- annotation; it is nil when there is nothing to apply yet.
+-- then_sheet(note, list) is only for what still needs the reader's input over the list (editing a
+-- note still needs the text). Everything else is done and the reader is left in the list.
+-- Returns true when it took over (the caller then does nothing more).
+function AllNotesViewer:openBookForEdit(note, sheet, then_sheet, do_edit)
+    if getLiveReader(note.book_path) then return false end
+    local viewer = self
+    viewer:openBookAtNote(note, function()
+        viewer:closeListForEdit(sheet, nil)
+    end, function(ui)
         local index = findLiveIndex(ui, note)
-        if index then
-            setLiveHighlightField(ui, index, field, value)
-            updated = true
-        end
-    else
-        updated = editStoredAnnotation(note, function(item)
-            item[field] = value
-            item.datetime_updated = nowStamp()
-        end)
+        if do_edit and index then pcall(do_edit, ui, index) end
+        if index then viewer:syncNoteFromLive(note, ui.annotation.annotations[index]) end
+        -- The list goes up right here, inside KOReader's after-open callback: the callback runs
+        -- before the reader paints itself, so the book and the list are drawn in one go. Any wait
+        -- put the list after a finished book paint instead, and that showed as a second flash.
+        local list = viewer:showCurrentBookNotes(nil, note)
+        if then_sheet then then_sheet(note, list) end
+    end, true) -- true: open the book, don't jump to the note
+    return true
+end
+-- Close the card and the list before the book opens, so the card shown afterwards is the one the
+-- reader works in.
+-- sheet: the annotation card that holds the Edit link; list: the full-screen list behind it.
+function AllNotesViewer:closeListForEdit(sheet, list)
+    if type(sheet) == "table" and type(sheet.onClose) == "function" then
+        pcall(sheet.onClose, sheet)
     end
-    if updated then
+    if type(list) == "table" and list.notes_list and type(list.onClose) == "function" then
+        pcall(list.onClose, list)
+    end
+end
+-- Changes a highlight's style or colour. The open book's live annotation is changed in place.
+-- For a closed book the book is opened first and the change is then applied to KOReader's live
+-- annotation by the plugin itself — the reader already chose ("underline", "blue"), so there is
+-- nothing left for them to pick — and the book's list reopens with this note's card over it.
+function AllNotesViewer:setHighlightField(note, field, value, parent_widget, done_text, sheet)
+    if not note.book_path or AllNotesViewer.legacyBlocked(note) then return end
+    local viewer = self
+    if viewer:openBookForEdit(note, sheet, nil, function(ui, index)
+        setLiveHighlightField(ui, index, field, value)
+        viewer:clearBookCache(note.book_path)
+        if done_text then NotesListWidget.showDialog(InfoMessage:new{ text = done_text, timeout = 1 }) end
+    end) then return end
+    local ui = getLiveReader(note.book_path)
+    local index = ui and findLiveIndex(ui, note)
+    if index then
+        setLiveHighlightField(ui, index, field, value)
         self:clearBookCache(note.book_path)
+        -- the note the card is drawn from has to carry the new value too, or the card redrawn by
+        -- the caller still shows the old choice as if nothing had happened
+        note[field] = value
         updateListedNote(parent_widget, note, function(n) n[field] = value end)
         if done_text then NotesListWidget.showDialog(InfoMessage:new{ text = done_text, timeout = 1 }) end
     else
@@ -8018,57 +8851,55 @@ function AllNotesViewer:updateHighlightColor(note, new_color, parent_widget)
     self:setHighlightField(note, "color", new_color, parent_widget, _("Color updated."))
 end
 -- before_delete: runs once Delete is tapped (closes the sheet the card was opened from)
-function AllNotesViewer:confirmDelete(note, parent_widget, before_delete)
+-- sheet: the annotation card the delete came from (nil from elsewhere)
+-- before_delete: runs once Delete is tapped (closes the sheet the card was opened from)
+-- sheet: the annotation card the delete came from (nil from elsewhere)
+function AllNotesViewer:confirmDelete(note, parent_widget, before_delete, sheet)
     if AllNotesViewer.legacyBlocked(note) then return end
+    local viewer = self
+    -- a closed book: the reader already confirmed, so the book is opened and the delete is made by
+    -- the plugin on KOReader's live annotation. The book's list is reopened so the reader can go on
+    -- with another annotation; no card is shown, since the one it was about is gone.
+    if viewer:openBookForEdit(note, sheet, nil, function(ui, index)
+        if before_delete then pcall(before_delete) end
+        viewer:deleteLiveAnnotation(ui, index, note)
+    end) then return end
     NotesListWidget.States.confirmDelete(note, function()
         if before_delete then before_delete() end
         self:deleteAnnotation(note, parent_widget)
     end)
 end
+-- Removes one annotation from the open book through KOReader's own path for its type.
+function AllNotesViewer:deleteLiveAnnotation(ui, index, note)
+    if not ui or not index then return end
+    if note.bookmark then
+        local item = ui.annotation.annotations[index]
+        if ui.bookmark and ui.bookmark.removeItem then
+            ui.bookmark:removeItem(item, index)
+        else
+            table.remove(ui.annotation.annotations, index)
+            ui:handleEvent(Event:new("AnnotationsModified", { item, index_modified = -index }))
+        end
+        return
+    end
+    if ui.highlight and ui.highlight.deleteHighlight then
+        ui.highlight:deleteHighlight(index)
+    else
+        local item = table.remove(ui.annotation.annotations, index)
+        ui:handleEvent(Event:new("AnnotationsModified", { item, index_modified = -index }))
+    end
+end
 function AllNotesViewer:deleteAnnotation(note, parent_widget)
     if not note.book_path or AllNotesViewer.legacyBlocked(note) then return end
-    local deleted = false
     local ui = getLiveReader(note.book_path)
-    if ui then
-        local index = findLiveIndex(ui, note)
-        if index and note.bookmark then
-            local item = ui.annotation.annotations[index]
-            if ui.bookmark and ui.bookmark.removeItem then
-                -- KOReader's own path: also hides the dog-ear when it is the page on screen
-                ui.bookmark:removeItem(item, index)
-            else
-                table.remove(ui.annotation.annotations, index)
-                ui:handleEvent(Event:new("AnnotationsModified", { item, index_modified = -index }))
-            end
-            deleted = true
-        elseif index then
-            if ui.highlight and ui.highlight.deleteHighlight then
-                -- KOReader's own path: removes the PDF annotation, updates statistics,
-                -- the "has annotations" flag and the footer
-                ui.highlight:deleteHighlight(index)
-            else
-                local item = table.remove(ui.annotation.annotations, index)
-                ui:handleEvent(Event:new("AnnotationsModified", { item, index_modified = -index }))
-            end
-            deleted = true
-        end
-    else
-        local remaining
-        deleted = editStoredAnnotation(note, function(_, list, i)
-            table.remove(list, i)
-            remaining = #list
-        end)
-        if deleted and remaining == 0 then
-            -- keep the file browser's "has annotations" marker in sync
-            local ok_bl, BookList = pcall(require, "ui/widget/booklist")
-            if ok_bl and BookList.setBookInfoCacheProperty then
-                BookList.setBookInfoCacheProperty(note.book_path, "has_annotations", false)
-            end
-        end
-    end
-    if deleted then
+    if not ui then return end
+    local index = findLiveIndex(ui, note)
+    if index then
+        self:deleteLiveAnnotation(ui, index, note)
         self:clearBookCache(note.book_path)
-        updateListedNote(parent_widget, note, function(_, i) table.remove(parent_widget.notes_list, i) end)
+        updateListedNote(parent_widget, note, function(_, i)
+            if parent_widget and parent_widget.notes_list then table.remove(parent_widget.notes_list, i) end
+        end)
     else
         AllNotesViewer.saveFailed()
     end
@@ -8084,9 +8915,115 @@ local function cleanHighlightTextForDialog(text)
     end
     return t
 end
+-- Custom cover: what review mode should cover in this highlight. Each place is added on its own:
+-- the field shows the whole highlight, the reader deletes what should stay readable and taps
+-- "Add", which saves that phrase straight away (no separate Save needed) and puts the whole
+-- highlight back in the field for the next one. "Reselect" puts the highlight back when the field
+-- was cut too far. (An empty line as a separator does not work: the on-screen keyboard's Enter
+-- saves and closes the dialog.)
+-- A phrase is kept exactly as it was left: its own punctuation is part of what was picked, and
+-- splitting on commas would cut it, and could break a multi-byte character.
+function AllNotesViewer:editCloze(note, on_done)
+    if not note or not note.book_path then return end
+    local InputDialog = require("ui/widget/inputdialog")
+    local highlight = note.highlighted_text or ""
+    local picked = {}
+    for _i, w in ipairs(NoteItemWidget.clozePhrases(note) or {}) do table.insert(picked, w) end
+    local dialog
+    local function clean(text)
+        return (tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+    end
+    -- every add writes the list out at once, so the pick is kept even if the reader leaves the
+    -- dialog with the keyboard's Back instead of a button
+    local function store()
+        NoteItemWidget.setClozePhrases(note, #picked > 0 and picked or nil)
+    end
+    local function add(text)
+        local phrase = clean(text)
+        if phrase == "" then return end
+        for _i, w in ipairs(picked) do if w == phrase then
+            dialog:setInputText(highlight) -- already there: just get ready for the next one
+            return
+        end end
+        table.insert(picked, phrase)
+        store()
+        if on_done then on_done() end
+        -- back to the whole highlight, ready for the next one
+        dialog:setInputText(highlight)
+        UIManager:show(InfoMessage:new{ text = _("Added:") .. " " .. phrase, timeout = 1 })
+    end
+    local buttons = {
+        {
+            { text = _("Cancel"), id = "close", callback = function() UIManager:close(dialog) end },
+            { text = _("Save"), is_enter_default = true, callback = function()
+                -- whatever is still in the field is added too, so "Add" is optional
+                local phrase = clean(dialog:getInputText())
+                local seen = false
+                for _i, w in ipairs(picked) do if w == phrase then seen = true break end end
+                -- only when it is not the untouched whole highlight (that means "nothing added")
+                if phrase ~= "" and not seen and phrase ~= clean(highlight) then
+                    table.insert(picked, phrase)
+                end
+                store()
+                UIManager:close(dialog)
+                if on_done then on_done() end
+            end },
+        },
+        {
+            { text = _("Reselect"), callback = function()
+                dialog:setInputText(highlight)
+            end },
+            { text = _("Add"), callback = function() add(dialog:getInputText()) end },
+        },
+    }
+    dialog = InputDialog:new{
+        title = _("Custom cover: words to cover"),
+        description = _("Delete everything that should stay readable, then tap Add; each one is saved at once."),
+        input = highlight,
+        input_type = "text",
+        text_height = Screen:scaleBySize(140),
+        buttons = buttons,
+    }
+    NotesListWidget.showDialog(dialog)
+    dialog:onShowKeyboard()
+end
+-- Question cover: the question written for this whole annotation. In review mode its text is
+-- replaced by this question (in bold) instead of an empty colour bar, so the reader has something
+-- to answer; tapping the row swaps question and text, and back.
+function AllNotesViewer:editQuestion(note, on_done)
+    if not note or not note.book_path then return end
+    local InputDialog = require("ui/widget/inputdialog")
+    local dialog
+    local function save(text)
+        UIManager:close(dialog)
+        NoteItemWidget.setNoteQuestion(note, text)
+        if on_done then on_done() end
+    end
+    dialog = InputDialog:new{
+        title = _("Question for this annotation"),
+        description = _("In review mode the whole text is replaced by this question. Tap the row to swap question and text."),
+        input = NoteItemWidget.noteQuestion(note) or "",
+        input_hint = _("What does this passage say?"),
+        input_type = "text",
+        text_height = Screen:scaleBySize(100),
+        buttons = { {
+            { text = _("Cancel"), id = "close", callback = function() UIManager:close(dialog) end },
+            { text = _("Save"), is_enter_default = true, callback = function() save(dialog:getInputText()) end },
+        } },
+    }
+    NotesListWidget.showDialog(dialog)
+    dialog:onShowKeyboard()
+end
 -- start_text: what the field starts with instead of the saved note (after a failed save).
-function AllNotesViewer:editNote(note, parent_widget, on_done, start_text)
+-- sheet: the annotation card holding the Edit link (nil when editNote is called from elsewhere).
+function AllNotesViewer:editNote(note, parent_widget, on_done, start_text, sheet)
     if AllNotesViewer.legacyBlocked(note) then return end
+    -- a closed book: open it, reopen this book's list over it and show the note dialog straight
+    -- away — the reader asked to edit the note, so that is what opens, not the card first
+    local viewer = self
+    if viewer:openBookForEdit(note, sheet, function(edited, list)
+        viewer:editNote(edited, list, nil, start_text, nil)
+    end) then return end
     local InputDialog = require("ui/widget/inputdialog")
     local input_dialog
     local has_note = note.user_note and note.user_note:find("%S") ~= nil
@@ -8158,11 +9095,6 @@ function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget, on_fail
             end
             updated = true
         end
-    else
-        updated = editStoredAnnotation(note, function(item)
-            item.note = value
-            item.datetime_updated = nowStamp()
-        end)
     end
     if updated then
         self:clearBookCache(note.book_path)
@@ -8172,7 +9104,13 @@ function AllNotesViewer:saveNoteEdit(note, new_note_text, parent_widget, on_fail
         AllNotesViewer.saveFailed(on_fail)
     end
 end
-function AllNotesViewer:openBookAtNote(note)
+-- Opens the note's book. on_ready runs first (the list closes itself there), then after_open(ui)
+-- once the book is laid out. Without no_jump the book is also shown at the highlight's place.
+-- An edit made while the book is closed is written to the sidecar behind KOReader's back, and
+-- opening the book afterwards brought the old data back (the style reverted, a new note showed up
+-- as a second copy of the highlight), so every edit opens the book first and is then made through
+-- KOReader's own live annotations.
+function AllNotesViewer:openBookAtNote(note, on_ready, after_open, no_jump)
     local book_path = note.book_path
     if not book_path then
         NotesListWidget.showDialog(InfoMessage:new{ text = _("Cannot find book path.") })
@@ -8185,6 +9123,7 @@ function AllNotesViewer:openBookAtNote(note)
     -- with the highlight marked, after remembering where the reader was, so KOReader's Back
     -- returns there. Older KOReader without these: go to the page number.
     local function gotoNote(ui)
+        if no_jump then return end -- editing only needs the book open, not its page shown
         if not ui or not ui.document then return end
         -- EPUB-like books need an xpointer here, PDFs a page number (very old sidecars kept a
         -- page number for EPUBs too: those take the fallback below)
@@ -8205,10 +9144,20 @@ function AllNotesViewer:openBookAtNote(note)
             ui:handleEvent(Event:new("GotoPage", target_page))
         end
     end
+    -- the book has to be laid out before its page is shown or its annotations are used
+    local function runAfterOpen(ui)
+        if not after_open then return end
+        UIManager:scheduleIn(0.3, function()
+            if ui and ui.document then pcall(after_open, ui) end
+        end)
+    end
 
+    -- a book that is already open is used as it is (its annotations are the live ones)
     if ReaderUI.instance and ReaderUI.instance.document then
         if NotesListWidget.samePath(ReaderUI.instance.document.file, book_path) then
+            if on_ready then on_ready() end
             gotoNote(ReaderUI.instance)
+            runAfterOpen(ReaderUI.instance)
             return
         end
     end
@@ -8216,16 +9165,18 @@ function AllNotesViewer:openBookAtNote(note)
     -- KOReader 2026.03+ calls this once the book is open; older versions ignore the extra
     -- argument, so the timer below is the fallback for them.
     local done = false
-    local function after_open(ui)
+    local function opened(ui)
         if done then return end
         done = true
+        if on_ready then on_ready() end
         gotoNote(ui)
+        runAfterOpen(ui)
     end
-    ReaderUI:showReader(book_path, nil, nil, nil, after_open)
+    ReaderUI:showReader(book_path, nil, nil, nil, opened)
     UIManager:scheduleIn(1.5, function()
         if done then return end
         local ui = require("apps/reader/readerui").instance
-        if ui and ui.document and NotesListWidget.samePath(ui.document.file, book_path) then after_open(ui) end
+        if ui and ui.document and NotesListWidget.samePath(ui.document.file, book_path) then opened(ui) end
     end)
 end
 -- Internals exposed for tests/run.lua; KOReader doesn't use this.
