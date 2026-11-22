@@ -154,9 +154,8 @@ msgid "Without notes"
 msgstr "不含笔记"
 
 #: main.lua:1591 main.lua:2553 main.lua:6259 main.lua:6281
-#, fuzzy
 msgid "Bookmarks"
-msgstr "书籍"
+msgstr "书签"
 
 #: main.lua:2028
 msgid "Prev"
@@ -659,10 +658,9 @@ msgstr "区分大小写：开"
 msgid "Exclude"
 msgstr "排除"
 
-#: main.lua:3498 main.lua:3686 main.lua:3699
-#, fuzzy
+#: main.lua:3518 main.lua:3706 main.lua:3719 main.lua:4345 main.lua:4352 main.lua:4530 main.lua:4543
 msgid "Annotations: Bookmarks"
-msgstr "标注"
+msgstr "标注：书签"
 
 #: main.lua:3526
 msgid "Annotations (this book, old)"
@@ -1393,6 +1391,18 @@ msgstr "滑动翻页"
 msgid "Vertical"
 msgstr "垂直"
 
+#: main.lua:6270
+msgid "Tapping an annotation"
+msgstr "轻触标注时"
+
+#: main.lua:6270
+msgid "Goes to the highlight"
+msgstr "跳转到高亮"
+
+#: main.lua:6271
+msgid "Opens the card"
+msgstr "打开详情卡片"
+
 #: main.lua:6272
 msgid "KOREADER"
 msgstr ""
@@ -1721,3 +1731,594 @@ msgstr ""
 
 #~ msgid "Change Color"
 #~ msgstr "更改颜色"
+
+msgid "Review mode"
+msgstr "复习模式"
+
+msgid "REVIEW"
+msgstr "复习"
+
+msgid "All styles"
+msgstr "全部样式"
+
+msgid "COVER THESE STYLES"
+msgstr "遮盖这些样式"
+
+msgid "With nothing chosen, only the notes are covered: “Always cover notes” is turned on with it."
+msgstr "一个都不选时，仅遮盖笔记：此时会自动打开“总是遮盖笔记”。"
+
+msgid "Start the list in review mode"
+msgstr "列表打开时即进入复习模式"
+
+msgid "The list opens with the text already covered"
+msgstr "列表打开时文字已被遮盖"
+
+msgid "MODE"
+msgstr "模式"
+
+msgid "Cover only the note when there is one"
+msgstr "有笔记时仅遮盖笔记"
+
+msgid "A highlight with a note keeps its text: only the note is hidden. Off: both are hidden"
+msgstr "带笔记的高亮保留原文，只遮盖笔记。关闭则两者都遮盖"
+
+msgid "On"
+msgstr "已开启"
+
+msgid "NOTES"
+msgstr "笔记"
+
+msgid "Always cover notes"
+msgstr "总是遮盖笔记"
+
+msgid "Notes are hidden even when their style is not covered above"
+msgstr "即使上方未勾选该样式，笔记也会被遮盖"
+
+
+msgid "Choose words to cover (review mode)"
+msgstr "选择要遮盖的词（复习模式）"
+
+msgid "Covered words:"
+msgstr "已遮盖的词："
+
+msgid "Words to cover in review mode"
+msgstr "复习模式要遮盖的词"
+
+msgid "Only these words are covered; separated by commas. Empty: the whole highlight."
+msgstr "只遮盖这些词，用逗号分隔。留空则遮盖整条高亮。"
+
+msgid "EXCAVATIONS"
+msgstr "挖空"
+
+msgid "Words picked inside highlights"
+msgstr "高亮内选定的词"
+
+msgid "Review mode covers just those words"
+msgstr "复习模式只遮盖这些词"
+
+msgid "None picked yet: the whole line is covered"
+msgstr "尚未选定：遮盖整行"
+
+msgid "Remove all"
+msgstr "全部移除"
+msgid "Hold a word above to cover it in review mode"
+msgstr "长按上方高亮中的词，即可在复习模式中遮盖它"
+msgid "Add words to cover…"
+msgstr "添加要遮盖的词…"
+
+msgid "Cover these words"
+msgstr "遮盖这些词"
+
+msgid "Added:"
+msgstr "已添加："
+
+msgid "Long-press to select words, then “Cover these words”. Separated by commas; empty: the whole highlight."
+msgstr "长按选中文字，再点“遮盖这些词”。多个词用逗号分隔；留空则遮盖整条高亮。"
+msgstr "尚未选择：复习模式遮盖整条高亮"
+
+msgid "Covered in review mode:"
+msgstr "复习模式遮盖："
+
+msgid "Choose words to cover…"
+msgstr "选择要遮盖的文字…"
+msgstr "删掉不想遮盖的部分，留下来的就是遮盖内容。
+要挖空另一处，在两者之间留一个空行。
+留空则遮盖整条高亮。"
+
+msgid "Delete everything that should stay readable, then tap Add. Empty: the whole highlight."
+msgstr "删掉不想遮盖的部分，然后点“添加”。留空则遮盖整条高亮。"
+
+msgid "Added:"
+msgstr "已添加："
+
+msgid "Cleared"
+msgstr "已清空"
+
+msgid "Add"
+msgstr "添加"
+
+msgid "Nothing picked: the whole highlight is covered in review mode"
+msgstr "尚未选择：复习模式遮盖整条高亮"
+
+msgid "Choose words to cover…"
+msgstr "选择要遮盖的文字…"
+
+msgid "Reselect"
+msgstr "重新选择"
+
+msgid "Delete everything that should stay readable, then tap Add; each one is saved at once."
+msgstr "删掉不想遮盖的部分，然后点“添加”，每添加一个就会立即保存。"
+
+msgid "CUSTOM COVER"
+msgstr "自定义遮盖"
+
+msgid "Custom cover:"
+msgstr "自定义遮盖："
+
+msgid "Custom cover: none, the whole highlight is covered"
+msgstr "自定义遮盖：未设置，遮盖整条高亮"
+
+msgid "Custom cover: words to cover"
+msgstr "自定义遮盖：要遮盖的文字"
+
+msgid "Choose words…"
+msgstr "选择文字…"
+
+msgid "Only those words are covered, in the highlights that have any"
+msgstr "仅遮盖这些词（仅限于已设置的高亮）"
+
+msgid "None picked: those highlights are covered whole"
+msgstr "未设置：这些高亮整条遮盖"
+
+msgid "Cover the picked words even when their style is not covered"
+msgstr "即使样式未开启，也遮盖选定的词"
+
+msgid "The words below are hidden whatever the styles above say"
+msgstr "无论上方的样式如何设置，下面选定的词都会被遮盖"
+
+msgid "Each highlight can cover just the words picked inside it, instead of the whole line. Open a highlight's card, delete everything that should stay readable and tap Add; those words are covered in review mode, the rest of the line stays readable. The other highlights are covered whole, as before."
+msgstr "每条高亮可以只遮盖其中选定的词，而不是整行。打开高亮的卡片，删掉需要保留阅读的部分，再点“添加”；复习模式就只遮盖这些词，其余文字照常可读。其他高亮仍按原来的方式整条遮盖。"
+
+msgid "Always cover picked words"
+msgstr "总是遮盖自定义选词"
+
+msgid "Picked words are hidden even when their style is not covered above"
+msgstr "即使上方未勾选该样式，自定义选词也会被遮盖"
+
+msgid "With nothing chosen, only the notes and the picked words are covered."
+msgstr "一个都不选时，仅遮盖笔记及自定义选词。"
+
+msgid "Each highlight can cover just the words picked inside it instead of the whole line: open its card, delete what should stay readable and tap Add. Other highlights are covered whole."
+msgstr "每条高亮可以只遮盖其中选定的词，而不是整行：打开它的卡片，删掉要保留阅读的部分，再点“添加”。其他高亮仍整条遮盖。"
+
+msgid "Each annotation can cover just the words picked inside it instead of the whole line: open its card, delete what should stay readable and tap Add. Other annotations are covered whole."
+msgstr "每条标注可以只遮盖其中选定的词，而不是整行：打开它的卡片，删掉要保留阅读的部分，再点“添加”。其他标注仍整条遮盖。"
+
+msgid "Words picked inside annotations"
+msgstr "标注内选定的词"
+
+msgid "Only those words are covered, in the annotations that have any"
+msgstr "仅遮盖这些词（仅限于已设置的标注）"
+
+msgid "None picked: those annotations are covered whole"
+msgstr "未设置：这些标注整条遮盖"
+
+msgid "Custom cover: none, the whole annotation is covered"
+msgstr "自定义遮盖：未设置，遮盖整条标注"
+
+msgid "Custom"
+msgstr "自定义"
+
+msgid "The list's “Custom” tab shows only the annotations that have picked words; it appears once there are any."
+msgstr "列表中的“自定义”标签只显示设定了选词的标注，在设定的选词存在时才会出现。"
+
+msgid "Custom cover"
+msgstr "自定义遮盖"
+
+msgid "Add a question…"
+msgstr "添加问题…"
+
+msgid "Change question…"
+msgstr "修改问题…"
+
+msgid "Remove question"
+msgstr "移除问题"
+
+msgid "Question: "
+msgstr "问题："
+
+msgid "Question for this annotation"
+msgstr "为这条标注设置问题"
+
+msgid "In review mode the whole text is replaced by this question. Tap the row to swap question and text."
+msgstr "复习模式下整条文字会被替换成这个问题。点击该行可在问题与原文之间切换。"
+
+msgid "What does this passage say?"
+msgstr "这段话讲了什么？"
+
+msgid "Always show questions"
+msgstr "总是显示问题"
+
+msgid "A question replaces the text even when its style is not covered above"
+msgstr "即使上方未勾选该样式，问题也会替换原文显示"
+
+msgid "An annotation can also get a question of its own: in review mode its text is replaced by that question, in bold, so there is something to answer; tap the row to swap question and text."
+msgstr "标注还可以设置自己的问题：复习模式下整条文字会被替换成该问题（加粗显示），让人有内容可回想；点击该行可在问题与原文之间切换。"
+
+msgid "A separate way of covering, more precise than the whole line. It has two modes, picked words and question; the list's “Custom” tab shows the annotations that have either."
+msgstr "一种比整行遮盖更精细的遮盖方式，分两种模式：挖空和问答。列表中的“自定义”标签会显示设置了其中任意一种的标注。"
+
+msgid "Picked words"
+msgstr "挖空（选词）"
+
+msgid "Open an annotation's card, delete everything that should stay readable and tap Add; in review mode only those words are covered, the rest of the line stays readable."
+msgstr "打开标注的卡片，删掉需要保留阅读的部分再点“添加”；复习模式下只遮盖这些词，其余文字照常可读。"
+
+msgid "Question"
+msgstr "问答"
+
+msgid "Open an annotation's card and add a question for it, with the annotation itself as the answer. In review mode its text is replaced by the question, in bold; tap the row to swap question and text."
+msgstr "打开标注的卡片并为它添加一个问题，标注本身就是答案。复习模式下整条文字会被替换成该问题（加粗显示），点击该行可在问题与原文之间切换。"
+
+msgid "Annotations with picked words"
+msgstr "已设挖空的标注"
+
+msgid "Annotations with a question"
+msgstr "已设问答的标注"
+
+msgid "None in this list"
+msgstr "此列表中没有"
+
+msgid "1 in this list"
+msgstr "此列表中有 1 条"
+
+msgid "%d in this list"
+msgstr "此列表中有 %d 条"
+
+msgid "Change…"
+msgstr "修改…"
+
+msgid "Change question…"
+msgstr "修改问题…"
+
+msgid "Remove all picked words"
+msgstr "移除全部选词"
+
+msgid "A separate way of covering, more precise than the whole line. It has two modes, question and picked words; the list's “Custom” tab shows the annotations that have either."
+msgstr "一种比整行遮盖更精细的遮盖方式，分两种模式：问答和挖空。列表中的“自定义”标签会显示设置了其中任意一种的标注。"
+
+msgid "With nothing chosen, only the notes and the custom cover (question and picked words) are covered."
+msgstr "一个都不选时，仅遮盖笔记及自定义内容（问答及挖空）。"
+
+msgid "Page"
+msgstr "页"
+
+msgid "Bookmark"
+msgstr "书签"
+
+msgid "Unknown book"
+msgstr "未知书籍"
+
+msgid "Highlight"
+msgstr "高亮"
+
+msgid "Plain text"
+msgstr "纯文本"
+
+msgid "One per book"
+msgstr "每本书一个"
+
+msgid "One file"
+msgstr "单个文件"
+
+msgid "Copy"
+msgstr "复制"
+
+msgid "Export"
+msgstr "导出"
+
+msgid "EXPORT"
+msgstr "导出"
+
+msgid "KOREADER"
+msgstr "KOREADER"
+
+msgid "Font"
+msgstr "字体"
+
+msgid "Month"
+msgstr "月份"
+
+msgid "Year"
+msgstr "年份"
+
+msgid "Time"
+msgstr "时间"
+
+msgid "Always"
+msgstr "始终"
+
+msgid "Never"
+msgstr "从不"
+
+msgid "Files"
+msgstr "文件"
+
+msgid "FILES"
+msgstr "文件"
+
+msgid "Folder"
+msgstr "文件夹"
+
+msgid "Format"
+msgstr "格式"
+
+msgid "FORMAT"
+msgstr "格式"
+
+msgid "File type"
+msgstr "文件类型"
+
+msgid "INCLUDE"
+msgstr "包含"
+
+msgid "ORDER"
+msgstr "顺序"
+
+msgid "Quote"
+msgstr "引用"
+
+msgid "Italic"
+msgstr "斜体"
+
+msgid "Plain"
+msgstr "纯文本"
+
+msgid "Bold label"
+msgstr "粗体标签"
+
+msgid "Date and time"
+msgstr "日期和时间"
+
+msgid "Date format"
+msgstr "日期格式"
+
+msgid "Colour and style"
+msgstr "颜色与样式"
+
+msgid "Also include"
+msgstr "同时包含"
+
+msgid "Each book once"
+msgstr "每本书只出现一次"
+
+msgid "As in the list"
+msgstr "与列表顺序一致"
+
+msgid "In the info line"
+msgstr "在信息行中"
+
+msgid "As headings"
+msgstr "作为标题"
+
+msgid "Leave out"
+msgstr "不含"
+
+msgid "After the book title"
+msgstr "在书名之后"
+
+msgid "Title and filter at the top"
+msgstr "顶部显示标题与筛选条件"
+
+msgid "Dates"
+msgstr "日期"
+
+msgid "Sort"
+msgstr "排序"
+
+msgid "Authors"
+msgstr "作者"
+
+msgid "Series"
+msgstr "系列"
+
+msgid "Language"
+msgstr "语言"
+
+msgid "No books"
+msgstr "没有书籍"
+
+msgid "No chapters"
+msgstr "没有章节"
+
+msgid "No tags"
+msgstr "没有标签"
+
+msgid "BOOKMARK LINE"
+msgstr "书签行"
+
+msgid "Bookmark font"
+msgstr "书签字体"
+
+msgid "Text size"
+msgstr "文字大小"
+
+msgid "When sorted by date"
+msgstr "按日期排序时"
+
+msgid "NOTE"
+msgstr "笔记"
+
+msgid "Icon before the note"
+msgstr "笔记前加图标"
+
+msgid "SPACING"
+msgstr "间距"
+
+msgid "Between bookmarks"
+msgstr "书签之间"
+
+msgid "DATE FORMAT"
+msgstr "日期格式"
+
+msgid "ABOVE HIGHLIGHTS"
+msgstr "高亮上方"
+
+msgid "Show the date"
+msgstr "显示日期"
+
+msgid "IN THE LIST"
+msgstr "在列表中"
+
+msgid "ON THE ANNOTATION SHEET"
+msgstr "在标注卡片上"
+
+msgid "When not this year"
+msgstr "不是今年时"
+
+msgid "Today and yesterday"
+msgstr "今天和昨天"
+
+msgid "Holding an annotation"
+msgstr "长按标注时"
+
+msgid "Line size, date, spacing"
+msgstr "行大小、日期、间距"
+
+msgid "KOReader's Bookmarks open here"
+msgstr "KOReader 的书签在此打开"
+
+msgid "Its menu entries, gestures and Bookmarks buttons open the Bookmarks tab here"
+msgstr "其菜单项、手势和书签按钮都会在这里打开「书签」标签页"
+
+msgid "Nothing to export"
+msgstr "没有可导出的内容"
+
+msgid "Export 1 bookmark"
+msgstr "导出 1 条书签"
+
+msgid "Export %d bookmarks"
+msgstr "导出 %d 条书签"
+
+msgid "Export 1 annotation"
+msgstr "导出 1 条标注"
+
+msgid "Export %d annotations"
+msgstr "导出 %d 条标注"
+
+msgid "Date and time in the file name"
+msgstr "文件名中包含日期和时间"
+
+msgid "Off: exporting again replaces the file"
+msgstr "关闭：再次导出会覆盖原文件"
+
+msgid "Only these authors"
+msgstr "仅这些作者"
+
+msgid "Hide these authors"
+msgstr "隐藏这些作者"
+
+msgid "Search authors"
+msgstr "搜索作者"
+
+msgid "Only these series"
+msgstr "仅这些系列"
+
+msgid "Hide these series"
+msgstr "隐藏这些系列"
+
+msgid "Only these languages"
+msgstr "仅这些语言"
+
+msgid "Hide these languages"
+msgstr "隐藏这些语言"
+
+msgid "This book still uses KOReader's old format. Open it once in KOReader, then try again."
+msgstr "这本书仍使用 KOReader 的旧格式。请在 KOReader 中打开一次后再试。"
+
+msgid "Could not save: this annotation was not found in the book's file. Tap Reload annotations and try again."
+msgstr "保存失败：在书籍文件中找不到这条标注。请点击「重新加载标注」后再试。"
+
+msgid "Your note on this page"
+msgstr "你对本页的笔记"
+
+msgid "Go to page"
+msgstr "跳转到第"
+
+msgid "Go to bookmark"
+msgstr "跳转到书签"
+
+msgid "%d authors"
+msgstr "%d 位作者"
+
+msgid "%d series"
+msgstr "%d 个系列"
+
+msgid "%d languages"
+msgstr "%d 种语言"
+
+msgid "1 more bookmark is hidden by filters"
+msgstr "还有 1 条书签被筛选隐藏"
+
+msgid "%d more bookmarks are hidden by filters"
+msgstr "还有 %d 条书签被筛选隐藏"
+
+msgid "%d of %d files were written."
+msgstr "已写入 %d / %d 个文件。"
+
+msgid "This device has no clipboard."
+msgstr "此设备没有剪贴板。"
+
+msgid "Show 1 bookmark"
+msgstr "显示 1 条书签"
+
+msgid "Show %d bookmarks"
+msgstr "显示 %d 条书签"
+
+msgid "Delete this bookmark?"
+msgstr "删除这条书签？"
+
+msgid "Copied 1 bookmark"
+msgstr "已复制 1 条书签"
+
+msgid "Copied %d bookmarks"
+msgstr "已复制 %d 条书签"
+
+msgid "Copied 1 annotation"
+msgstr "已复制 1 条标注"
+
+msgid "Copied %d annotations"
+msgstr "已复制 %d 条标注"
+
+msgid "Exported 1 bookmark"
+msgstr "已导出 1 条书签"
+
+msgid "Exported %d bookmarks"
+msgstr "已导出 %d 条书签"
+
+msgid "to the clipboard"
+msgstr "到剪贴板"
+
+msgid "%d files in %s"
+msgstr "%s 中的 %d 个文件"
+
+msgid "No bookmarks in this view."
+msgstr "此视图中没有书签。"
+
+msgid "No bookmarks fit these filters."
+msgstr "没有书签符合当前筛选条件。"
+
+msgid "Saves the filters and the sort orders (annotations and bookmarks) as they are now."
+msgstr "保存当前的筛选条件和排序方式（标注与书签）。"
+
+msgid "Filter by Highlight Text"
+msgstr "按高亮文本筛选"
+
+msgid "Exclude by Highlight Text"
+msgstr "按高亮文本排除"
+
+msgid "Filter by Note Text"
+msgstr "按笔记文本筛选"
+
+msgid "Exclude by Note Text"
+msgstr "按笔记文本排除"
