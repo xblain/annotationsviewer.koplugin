@@ -59,6 +59,11 @@ Key behaviors:
 The tabs are filters on top of the ones in Filter & sort. `Custom` lists the annotations
 that have picked words or a question of their own, and only appears once there are any.
 
+![The list](Screenshots/reviewmode-back.png)
+
+The tabs on top (All, Highlights, Notes, Custom, Bookmarks), the funnel for Filter & sort, the
+eye for review mode, and the `☰` menu with Export, Copy and Settings.
+
 The `☰` menu of the list has `Export`, which writes the notes being shown — see **Export**
 below — and `Copy`, which puts the same text on the clipboard.
 
@@ -82,6 +87,25 @@ While review mode is on:
     only the note is hidden, so the highlight can be read and the note recalled from it.
 - Long pressing a row still opens its card (or jumps, as set), so annotations can be edited
   without leaving the mode.
+
+The same page with the eye on and off — covered text keeps the highlight's own colour and its
+exact lines, so the page never jumps:
+
+<table>
+<tr>
+  <td width="48%"><img src="Screenshots/reviewmode-front.png" alt="Review mode, covered"></td>
+  <td width="48%"><img src="Screenshots/reviewmode-back.png" alt="Review mode, revealed"></td>
+</tr>
+</table>
+
+Its settings, over two pages:
+
+<table>
+<tr>
+  <td width="48%"><img src="Screenshots/reviewmode-settings.png" alt="Review mode settings"></td>
+  <td width="48%"><img src="Screenshots/reviewmode-settings2.png" alt="Review mode settings, second page"></td>
+</tr>
+</table>
 
 ## Custom cover
 
@@ -114,6 +138,16 @@ Cover only some words of an annotation instead of all of it:
 Picked words win over "Cover only the note when there is one": a highlight with a note stays
 readable, but its picked words are hidden. A question wins over picked words, since it replaces
 the whole text.
+
+The card lists the picked words as chips, each removable, and shows the question in place of
+the picked words once there is one:
+
+<table>
+<tr>
+  <td width="48%"><img src="Screenshots/edit-card-select.png" alt="The card with picked words"></td>
+  <td width="48%"><img src="Screenshots/edit-card-question.png" alt="The card with a question"></td>
+</tr>
+</table>
 
 Settings, under `Custom cover`, splits into `Question` and `Picked words`, each with a note on
 how it is used, a switch, and a count with `Remove all`:
@@ -176,63 +210,33 @@ system refuses and cut at about 80 bytes, with the date and time added unless yo
 Settings → `Export` shows a preview of the file above the settings, drawn in the chosen format,
 so the effect of each setting can be seen before writing anything.
 
+![Export settings with a live preview](Screenshots/export.png)
+
+## Filter & sort
+
+<table>
+<tr>
+  <td width="48%"><img src="Screenshots/select-sort.png" alt="Filter & sort, filters"></td>
+  <td width="48%"><img src="Screenshots/sort.png" alt="Filter & sort, sorting"></td>
+</tr>
+</table>
+
+The first page filters: book, author, series, language and tag pickers, the colours and styles
+(each usable as "only these" or "hide these"), and a search field. The second sorts, by up to
+three keys, each ascending or descending, with the quick choices above them.
+
+## Settings
+
+<table>
+<tr>
+  <td width="48%"><img src="Screenshots/settings.png" alt="Settings, first page"></td>
+  <td width="48%"><img src="Screenshots/settings2.png" alt="Settings, second page"></td>
+</tr>
+</table>
+
 ## Where the settings live
 
 Your picks and questions are display choices, so they are kept in the plugin's own settings
 file, `koreader/settings/annotationsviewer.lua`, keyed by book path and annotation, and never
 written into the book's sidecar. The other settings (fonts, margins, review mode styles) live
 in the same file.
-
-## Screenshots
-
-Overview of every page:
-
-![The list](Screenshots/sort.png)
-![Export settings](Screenshots/export.png)
-![Settings](Screenshots/settings.png)
-
-### The list
-
-![The list](Screenshots/sort.png)
-
-The tabs on top (All, Highlights, Notes, Custom, Bookmarks), the funnel for Filter & sort, the
-eye for review mode, and the ☰ menu with Export, Copy and Settings.
-
-### Review mode
-
-![Review mode, covered](Screenshots/reviewmode-front.png)
-![Review mode, revealed](Screenshots/reviewmode-back.png)
-![Review mode settings](Screenshots/reviewmode-settings.png)
-![Review mode settings, second page](Screenshots/reviewmode-settings2.png)
-
-The first two are the same page with the eye on and off: covered text keeps the highlight's own
-colour and its exact lines, so the page never jumps.
-
-### Custom cover
-
-![The card with picked words](Screenshots/edit-card-select.png)
-![The card with a question](Screenshots/edit-card-question.png)
-
-The card lists the picked words as chips, each removable, and shows the question in place of the
-picked words once there is one.
-
-### Export
-
-![Export settings with a live preview](Screenshots/export.png)
-
-The preview at the top is drawn in the format being chosen — here the XHTML of the EPUB — so each
-setting can be judged before writing anything.
-
-### Settings
-
-![Settings, first page](Screenshots/settings.png)
-![Settings, second page](Screenshots/settings2.png)
-
-### Filter & sort
-
-![Filter & sort, first page](Screenshots/select-sort.png)
-![Sorting by up to three keys](Screenshots/sort.png)
-
-The first page filters: book, author, series, language and tag pickers, the colours and styles
-(each usable as "only these" or "hide these"), and a search field. The second sorts, by up to
-three keys, each ascending or descending, with the quick choices above them.
