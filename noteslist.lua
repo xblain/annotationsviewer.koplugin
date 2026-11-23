@@ -1605,9 +1605,15 @@ end
 -- Core.Export: the list (with its filter and sort) as a Markdown or plain-text file, or onto the
 -- clipboard. What goes in is set on the Core.Export page (☰ → Core.Export, or Settings → Core.Export); every
 -- option is a setting "export_<name>" with its default here. Export.build turns notes into text.
+-- The series every export is marked with, so the files say where they come from and can be told
+-- apart from the books they quote: "Annotations", or "Bookmarks" for a bookmark-only list.
+function Core.Export.series(notes)
+    return Core.Export.allBookmarks(notes) and _("Bookmarks") or _("Annotations")
+end
 Core.Export.DEFAULTS = {
-    format = "md",        -- "md" | "txt"
-    header = true,        -- "Annotations" title and the filter line at the top
+    format = "md",        -- "md" | "txt" | "html" | "epub"
+    header = false,       -- "Annotations" title and the filter line at the top (off: the file starts
+                          -- with the book, its chapters or the first note)
     author = true,        -- author after the book title
     chapter = "line",     -- "line" (in the info line) | "heading" | "none"
     date = "date",        -- "date" | "datetime" | "none"
@@ -1617,6 +1623,7 @@ Core.Export.DEFAULTS = {
     style = false,        -- colour and style of the highlight
     tags = false,
     group = "book",       -- "book" (each book once, in the order it first shows) | "list" (as in the list)
+    chapter_order = "book", -- "book" (chapters in the order the book has them) | "list" (as in the list)
     highlight = "quote",  -- Markdown: "quote" | "italic" | "plain"
     note_style = "bold",  -- Markdown: "bold" ("Note:" label) | "quote" | "italic"
     files = "one",        -- "one" | "book" (a file per book)
@@ -1665,6 +1672,46 @@ function Core.Export.groups(notes, by_book)
     end
     return groups
 end
+-- The notes of one book with their chapters in the order the book has them. The list already knows
+-- The notes of one book in reading order: the chapters follow the book, and so do the notes within
+-- a chapter. The list already knows that order — "Position" — so the same comparator it sorts with
+-- is used here, and the notes of a chapter are pulled together under it.
+function Core.Export.chaptersInBookOrder(notes)
+    local by_pos = {}
+    for i = 1, #notes do by_pos[i] = notes[i] end
+    local cmp = Core.SortState.build("pos:asc")
+    if cmp then pcall(table.sort, by_pos, cmp) end
+    -- the chapters in the order their first note appears, then the notes grouped under them
+    local rank, next_rank = {}, 0
+    for i = 1, #by_pos do
+        local ch = by_pos[i].chapter or ""
+        if rank[ch] == nil then next_rank = next_rank + 1; rank[ch] = next_rank end
+    end
+    local out = {}
+    for i = 1, #by_pos do table.insert(out, by_pos[i]) end
+    -- a stable sort on the chapter only: within a chapter the notes keep the reading order above
+    table.sort(out, function(a, b)
+        local ra, rb = rank[a.chapter or ""] or 0, rank[b.chapter or ""] or 0
+        return ra < rb
+    end)
+    -- the sort above is not stable in Lua, so re-sort each chapter by position on its own
+    local start, current = 1, nil
+    local function settle(from, to)
+        if to <= from then return end
+        local slice = {}
+        for i = from, to do slice[#slice + 1] = out[i] end
+        if cmp then pcall(table.sort, slice, cmp) end
+        for i = from, to do out[i] = slice[i - from + 1] end
+    end
+    for i = 1, #out + 1 do
+        local ch = out[i] and out[i].chapter or nil
+        if ch ~= current then
+            if current ~= nil then settle(start, i - 1) end
+            current, start = ch, i
+        end
+    end
+    return out
+end
 function Core.Export.dateText(datetime, o)
     if o.date == "none" or not datetime or datetime == "" then return nil end
     local with_time = o.date == "datetime"
@@ -1681,24 +1728,40 @@ function Core.Export.authorsText(authors)
     return (tostring(authors):gsub("%s*\n%s*", ", "))
 end
 -- One book (a group) as lines appended to out.
-function Core.Export.addBook(out, g, o)
+-- `level`: the Markdown level of the book heading (default 2); chapters are one below it.
+-- `skip_book_heading`: no heading for the book itself (a file that holds a single book, where the
+-- name is already the file's, so repeating it only adds an empty level above the chapters).
+function Core.Export.addBook(out, g, o, skip_book_heading, level)
     local md = o.format ~= "txt"
+    local book_level = level or 2
+    -- without the book heading the chapters take its level, so the top is still a real heading
+    local chapter_level = skip_book_heading and book_level or (book_level + 1)
     local title = Core.Export.esc(g.title or _("Unknown book"), md)
     local authors = o.author and Core.Export.authorsText(g.authors)
     local heading = title .. (authors and (" — " .. Core.Export.esc(authors, md)) or "")
-    if md then table.insert(out, "## " .. heading)
-    else
-        table.insert(out, heading)
-        table.insert(out, string.rep("=", math.max(3, #(heading:gsub("[\128-\191]", "")))))
+    if not skip_book_heading then
+        if md then table.insert(out, string.rep("#", book_level) .. " " .. heading)
+        else
+            table.insert(out, heading)
+            table.insert(out, string.rep("=", math.max(3, #(heading:gsub("[\128-\191]", "")))))
+        end
+        table.insert(out, "")
     end
-    table.insert(out, "")
     local current_chapter
-    for i = 1, #g.notes do
-        local note = g.notes[i]
+    local chapters_seen = 0
+    -- `chapter_order`: "book" (the order the chapters have in the book) or "list" (the order they
+    -- first show up in the list). It is a sort of the notes, so it applies whether the chapter is
+    -- a heading or sits in the info line — any list that carries chapters gets the book's order.
+    local ordered = g.notes
+    if o.chapter ~= "none" and o.chapter_order == "book" then
+        ordered = Core.Export.chaptersInBookOrder(g.notes)
+    end
+    for i = 1, #ordered do
+        local note = ordered[i]
         local chapter = note.chapter ~= "" and note.chapter or nil
         if o.chapter == "heading" and chapter and chapter ~= current_chapter then
             current_chapter = chapter
-            if md then table.insert(out, "### " .. Core.Export.esc(chapter, md))
+            if md then table.insert(out, string.rep("#", chapter_level) .. " " .. Core.Export.esc(chapter, md))
             else
                 table.insert(out, chapter)
                 table.insert(out, string.rep("-", math.max(3, #(chapter:gsub("[\128-\191]", "")))))
@@ -1779,23 +1842,458 @@ function Core.Export.addBook(out, g, o)
         table.insert(out, "")
     end
 end
+-- HTML: everything that comes from a book goes through here, so a title or a note can never
+-- break the markup.
+function Core.Export.htmlEsc(s)
+    s = tostring(s or "")
+    s = s:gsub("&", "&amp;")
+    s = s:gsub("<", "&lt;")
+    s = s:gsub(">", "&gt;")
+    s = s:gsub('"', "&quot;")
+    return s
+end
+-- The stylesheet of an HTML export. KOReader opens .html with CREngine (an ebook engine, not a
+-- browser): it understands a plain <style> block, but a stylesheet it cannot parse must never
+-- leave a blank page, so the markup also carries what it needs inline (see addHtmlBook).
+Core.Export.HTML_STYLE = table.concat({
+    "body { font-family: serif; line-height: 1.4; }",
+    "h1 { font-size: 1.3em; }",
+    "h2 { font-size: 1.1em; border-bottom: 1px solid #999; }",
+    "h3 { font-size: 1em; font-style: italic; }",
+    ".meta { font-size: 0.85em; color: #666; }",
+    "blockquote { margin-left: 1em; border-left: 3px solid #bbb; padding-left: 0.6em; }",
+    ".note-label { font-weight: bold; }",
+    ".tags { font-size: 0.85em; color: #666; }",
+    ".filter { font-style: italic; color: #666; }",
+}, "\n")
+
+-- An EPUB export: one XHTML document per book, the EPUB 2 package files around it, and a table of
+-- contents with the books and their chapters. Written with KOReader's own Archiver.Writer, which
+-- is also what "Save as EPUB" in the Wikipedia lookup uses.
+--
+-- The chapter headings become the TOC entries, so the reader can jump between chapters the way it
+-- does in a book.
+function Core.Export.epubDocument(notes, o, filter_label)
+    -- the readable part: the same markup the HTML export produces, without the document wrapper
+    local body = {}
+    local groups = Core.Export.groups(notes, o.group ~= "list")
+    -- A single book is the whole document: its name is already the EPUB's title, so writing it
+    -- again as a heading would only repeat the first line. With several books the headings are
+    -- what tells them apart, so those stay.
+    local single_book = #groups == 1
+    -- The series heading and the filter line: both follow the "Title and filter at the top" switch.
+    -- The heading is h1 and the books sit under it, so the reading order of the levels holds.
+    local level = 1
+    if o.header then
+        level = 2
+        table.insert(body, "<h1>" .. Core.Export.htmlEsc(Core.Export.series(notes)) .. "</h1>")
+        if filter_label and filter_label ~= "" then
+            table.insert(body, '<p class="filter">'
+                .. Core.Export.htmlEsc(_("Filter") .. ": " .. filter_label) .. "</p>")
+        end
+    end
+    for k = 1, #groups do
+        Core.Export.addHtmlBook(body, groups[k], o, single_book, k, level)
+    end
+    return table.concat(body, "\n")
+end
+-- The books of an EPUB export, for its table of contents:
+-- { title =, anchor = (id of the book heading, nil when the body has none), chapters = { { name =, anchor = } } }
+-- The anchors are the ids epubDocument wrote into the headings, so an entry jumps to its place.
+function Core.Export.epubOutline(notes, o)
+    local groups = Core.Export.groups(notes, o.group ~= "list")
+    local single_book = #groups == 1
+    local out = {}
+    for g = 1, #groups do
+        local group = groups[g]
+        local entry = {
+            title = group.title or _("Unknown book"),
+            -- the book heading exists only when the body writes it (not for a single book)
+            anchor = (not single_book) and ("a" .. g) or nil,
+            chapters = {},
+        }
+        if o.chapter == "heading" then
+            -- the same order the body writes, so the TOC entries follow the pages
+            local ordered = group.notes
+            if o.chapter_order == "book" then
+                ordered = Core.Export.chaptersInBookOrder(group.notes)
+            end
+            local seen = {}
+            for i = 1, #ordered do
+                local chapter = ordered[i].chapter
+                if chapter and chapter ~= "" and not seen[chapter] then
+                    seen[chapter] = true
+                    table.insert(entry.chapters, {
+                        name = chapter,
+                        anchor = "a" .. g .. "-" .. #entry.chapters + 1,
+                    })
+                end
+            end
+        end
+        table.insert(out, entry)
+    end
+    return out
+end
+-- Writes an EPUB of these notes to `path`. Returns true, or nil and an error message.
+function Core.Export.writeEpub(notes, o, filter_label, path)
+    local ok_arch, Archiver = pcall(require, "ffi/archiver")
+    if not ok_arch or not Archiver or not Archiver.Writer then
+        return nil, _("This device cannot write EPUB files.")
+    end
+
+    -- a handle to the final file may still be open in the reader, so write beside it and rename
+    local tmp = path .. ".tmp"
+    local epub = Archiver.Writer:new{}
+    if not epub:open(tmp, "epub") then
+        return nil, string.format(_("Could not create the file: %s"), tostring(tmp))
+    end
+    local mtime = os.time()
+    -- A file per book makes an EPUB whose title is that book; one file with several books keeps
+    -- the general name.
+    local title
+    local title_groups = Core.Export.groups(notes, true)
+    if #title_groups == 1 and not Core.Export.allBookmarks(notes) then
+        title = title_groups[1].title or _("Annotations")
+    else
+        title = Core.Export.allBookmarks(notes) and _("Bookmarks") or _("Annotations")
+    end
+    local author = (notes[1] and notes[1].book_authors) or ""
+    local bookid = "urn:uuid:" .. string.format("%08x-%04x-%04x-%04x-%012x",
+        os.time(), math.random(0, 0xffff), math.random(0, 0xffff),
+        math.random(0, 0xffff), math.random(0, 0xffffff))
+    local esc = Core.Export.htmlEsc
+
+    epub:setZipCompression("store")
+    epub:addFileFromMemory("mimetype", "application/epub+zip", mtime)
+    epub:setZipCompression("deflate")
+
+    epub:addFileFromMemory("META-INF/container.xml", [[
+<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>]], mtime)
+
+    local outline = Core.Export.epubOutline(notes, o)
+    -- Every exported file carries the series "Annotations" (Bookmarks for a bookmark-only list), so
+    -- KOReader groups them together in the library and they can be told apart from the books they
+    -- quote. dp:series is what KOReader reads for that.
+    local series = Core.Export.series(notes)
+    local content_opf = {
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">',
+        '  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"',
+        '            xmlns:opf="http://www.idpf.org/2007/opf"',
+        '            xmlns:dp="http://www.dp.org/books"',
+        '            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
+        '    <dc:title>' .. esc(title) .. '</dc:title>',
+        '    <dc:language>und</dc:language>',
+        '    <dc:identifier id="bookid">' .. bookid .. '</dc:identifier>',
+        (author ~= "" and ('    <dc:creator>' .. esc(author) .. '</dc:creator>') or ''),
+        '    <meta name="calibre:series" content="' .. esc(series) .. '"/>',
+        '    <meta property="belongs-to-collection" id="c01">' .. esc(series) .. '</meta>',
+        '    <meta refines="#c01" property="collection-type">series</meta>',
+        '  </metadata>',
+        '  <manifest>',
+        '    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>',
+        '    <item id="css" href="stylesheet.css" media-type="text/css"/>',
+        '    <item id="content" href="content.xhtml" media-type="application/xhtml+xml"/>',
+        '  </manifest>',
+        '  <spine toc="ncx">',
+        '    <itemref idref="content"/>',
+        '  </spine>',
+        '</package>',
+    }
+    epub:addFileFromMemory("OEBPS/content.opf", table.concat(content_opf, "\n"), mtime)
+
+    epub:addFileFromMemory("OEBPS/stylesheet.css", table.concat({
+        "body { text-align: justify; line-height: 1.4; }",
+        "h1 { font-size: 1.3em; margin: 0.8em 0 0.6em 0; }",
+        "h2 { font-size: 1.1em; margin: 1.4em 0 0.4em 0; page-break-before: auto; }",
+        "h3 { font-size: 1em; font-style: italic; margin: 1.2em 0 0.3em 0; }",
+        "p { margin: 0.3em 0; }",
+        "blockquote { margin: 0.4em 0 0.5em 1em; padding-left: 0.6em; }",
+        ".meta { font-size: 0.85em; color: #666; }",
+        ".tags { font-size: 0.85em; color: #666; }",
+        ".filter { font-style: italic; color: #666; }",
+        ".note-label { font-weight: bold; }",
+    }, "\n"), mtime)
+
+    epub:addFileFromMemory("OEBPS/content.xhtml", table.concat({
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">',
+        '<html xmlns="http://www.w3.org/1999/xhtml">',
+        '<head>',
+        '  <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>',
+        '  <title>' .. esc(title) .. '</title>',
+        '  <link rel="stylesheet" type="text/css" href="stylesheet.css"/>',
+        '</head>',
+        '<body>',
+        Core.Export.epubDocument(notes, o, filter_label),
+        '</body>',
+        '</html>',
+    }, "\n"), mtime)
+
+    -- One book is the whole document, and its name is already the EPUB's title: its chapters go
+    -- straight into the navMap rather than under a first entry repeating that name.
+    local single_book = #outline == 1
+    local depth_ncx = 1
+    if not single_book then
+        for i = 1, #outline do
+            if #outline[i].chapters > 0 then depth_ncx = 2; break end
+        end
+    end
+    local toc = {
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">',
+        '  <head>',
+        '    <meta name="dtb:uid" content="' .. bookid .. '"/>',
+        string.format('    <meta name="dtb:depth" content="%d"/>', depth_ncx),
+        '    <meta name="dtb:totalPageCount" content="0"/>',
+        '    <meta name="dtb:maxPageNumber" content="0"/>',
+        '  </head>',
+        '  <docTitle><text>' .. esc(title) .. '</text></docTitle>',
+        '  <navMap>',
+    }
+    local play = 0
+    local function navPoint(indent, label, anchor)
+        play = play + 1
+        table.insert(toc, string.format('%s<navPoint id="navpoint-%d" playOrder="%d">',
+            indent, play, play))
+        table.insert(toc, indent .. '  <navLabel><text>' .. esc(label) .. '</text></navLabel>')
+        -- the anchor makes the entry jump to its heading; without one it only reaches the top
+        table.insert(toc, indent .. '  <content src="content.xhtml'
+            .. (anchor and ("#" .. anchor) or "") .. '"/>')
+        return indent
+    end
+    for i = 1, #outline do
+        local entry = outline[i]
+        if single_book then
+            -- The book's name is already the EPUB's title, so it is not repeated here: the table
+            -- of contents lists the chapters, and with no chapter headings (the default) it stays
+            -- empty rather than pointing at a name the reader already sees.
+            for j = 1, #entry.chapters do
+                local ch = entry.chapters[j]
+                local indent = navPoint("    ", ch.name, ch.anchor)
+                table.insert(toc, indent .. '</navPoint>')
+            end
+        else
+            local indent = navPoint("    ", entry.title, entry.anchor)
+            for j = 1, #entry.chapters do
+                local ch = entry.chapters[j]
+                local deeper = navPoint(indent .. "  ", ch.name, ch.anchor)
+                table.insert(toc, deeper .. "  </navPoint>")
+            end
+            table.insert(toc, indent .. '</navPoint>')
+        end
+    end
+    table.insert(toc, '  </navMap>')
+    table.insert(toc, '</ncx>')
+    epub:addFileFromMemory("OEBPS/toc.ncx", table.concat(toc, "\n"), mtime)
+
+    -- close() has no documented success value, so the proof that it worked is the file itself
+    local ok, err = epub:close()
+    if ok == false or lfs.attributes(tmp, "mode") ~= "file" then
+        pcall(os.remove, tmp)
+        return nil, tostring(err or _("Could not write the file."))
+    end
+    -- os.rename does not replace an existing file on every platform, remove first
+    pcall(os.remove, path)
+    local moved, move_err = os.rename(tmp, path)
+    if not moved or lfs.attributes(path, "mode") ~= "file" then
+        pcall(os.remove, tmp)
+        return nil, tostring(move_err or _("Could not write the file."))
+    end
+    return true
+end
+-- One row of the export as HTML: the note's metadata, the highlighted text and the note.
+-- `style` is "quote" | "italic" | "plain" for the highlight, as in Markdown.
+-- `skip_book_heading`: leave out the <h2> with the book name (EPUB with a single book, where that
+-- name is already the document title).
+-- `anchor`: an id for the headings written here, so a table of contents can point at them. It is a
+-- number; the book heading takes it and each chapter heading takes `<anchor>-<n>`.
+function Core.Export.addHtmlBook(out, g, o, skip_book_heading, anchor, heading_level)
+    local esc = Core.Export.htmlEsc
+    -- HTML only: CREngine builds the table of contents from the heading levels, and a document
+    -- whose first heading is h2 gets an empty root entry above it (shown as "_"). Starting at h1
+    -- avoids that. The EPUB has its own toc.ncx, so it keeps h2/h3 there.
+    local book_tag = heading_level or 2
+    -- without the book heading the chapters are the top level themselves
+    local chapter_tag = skip_book_heading and book_tag or (book_tag + 1)
+    if not skip_book_heading then
+        local title = esc(g.title or _("Unknown book"))
+        local authors = o.author and Core.Export.authorsText(g.authors)
+        local id = anchor and (' id="a' .. anchor .. '"') or ""
+        table.insert(out, "<h" .. book_tag .. id .. ">" .. title
+            .. (authors and (" &#8212; " .. esc(authors)) or "") .. "</h" .. book_tag .. ">")
+    end
+    local current_chapter
+    local chapters_seen = 0
+    -- same rule as the Markdown and plain text: the book's order when asked for
+    local ordered = g.notes
+    if o.chapter ~= "none" and o.chapter_order == "book" then
+        ordered = Core.Export.chaptersInBookOrder(g.notes)
+    end
+    for i = 1, #ordered do
+        local note = ordered[i]
+        local chapter = note.chapter ~= "" and note.chapter or nil
+        if o.chapter == "heading" and chapter and chapter ~= current_chapter then
+            current_chapter = chapter
+            local id = ""
+            if anchor then
+                chapters_seen = chapters_seen + 1
+                id = ' id="a' .. anchor .. "-" .. chapters_seen .. '"'
+            end
+            table.insert(out, "<h" .. chapter_tag .. id .. ">" .. esc(chapter)
+                .. "</h" .. chapter_tag .. ">")
+        end
+        local meta = {}
+        if note.bookmark then table.insert(meta, _("Bookmark")) end
+        local date = Core.Export.dateText(note.datetime, o)
+        if date then table.insert(meta, esc(date)) end
+        if o.chapter == "line" and chapter then table.insert(meta, esc(chapter)) end
+        if o.page then
+            local page_no = note.page_label
+            if page_no == nil and tonumber(note.page) then page_no = tonumber(note.page) end
+            if page_no ~= nil and page_no ~= "" then table.insert(meta, _("page") .. " " .. esc(page_no)) end
+        end
+        if o.style and not note.bookmark then
+            if note.color and note.color ~= "" then table.insert(meta, esc(colorName(note.color:lower()))) end
+            local drawer = note.drawer and note.drawer:lower()
+            if drawer and drawer ~= "" then table.insert(meta, esc(STYLE_NAMES[drawer] or drawer)) end
+        end
+        if #meta > 0 then
+            table.insert(out, '<div class="meta" style="font-size:0.85em;color:#666">'
+                .. table.concat(meta, " &#183; ") .. "</div>")
+        end
+        local text = Core.Export.lines(note.highlighted_text)
+        if table.concat(text):find("%S") then
+            local body = esc(table.concat(text, "\n"))
+            if o.highlight == "italic" then body = "<em>" .. body .. "</em>" end
+            table.insert(out, '<blockquote style="margin-left:1em;border-left:3px solid #bbb;padding-left:0.6em">'
+                .. body .. "</blockquote>")
+        end
+        local user_note = o.notes and Core.Export.lines(note.user_note) or {}
+        if table.concat(user_note):find("%S") then
+            local label = '<span style="font-weight:bold">' .. esc(_("Note")) .. ":</span> "
+            local body = esc(table.concat(user_note, "\n"))
+            if o.note_style == "italic" then body = "<em>" .. body .. "</em>" end
+            table.insert(out, "<div>" .. label .. body .. "</div>")
+        end
+        if o.tags then
+            local tags = Core.NoteWrapper:new(note):getTags()
+            if type(tags) == "table" and #tags > 0 then
+                local esc_tags = {}
+                for j, t in ipairs(tags) do esc_tags[j] = esc(t) end
+                table.insert(out, '<div style="font-size:0.85em;color:#666">' .. esc(_("Tags")) .. ": "
+                    .. table.concat(esc_tags, ", ") .. "</div>")
+            end
+        end
+    end
+end
 -- The whole text of one file. header: the title and filter line on top (not in a file per book).
 function Core.Export.build(notes, o, filter_label, header)
     o = o or Core.Export.options()
     if header == nil then header = o.header end
+    -- An EPUB is a ZIP of XHTML files, so there is no plain text to preview. What the preview shows
+    -- is that document as the archive will hold it, so it reads differently from the Markdown and
+    -- plain text exports instead of looking like a copy of them (see exportPreview).
+    if o.format == "epub" then
+        local groups = Core.Export.groups(notes, o.group ~= "list")
+        local single_book = #groups == 1
+        local doc_title = single_book and (groups[1].title or _("Annotations"))
+            or Core.Export.series(notes)
+        local out = {
+            '<?xml version="1.0" encoding="utf-8"?>',
+            '<html xmlns="http://www.w3.org/1999/xhtml">',
+            '<head>',
+            '  <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>',
+            '  <title>' .. Core.Export.htmlEsc(doc_title) .. '</title>',
+            '  <link rel="stylesheet" type="text/css" href="stylesheet.css"/>',
+            '</head>',
+            '<body>',
+            Core.Export.epubDocument(notes, o, filter_label),
+            '</body>',
+            '</html>',
+        }
+        return table.concat(out, "\n")
+    end
+    if o.format == "html" then
+        -- An HTML document KOReader opens and renders by itself. Everything before <body> stays on
+        -- one line: CREngine lays out an .html as an ebook, and whitespace inside <head> used to
+        -- end up as an empty first page.
+        --
+        -- CREngine builds the table of contents from the heading levels. Its top level is h1, and
+        -- a document whose first heading is h2 gets an empty entry above it (shown as "_"), so the
+        -- body starts at h1. What that h1 is depends on the file:
+        --   one book  -> a single book, named by the EPUB/HTML title, so no heading of its own
+        --   several   -> every book, by name
+        local groups = Core.Export.groups(notes, o.group ~= "list")
+        local single_book = #groups == 1
+        -- the document title: the book's name when the file holds one book, the series otherwise
+        local doc_title = single_book and (groups[1].title or _("Annotations"))
+            or Core.Export.series(notes)
+        local out = {
+            "<!DOCTYPE html>",
+            '<html><head><meta charset="utf-8"><title>' .. Core.Export.htmlEsc(doc_title) .. "</title>"
+                .. '<meta name="generator" content="annotationsviewer.koplugin">'
+                .. '<meta name="series" content="' .. Core.Export.htmlEsc(Core.Export.series(notes)) .. '">'
+                .. "<style>" .. Core.Export.HTML_STYLE:gsub("\n", " ") .. "</style></head>",
+            "<body>",
+        }
+        -- The series heading and the filter line follow the "Title and filter at the top" switch,
+        -- for one book as well as several. The heading is h1 and the books sit under it, so the
+        -- levels read in order.
+        if header then
+            table.insert(out, "<h1>" .. Core.Export.htmlEsc(Core.Export.series(notes)) .. "</h1>")
+            if filter_label and filter_label ~= "" then
+                table.insert(out, '<div class="filter">' .. Core.Export.htmlEsc(_("Filter") .. ": " .. filter_label)
+                    .. "</div>")
+            end
+        end
+        -- The same anchors the EPUB uses; headings start at h1 (or h2 under the series heading).
+        local level = header and 2 or 1
+        for k = 1, #groups do
+            Core.Export.addHtmlBook(out, groups[k], o, single_book, k, level)
+        end
+        table.insert(out, "</body></html>")
+        return table.concat(out, "\n")
+    end
     local md = o.format ~= "txt"
     local out = {}
+    local all_groups = Core.Export.groups(notes, o.group ~= "list")
+    local single_book = #all_groups == 1
+    -- The series heading and the filter line: both follow the "Title and filter at the top" switch,
+    -- for one book as well as several. No YAML front matter: a "---" block is read as a rule or a
+    -- heading by some readers, KOReader among them, and would show in its table of contents.
+    -- A file that holds one book does not repeat the book's name as a heading — the name is the
+    -- file's name, and a heading above the chapters would be an empty level in the table of contents.
     if header then
-        local title = Core.Export.allBookmarks(notes) and _("Bookmarks") or _("Annotations")
+        local title = Core.Export.series(notes)
         if md then table.insert(out, "# " .. title) else table.insert(out, title:upper()) end
         if filter_label and filter_label ~= "" then
-            local line = _("Filter") .. ": " .. Core.Export.esc(filter_label, md)
-            table.insert(out, md and ("_" .. line .. "_") or line)
+            -- plain text: Markdown emphasis marks would show up as stray characters in readers that
+            -- do not render them
+            table.insert(out, _("Filter") .. ": " .. Core.Export.esc(filter_label, md))
         end
         table.insert(out, "")
     end
-    local groups = Core.Export.groups(notes, o.group ~= "list")
-    for k = 1, #groups do Core.Export.addBook(out, groups[k], o) end
+    local groups = all_groups
+    -- One book is the whole file: its chapters take the top level. Several books are told apart by
+    -- their headings, one level below the series heading when there is one.
+    local level = header and 2 or 1
+    for k = 1, #groups do
+        Core.Export.addBook(out, groups[k], o, single_book, level)
+    end
+    -- Markdown: the series and generator as an HTML comment at the very end. A comment is not shown
+    -- by a Markdown renderer, so it cannot turn into a stray heading or rule the way a YAML block
+    -- ("---") does, and it stays available to anything that reads the file as text.
+    if md then
+        table.insert(out, "")
+        table.insert(out, "<!-- series: " .. Core.Export.series(notes):gsub("%-%-", "- -")
+            .. "; generator: annotationsviewer.koplugin -->")
+    end
     return table.concat(out, "\n")
 end
 -- the old one: Markdown with the default options (tests)
@@ -1816,7 +2314,11 @@ function Core.Export.fileName(base, o, used, stamp)
     used = used or {}
     while used[name:lower()] do name = base .. " (" .. i .. ")"; i = i + 1 end
     used[name:lower()] = true
-    return name .. (o.format == "txt" and ".txt" or ".md")
+    local ext = ".md"
+    if o.format == "txt" then ext = ".txt"
+    elseif o.format == "html" then ext = ".html"
+    elseif o.format == "epub" then ext = ".epub" end
+    return name .. ext
 end
 -- The files of an export: { { name =, text = } , ... }
 function Core.Export.files(notes, o, filter_label, stamp)
@@ -1825,10 +2327,12 @@ function Core.Export.files(notes, o, filter_label, stamp)
         local groups = Core.Export.groups(notes, true)
         for k = 1, #groups do
             local g = groups[k]
-            local out = {}
-            Core.Export.addBook(out, g, o)
+            -- build() rather than addBook(): it is what picks the format (HTML needs its own
+            -- document wrapper, Markdown and plain text their own markup). The header and the
+            -- filter line follow the same settings as the single file: the filter applies to every
+            -- book of the export, so each file says so too.
             table.insert(files, { name = Core.Export.fileName(g.title or "annotations", o, used, stamp),
-                text = table.concat(out, "\n"), count = #g.notes })
+                text = Core.Export.build(g.notes, o, filter_label), count = #g.notes })
         end
         return files
     end
@@ -1861,7 +2365,11 @@ end
 -- the Core.Export row on the Settings page: "Markdown · one file"
 function Core.Export.summary()
     local o = Core.Export.options()
-    return (o.format == "txt" and _("Plain text") or _("Markdown")) .. " · " .. (o.files == "book" and _("One per book") or _("One file"))
+    local label = _("Markdown")
+    if o.format == "txt" then label = _("Plain text")
+    elseif o.format == "html" then label = "HTML"
+    elseif o.format == "epub" then label = "EPUB" end
+    return label .. " · " .. (o.files == "book" and _("One per book") or _("One file"))
 end
 -- Writes the files; returns the file (the folder when there are several) and the number of files,
 -- or nil and the error (saying how many were written already, for a file per book).
@@ -1871,7 +2379,43 @@ function Core.Export.write(notes, o, filter_label)
         local ok, err = lfs.mkdir(dir)
         if not ok and lfs.attributes(dir, "mode") ~= "directory" then return nil, tostring(err or dir) end
     end
-    local files = Core.Export.files(notes, o, filter_label, os.date("%Y%m%d-%H%M%S")) -- one time for every file
+    local stamp = os.date("%Y%m%d-%H%M%S") -- one time for every file
+    -- EPUB is a ZIP, so it is written by the archive writer rather than as text — but which files
+    -- exist follows the same "one file" / "one per book" choice as the other formats.
+    if o.format == "epub" then
+        local groups = Core.Export.groups(notes, true)
+        local jobs = {}
+        if o.files == "book" then
+            local used = {}
+            for k = 1, #groups do
+                local g = groups[k]
+                table.insert(jobs, {
+                    name = Core.Export.fileName(g.title or "annotations", o, used, stamp),
+                    notes = g.notes,
+                })
+            end
+        else
+            local base = #groups == 1 and groups[1].title
+                or (Core.Export.allBookmarks(notes) and "bookmarks" or "annotations")
+            table.insert(jobs, { name = Core.Export.fileName(base, o, {}, stamp), notes = notes })
+        end
+        local first
+        for i = 1, #jobs do
+            local path = dir .. "/" .. jobs[i].name
+            -- the filter applies to every book of this export, so each file says so too
+            local ok, err = Core.Export.writeEpub(jobs[i].notes, o, filter_label, path)
+            if not ok then
+                local msg = tostring(err)
+                if i > 1 then
+                    msg = msg .. "\n" .. string.format(_("%d of %d files were written."), i - 1, #jobs)
+                end
+                return nil, msg
+            end
+            first = first or path
+        end
+        return #jobs == 1 and first or dir, #jobs
+    end
+    local files = Core.Export.files(notes, o, filter_label, stamp)
     local first
     for i = 1, #files do
         local f = files[i]
@@ -1903,7 +2447,15 @@ function NotesListWidget:exportFilterLabel()
     local chips = self:getFilterChips(true)
     for k = 1, #chips do
         local c = chips[k]
-        table.insert(parts, (c.colors and c.prefix) and (c.prefix .. " " .. c.label) or c.label)
+        -- a chip's label can come out empty (a colour the reader has no name for); the filter is
+        -- still in force, so fall back to the colour's own key rather than lose it from the line
+        local label = c.label
+        if type(label) ~= "string" or label == "" then
+            if type(c.colors) == "table" and c.colors[1] then label = tostring(c.colors[1]) end
+        end
+        if type(label) == "string" and label ~= "" then
+            table.insert(parts, (c.colors and c.prefix) and (c.prefix .. " " .. label) or label)
+        end
     end
     return table.concat(parts, ", ")
 end

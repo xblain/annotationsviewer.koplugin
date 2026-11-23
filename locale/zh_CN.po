@@ -1774,7 +1774,6 @@ msgstr "总是遮盖笔记"
 msgid "Notes are hidden even when their style is not covered above"
 msgstr "即使上方未勾选该样式，笔记也会被遮盖"
 
-
 msgid "Choose words to cover (review mode)"
 msgstr "选择要遮盖的词（复习模式）"
 
@@ -2300,7 +2299,7 @@ msgid "to the clipboard"
 msgstr "到剪贴板"
 
 msgid "%d files in %s"
-msgstr "%s 中的 %d 个文件"
+msgstr "%d 个文件，位于 %s"
 
 msgid "No bookmarks in this view."
 msgstr "此视图中没有书签。"
@@ -2322,3 +2321,21 @@ msgstr "按笔记文本筛选"
 
 msgid "Exclude by Note Text"
 msgstr "按笔记文本排除"
+
+msgid "Text size of this page"
+msgstr "本页文字大小"
+
+msgid "Headings, controls and notes of the plugin's own screens, all together"
+msgstr "插件自身界面的标题、控件和说明文字，一并放大或缩小"
+
+msgid "HTML"
+msgstr "HTML"
+
+msgid "This device cannot write EPUB files."
+msgstr "此设备无法写入 EPUB 文件。"
+
+msgid "Could not create the file."
+msgstr "无法创建文件。"
+
+msgid "Could not write the file."
+msgstr "无法写入文件。"

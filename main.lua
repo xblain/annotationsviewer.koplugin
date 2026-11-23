@@ -1651,7 +1651,9 @@ function Core.Page.exportPreview(list, h)
         }
     end
     local text
-    if o.files == "book" then
+    -- The preview never writes files: an EPUB per book would go through the archive writer, so the
+    -- preview always takes build(), which returns the text to show.
+    if o.files == "book" and o.format ~= "epub" then
         local f = Core.Export.files(notes, o, list.exportFilterLabel and list:exportFilterLabel() or "", "20260109-101200")[1]
         text = f and f.text or ""
     else
@@ -2094,7 +2096,10 @@ function Core.States.exported(count, path, bookmarks, n_files, copied)
         end
         local sub = rel
         if copied then sub = _("to the clipboard")
-        elseif n_files and n_files > 1 then sub = string.format(_("%d files in %s"), n_files, tostring(rel)) end
+        elseif n_files and n_files > 1 then
+            -- Lua 5.1 has no positional arguments, so every translation keeps this order
+            sub = string.format(_("%d files in %s"), n_files, tostring(rel))
+        end
         return VerticalGroup:new{ align = "left",
             HorizontalGroup:new{ align = "center",
                 IconWidget:new{ icon = "check", width = icon_s, height = icon_s },

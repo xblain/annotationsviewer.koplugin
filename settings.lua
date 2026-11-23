@@ -920,7 +920,8 @@ function SS:build()
         local function opt(key) return function() return Core.Export.options()[key] end end
         local function onOff(label, sub, key) return toggle(label, sub, "export_" .. key, opt(key)) end
         add(sectionBar(_("FORMAT")))
-        add(segment(_("File type"), { { "md", _("Markdown") }, { "txt", _("Plain text") } }, o.format, pick("format")))
+        add(segment(_("File type"), { { "md", _("Markdown") }, { "txt", _("Plain text") },
+            { "html", _("HTML") }, { "epub", _("EPUB") } }, o.format, pick("format")))
         add(sectionBar(_("INCLUDE")))
         add(onOff(_("Title and filter at the top"), nil, "header"))
         add(onOff(_("Author"), _("After the book title"), "author"))
@@ -955,7 +956,12 @@ function SS:build()
         end
         add(sectionBar(_("ORDER")))
         add(segment(_("Books"), { { "book", _("Each book once") }, { "list", _("As in the list") } }, o.group, pick("group")))
-        if o.format == "md" then
+        -- the book's order is a sort of the notes, so it applies whenever chapters are shown at all
+        if o.chapter ~= "none" then
+            add(segment(_("Chapters"), { { "book", _("In book order") }, { "list", _("As in the list") } },
+                o.chapter_order, pick("chapter_order")))
+        end
+        if o.format == "md" or o.format == "html" or o.format == "epub" then
             add(sectionBar(_("STYLE")))
             add(segment(_("Highlight"), { { "quote", _("Quote") }, { "italic", _("Italic") }, { "plain", _("Plain") } },
                 o.highlight, pick("highlight")))
