@@ -10,6 +10,8 @@ Key behaviors:
 - Extensive annotations filtering system enabling filtering by highlight color, style, books, tags, chapters, words in highlights and notes using inclusion and exclusion
 - Save a filter and bring it back with one tap
 - Caching annotations for faster loading
+- A review mode that hides the text so you can test yourself, covering either the whole
+  annotation, only the words you picked, or showing a question you wrote for it
 - Configure fonts, margins, spacing, truncation length and many more display options from the plugin Settings menu for lots of customization
 
 ## Features
@@ -25,6 +27,11 @@ Key behaviors:
 - Change highlight style and color and save back to book settings
 - Delete annotations
 - Go to the highlighted location in the reader
+- **Review mode**: cover annotation text to test your recall (see below)
+- **Custom cover**: per annotation, hide only the words you picked, or replace the text
+  with a question you wrote for it
+- Tap and long press on an annotation are configured separately (jump to the highlight or
+  open its card)
 - Works in portrait and landscape, the list redraws when you rotate. Landscape width is a setting
 - Night mode keeps the real highlight colors
 - Chinese, Japanese and Korean text wraps correctly
@@ -40,13 +47,84 @@ Key behaviors:
 
 1. Open KOReader.
 2. From the file cabinet menu or within a book select `Annotations`.
-3. Browse the list of annotations. Tap an item to view details and access actions:
+3. Browse the list of annotations. Tap an item to jump to it in the book, or long press it
+   to open its card (both can be swapped in Settings):
    - Open book at annotation
    - Edit note text
    - Change highlight style or color
    - Delete annotation
+4. Use the tabs at the top to narrow the list: All, Highlights, Notes, Custom, Bookmarks.
+
+The tabs are filters on top of the ones in Filter & sort. `Custom` lists the annotations
+that have picked words or a question of their own, and only appears once there are any.
 
 Use the plugin Settings (accessible from the plugin menu) to adjust fonts, font sizes, margins, spacing and other display preferences. Text and spacing have their own page with a preview on top.
+
+## Review mode
+
+Review mode covers annotation text so you can test whether you remember it. It is switched
+on and off from the eye icon in the top bar of the list, and remembers its state.
+
+While review mode is on:
+- A tap on a row shows it, and another tap hides it again, as often as you like. Only the eye
+  icon leaves the mode.
+- Text is hidden in the annotation's own color, so a yellow highlight reads as an empty yellow
+  bar. Lines keep their exact width and the page does not move.
+- Settings decides what is hidden:
+  - **Which styles** to cover (highlight, underline, strikeout, invert), all four by default.
+  - **Always cover notes**: a note is hidden even when its style is not covered above.
+    Choosing no style at all turns this on, so "notes only" always hides the notes.
+  - **Cover only the note when there is one**: a highlight that has a note keeps its text and
+    only the note is hidden, so the highlight can be read and the note recalled from it.
+- Long pressing a row still opens its card (or jumps, as set), so annotations can be edited
+  without leaving the mode.
+
+## Custom cover
+
+A finer way to cover, on top of the whole-line cover above. Every annotation can have its own,
+in either of two modes. The `Custom` tab in the list shows the annotations that have either.
+
+### Question
+
+Write a question for the whole annotation, with the annotation itself as the answer:
+
+1. Long press the annotation and tap `Add a question…` in its card.
+2. In review mode the annotation's text is replaced by that question, drawn in bold with a
+   question mark at the end (one is added if you did not write it).
+3. Tap the row to swap between the question and the text, and back.
+
+One question per annotation. Tapping its badge in the card drops it.
+
+### Picked words
+
+Cover only some words of an annotation instead of all of it:
+
+1. Long press the annotation and tap `Choose words…` in its card.
+2. The field is filled with the whole annotation. Delete everything that should stay readable,
+   leaving only what should be covered, then tap `Add`.
+3. Each pick is saved at once and the field goes back to the whole annotation, ready for the
+   next one. `Reselect` puts the text back if you deleted too much.
+4. In review mode only those words are covered; the rest of the line stays readable. A picked
+   phrase longer than a line is still covered where it wraps.
+
+Picked words win over "Cover only the note when there is one": a highlight with a note stays
+readable, but its picked words are hidden. A question wins over picked words, since it replaces
+the whole text.
+
+Settings, under `Custom cover`, splits into `Question` and `Picked words`, each with a note on
+how it is used, a switch, and a count with `Remove all`:
+- **Always show questions** / **Always cover picked words**: hide them even when their style is
+  not covered above, so a style left unticked does not show them.
+- **Remove all** covers what the list is showing right now, not every book: with one book open
+  it clears that book's annotations, and in the whole-library list it clears whatever the
+  filters leave.
+
+## Where the settings live
+
+Your picks and questions are display choices, so they are kept in the plugin's own settings
+file, `koreader/settings/annotationsviewer.lua`, keyed by book path and annotation, and never
+written into the book's sidecar. The other settings (fonts, margins, review mode styles) live
+in the same file.
 
 ## Screenshot
 
@@ -54,4 +132,4 @@ Use the plugin Settings (accessible from the plugin menu) to adjust fonts, font 
 ![Annotations Viewer — All Notes & Highlights](Screenshots/Screenshot2.png)
 ![Annotations Viewer — All Notes & Highlights](Screenshots/Screenshot3.png)
 ![Annotations Viewer — All Notes & Highlights](Screenshots/Screenshot4.png)
-
+![Annotations Viewer — Review mode](Screenshots/Screenshot5.png)
