@@ -1774,7 +1774,6 @@ msgstr "總是遮蓋筆記"
 msgid "Notes are hidden even when their style is not covered above"
 msgstr "即使上方未勾選該樣式，筆記也會被遮蓋"
 
-
 msgid "Choose words to cover (review mode)"
 msgstr "選擇要遮蓋的詞（複習模式）"
 
@@ -2300,7 +2299,7 @@ msgid "to the clipboard"
 msgstr "到剪貼簿"
 
 msgid "%d files in %s"
-msgstr "%s 中的 %d 個檔案"
+msgstr "%d 個檔案，位於 %s"
 
 msgid "No bookmarks in this view."
 msgstr "此檢視中沒有書籤。"
@@ -2322,3 +2321,21 @@ msgstr "依筆記文字篩選"
 
 msgid "Exclude by Note Text"
 msgstr "依筆記文字排除"
+
+msgid "Text size of this page"
+msgstr "本頁文字大小"
+
+msgid "Headings, controls and notes of the plugin's own screens, all together"
+msgstr "外掛自身介面的標題、控制項和說明文字，一併放大或縮小"
+
+msgid "HTML"
+msgstr "HTML"
+
+msgid "This device cannot write EPUB files."
+msgstr "此裝置無法寫入 EPUB 檔案。"
+
+msgid "Could not create the file."
+msgstr "無法建立檔案。"
+
+msgid "Could not write the file."
+msgstr "無法寫入檔案。"
