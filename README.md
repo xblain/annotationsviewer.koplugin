@@ -30,6 +30,7 @@ Key behaviors:
 - **Review mode**: cover annotation text to test your recall (see below)
 - **Custom cover**: per annotation, hide only the words you picked, or replace the text
   with a question you wrote for it
+- **Export** to Markdown, plain text, HTML or EPUB, one file or one per book (see below)
 - Tap and long press on an annotation are configured separately (jump to the highlight or
   open its card)
 - Works in portrait and landscape, the list redraws when you rotate. Landscape width is a setting
@@ -57,6 +58,9 @@ Key behaviors:
 
 The tabs are filters on top of the ones in Filter & sort. `Custom` lists the annotations
 that have picked words or a question of their own, and only appears once there are any.
+
+The `☰` menu of the list has `Export`, which writes the notes being shown — see **Export**
+below — and `Copy`, which puts the same text on the clipboard.
 
 Use the plugin Settings (accessible from the plugin menu) to adjust fonts, font sizes, margins, spacing and other display preferences. Text and spacing have their own page with a preview on top.
 
@@ -119,6 +123,59 @@ how it is used, a switch, and a count with `Remove all`:
   it clears that book's annotations, and in the whole-library list it clears whatever the
   filters leave.
 
+## Export
+
+Settings → `Export` writes what the list is showing, filters included, to a file you can read
+elsewhere or keep outside KOReader.
+
+### Formats
+
+| Format | What you get |
+| --- | --- |
+| Markdown | Headings, quotes for the highlights, your notes. Opens in any editor, Joplin, Obsidian, pandoc |
+| Plain text | The same without any markup, for a plain viewer or a printout |
+| HTML | A complete document KOReader opens and renders by itself; also fine in a browser |
+| EPUB | A real EPUB 2 book: a table of contents, page turns, adjustable font size |
+
+The HTML and EPUB files are marked as belonging to the series `Annotations` (`Bookmarks` for a
+bookmark-only list), so they can be told apart from the books they quote.
+
+### Order
+
+Two settings under `Order`:
+
+- **Books**: each book once (the default), or as in the list — the second keeps the books in the
+  order the list shows them, so one book can appear more than once if other books come between.
+- **Chapters**: in book order (the default) or as in the list. Book order uses the same
+  comparison as the list's own `Position` sort, so the chapters — and the notes inside each
+  chapter — follow the book.
+
+### What goes in
+
+Independently of the format:
+
+- The book title and author, the chapter (in the info line, as a heading, or not at all), the
+  date, the page number, the highlight's colour and style, your notes, and the tags.
+- **Title and filter at the top**: on, the file starts with `Annotations` and a line naming the
+  filters that were applied; off, it starts with the book, its chapters or the first note. Off by
+  default. The plain text, Markdown, HTML and EPUB exports all follow it.
+- **Files**: one file, or one per book (named after the book).
+
+A file that holds a single book does not repeat the book's name as a heading — the name is
+already the file's name and, for HTML and EPUB, the document's title.
+
+### Where they go
+
+To `koreader/exports` by default, or a folder you choose. The folder is shown in Settings and
+can be changed there. File names are built from the book's name, cleaned of characters a file
+system refuses and cut at about 80 bytes, with the date and time added unless you turn that off
+(off means exporting again replaces the same file).
+
+### Preview
+
+Settings → `Export` shows a preview of the file above the settings, drawn in the chosen format,
+so the effect of each setting can be seen before writing anything.
+
 ## Where the settings live
 
 Your picks and questions are display choices, so they are kept in the plugin's own settings
@@ -126,10 +183,56 @@ file, `koreader/settings/annotationsviewer.lua`, keyed by book path and annotati
 written into the book's sidecar. The other settings (fonts, margins, review mode styles) live
 in the same file.
 
-## Screenshot
+## Screenshots
 
-![Annotations Viewer — All Notes & Highlights](Screenshots/Screenshot.png)
-![Annotations Viewer — All Notes & Highlights](Screenshots/Screenshot2.png)
-![Annotations Viewer — All Notes & Highlights](Screenshots/Screenshot3.png)
-![Annotations Viewer — All Notes & Highlights](Screenshots/Screenshot4.png)
-![Annotations Viewer — Review mode](Screenshots/Screenshot5.png)
+Overview of every page:
+
+![The list](Screenshots/sort.png)
+![Export settings](Screenshots/export.png)
+![Settings](Screenshots/settings.png)
+
+### The list
+
+![The list](Screenshots/sort.png)
+
+The tabs on top (All, Highlights, Notes, Custom, Bookmarks), the funnel for Filter & sort, the
+eye for review mode, and the ☰ menu with Export, Copy and Settings.
+
+### Review mode
+
+![Review mode, covered](Screenshots/reviewmode-front.png)
+![Review mode, revealed](Screenshots/reviewmode-back.png)
+![Review mode settings](Screenshots/reviewmode-settings.png)
+![Review mode settings, second page](Screenshots/reviewmode-settings2.png)
+
+The first two are the same page with the eye on and off: covered text keeps the highlight's own
+colour and its exact lines, so the page never jumps.
+
+### Custom cover
+
+![The card with picked words](Screenshots/edit-card-select.png)
+![The card with a question](Screenshots/edit-card-question.png)
+
+The card lists the picked words as chips, each removable, and shows the question in place of the
+picked words once there is one.
+
+### Export
+
+![Export settings with a live preview](Screenshots/export.png)
+
+The preview at the top is drawn in the format being chosen — here the XHTML of the EPUB — so each
+setting can be judged before writing anything.
+
+### Settings
+
+![Settings, first page](Screenshots/settings.png)
+![Settings, second page](Screenshots/settings2.png)
+
+### Filter & sort
+
+![Filter & sort, first page](Screenshots/select-sort.png)
+![Sorting by up to three keys](Screenshots/sort.png)
+
+The first page filters: book, author, series, language and tag pickers, the colours and styles
+(each usable as "only these" or "hide these"), and a search field. The second sorts, by up to
+three keys, each ascending or descending, with the quick choices above them.
