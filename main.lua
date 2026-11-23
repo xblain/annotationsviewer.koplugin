@@ -82,6 +82,15 @@ local function getInfoFontSize()
     return v
 end
 local function getHMargin() return Screen:scaleBySize(getSetting("h_margin", DEFAULT_H_MARGIN)) end
+-- How much bigger (or smaller) the Settings page's own text is than its usual size. It is a shift
+-- rather than a size so the three sizes the page uses keep their proportions.
+local function getSettingsFontShift()
+    local v = tonumber(getSetting("settings_font_shift", 0))
+    if not v then return 0 end
+    if v < -3 then return -3 end
+    if v > 9 then return 9 end
+    return math.floor(v)
+end
 local function getNoteSpacing() return Screen:scaleBySize(getSetting("note_spacing", DEFAULT_NOTE_SPACING)) end
 local function getTextMargin() return Screen:scaleBySize(getSetting("text_margin", DEFAULT_TEXT_MARGIN)) end
 local function getTruncateLines()
@@ -7097,7 +7106,7 @@ function States.noMatch(list, width, height)
         body = (bm_tab and _("No bookmarks fit these filters.") or _("No annotations fit these filters.")) .. " "
             .. (hidden == 1 and _("1 is hidden.") or string.format(_("%d are hidden."), hidden))
     end
-    table.insert(g, States.lines(body, Font:getFace("cfont", 13), col_w, COLORS.muted, false, true))
+    table.insert(g, States.lines(body, Font:getFace("cfont", 13 + getSettingsFontShift()), col_w, COLORS.muted, false, true))
     if filtered then
         table.insert(g, VerticalSpan:new{ width = Screen:scaleBySize(14) })
         table.insert(g, Page.button(_("Clear filters"), true, Screen:scaleBySize(170), function() list:clearFilters() end))
@@ -7142,9 +7151,11 @@ function FilterScreen:build()
     local inner = W - P * 2
     local thin = Size.border.button
     local MUTED = COLORS.muted
-    local face15 = Font:getFace("cfont", 15)
-    local face14 = Font:getFace("cfont", 14)
-    local face13 = Font:getFace("cfont", 13)
+    -- same shift as the Settings page, so the two read alike
+    local imp_shift = getSettingsFontShift()
+    local face15 = Font:getFace("cfont", 15 + imp_shift)
+    local face14 = Font:getFace("cfont", 14 + imp_shift)
+    local face13 = Font:getFace("cfont", 13 + imp_shift)
     local function underlined(text, face)
         local tw = TextWidget:new{ text = text, face = face }
         return VerticalGroup:new{ tw, LineWidget:new{ dimen = Geom:new{ w = tw:getSize().w, h = Size.line.medium },
@@ -7432,7 +7443,7 @@ function FilterScreen:build()
                 Screen:scaleBySize(12), Screen:scaleBySize(4)))
         else
             table.insert(body, padded(flow(chips), Screen:scaleBySize(14), Screen:scaleBySize(6)))
-            table.insert(body, padded(TextWidget:new{ text = _("Hold one to delete it."), face = Font:getFace("cfont", 12), fgcolor = COLORS.muted },
+            table.insert(body, padded(TextWidget:new{ text = _("Hold one to delete it."), face = Font:getFace("cfont", 12 + getSettingsFontShift()), fgcolor = COLORS.muted },
                 0, Screen:scaleBySize(4)))
         end
         local save_tw = TextWidget:new{ text = _("Save current filters…"), face = face13 }
@@ -7565,8 +7576,12 @@ function SS:build()
     local inner = W - P * 2
     local thin = Size.border.button
     local MUTED = COLORS.muted
-    local face15, face13 = Font:getFace("cfont", 15), Font:getFace("cfont", 13)
-    local face12 = Font:getFace("cfont", 12)
+    -- The Settings page's own text size, as a shift on its usual sizes (Settings > Text size).
+    -- Its headings are 15, its controls 13 and its notes 12; the shift moves all three together,
+    -- so making the page easier to read does not throw its layout out of proportion.
+    local page_shift = getSettingsFontShift()
+    local face15, face13 = Font:getFace("cfont", 15 + page_shift), Font:getFace("cfont", 13 + page_shift)
+    local face12 = Font:getFace("cfont", 12 + page_shift)
     local function rowLine() return Page.rowLine(P, inner) end
     local sectionBar = Page.sectionBars(P, inner)
     local function padded(widget, top, bottom) return Page.padded(widget, P, top, bottom) end
@@ -7994,6 +8009,12 @@ function SS:build()
         add(navRow(_("Bookmarks"), _("Line size, date, spacing"),
             function() UIManager:show(SS:new{ list = list, page = "bookmarks", parent_screen = self }, "flashui") end))
         add(toggle(_("Counts on tabs"), nil, "show_total", getShowTotalNotes))
+        -- The Settings page's own text size: its headings, controls and notes all move together,
+        -- so a page that is hard to read on a small screen can be made bigger without leaving the
+        -- plugin. The default 15/13/12 is what 0 means.
+        add(stepper(_("Text size of this page"),
+            _("Headings, controls and notes of the plugin's own screens, all together"),
+            "settings_font_shift", getSettingsFontShift(), -3, 9, 1, 0))
 
         add(sectionBar(_("PAGES")))
         add(segment(_("Page controls"), { { "default", _("Prev / Next") }, { "scrollbar", _("Scrollbar") },
@@ -8030,7 +8051,7 @@ function SS:build()
         local keys = ({ text = { "font_size" }, spacing = { "margins", "section_margin" } })[self.page] or {}
         right_items = { TapBox:new{ CenterContainer:new{ dimen = Geom:new{ w = Screen:scaleBySize(90), h = TOPBAR_HEIGHT },
                 (function()
-                    local tw = TextWidget:new{ text = _("Reset"), face = Font:getFace("cfont", 14) }
+                    local tw = TextWidget:new{ text = _("Reset"), face = Font:getFace("cfont", 14 + getSettingsFontShift()) }
                     return VerticalGroup:new{ tw, LineWidget:new{ dimen = Geom:new{ w = tw:getSize().w, h = Size.line.medium },
                         background = BlitBuffer.COLOR_BLACK } }
                 end)() },
@@ -8123,7 +8144,7 @@ function NotesListWidget.SubPage:build()
     local W, H = Screen:getWidth(), Screen:getHeight()
     local P = Screen:scaleBySize(24)
     local inner = W - P * 2
-    local face15 = Font:getFace("cfont", 15)
+    local face15 = Font:getFace("cfont", 15 + getSettingsFontShift())
     local function rowLine() return Page.rowLine(P, inner) end
     local current = getSetting(self.font_key, nil)
     local body = VerticalGroup:new{ align = "left" }
@@ -8255,7 +8276,8 @@ function ListPicker:build()
     local P = Screen:scaleBySize(24)
     local inner = W - P * 2
     local thin = Size.border.button
-    local face13, face14, face15 = Font:getFace("cfont", 13), Font:getFace("cfont", 14), Font:getFace("cfont", 15)
+    local face13, face14, face15 = Font:getFace("cfont", 13 + getSettingsFontShift()),
+        Font:getFace("cfont", 14 + getSettingsFontShift()), Font:getFace("cfont", 15 + getSettingsFontShift())
     local function underlined(text)
         local tw = TextWidget:new{ text = text, face = face13 }
         return VerticalGroup:new{ tw, LineWidget:new{ dimen = Geom:new{ w = tw:getSize().w, h = Size.line.medium }, background = COLORS.ink } }
@@ -8373,7 +8395,7 @@ function ListPicker:build()
             TextWidget:new{ text = it.title, face = it.serif and getFaceOr(SERIF_FONT, 17, "cfont") or face15,
                 bold = it.serif, max_width = text_w } }
         if it.subtitle and it.subtitle ~= "" then
-            table.insert(texts, TextWidget:new{ text = it.subtitle, face = Font:getFace("cfont", 12), fgcolor = COLORS.muted, max_width = text_w })
+            table.insert(texts, TextWidget:new{ text = it.subtitle, face = Font:getFace("cfont", 12 + getSettingsFontShift()), fgcolor = COLORS.muted, max_width = text_w })
         end
         local pad = Screen:scaleBySize(12)
         local row_h = math.max(box, texts:getSize().h) + pad * 2
@@ -8471,7 +8493,7 @@ function SortPicker:build()
     local P = Screen:scaleBySize(24)
     local inner = W - P * 2
     local thin = Size.border.button
-    local face14 = Font:getFace("cfont", 14)
+    local face14 = Font:getFace("cfont", 14 + getSettingsFontShift())
     local single = self.list.single_book
     local levels = SortState.view(SortState.get(single), single)
     local function apply(c)
