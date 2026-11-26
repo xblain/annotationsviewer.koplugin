@@ -857,6 +857,20 @@ function AllNotesViewer:clearBookCache(book_path)
     -- book_info rarely changes, but clear it too so tags/title edits are reflected
     Core._book_info_cache[book_path] = nil
 end
+-- Updates the plugin's own list after a change and redraws it (an edit of a closed book is written
+-- to its sidecar; the list has to show the new value without being rebuilt). No list: nothing to do.
+function AllNotesViewer:updateListedNote(parent_widget, note, fn)
+    if type(parent_widget) ~= "table" or type(parent_widget.notes_list) ~= "table" then return end
+    for i, n in ipairs(parent_widget.notes_list) do
+        if n == note or (n.book_path == note.book_path and itemMatchesNote(
+                { datetime = n.datetime, text = n.highlighted_text, pos0 = n.pos0, pos1 = n.pos1,
+                  page = n.page, drawer = n.drawer }, note)) then
+            fn(n, i)
+            break
+        end
+    end
+    parent_widget:refresh()
+end
 -- One item of KOReader's `annotations` list (sidecar or open book) as the plugin keeps it, or
 -- nil when there is nothing to show. Highlights and notes have a `drawer`; an item without one
 -- is a page bookmark: KOReader stores its place, chapter, date and an optional note, but no
@@ -2623,26 +2637,11 @@ function AllNotesViewer:showStylePicker(note, parent_widget)
     dialog = ButtonDialog:new{ title = _("Select Style"), buttons = buttons }
     NotesListWidget.showDialog(dialog)
 end
--- Updates the plugin's own list after a change and redraws it.
-local function updateListedNote(parent_widget, note, fn)
-    -- no list: the change was made after the list had to close to open the book
-    if type(parent_widget) ~= "table" or type(parent_widget.notes_list) ~= "table" then return end
-    for i, n in ipairs(parent_widget.notes_list) do
-        if n == note or (n.book_path == note.book_path and itemMatchesNote(
-                { datetime = n.datetime, text = n.highlighted_text, pos0 = n.pos0, pos1 = n.pos1,
-                  page = n.page, drawer = n.drawer }, note)) then
-            fn(n, i)
-            break
-        end
-    end
-    parent_widget:refresh()
-end
 
--- A note from a book still in KOReader's old format can't be changed until KOReader has opened
--- the book once (it converts the file then). Says so and returns true. An open book is already
--- converted in memory, so changes go through KOReader as usual.
--- The editing operations (open the book, write style / colour / note / delete, and the
--- custom-cover editors) live in edit.lua; copy them onto the plugin as methods.
+-- Editing works on a closed book too: style, colour, note and delete write the book's sidecar
+-- directly, as the original plugin did, and never open the book (an open book is changed through
+-- KOReader's live annotations). The operations live in edit.lua; copy them onto the plugin as
+-- methods.
 for _name, _fn in pairs(require("edit")) do AllNotesViewer[_name] = _fn end
 
 -- Internals exposed for tests/run.lua; KOReader doesn't use this.
@@ -2674,5 +2673,4 @@ AllNotesViewer._test = {
     splitTags = AllNotesViewer.splitTags,
 }
 
-AllNotesViewer.updateListedNote = updateListedNote
 return AllNotesViewer
