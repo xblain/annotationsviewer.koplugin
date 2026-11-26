@@ -1,6 +1,10 @@
 --[[--
-Editing an annotation from the viewer: opening its book, writing a new style, colour or note,
-deleting it, and the custom-cover (question and picked words) editors.
+Editing an annotation from the viewer: writing a new style, colour or note, deleting it, and the
+custom-cover (question and picked words) editors.
+
+An annotation of a book that is not open is changed by writing the book's sidecar directly, as the
+original plugin did; the book is never opened for an edit. An open book is changed through
+KOReader's live annotations. Only "Go to highlight" opens a book.
 
 These used to be methods written at the end of main.lua. The file returns a table of functions;
 main.lua copies them onto AllNotesViewer, so `self` is the plugin and every call site
@@ -25,6 +29,8 @@ local Event = require("ui/event")
 -- Names this file calls that live in another module.
 local buildInfoText = NoteItemWidget.buildInfoText
 local getLiveReader = Core.getLiveReader
+local editStoredAnnotation = Core.editStoredAnnotation
+local nowStamp = Core.nowStamp
 
 local getSetting = Core.getSetting
 local setSetting = Core.setSetting
@@ -37,53 +43,13 @@ local findLiveIndex = NotesListWidget.findLiveIndex
 local setLiveHighlightField = NotesListWidget.setLiveHighlightField
 local View = {}
 
+-- Old-format books (KOReader < 2024) are edited in their own `highlight[page]` entries by
+-- Core.editStoredAnnotation, as in the original plugin: nothing to block.
 function View.legacyBlocked(note)
-    if not note.legacy or (note.book_path and getLiveReader(note.book_path)) then return false end
-    NotesListWidget.showDialog(InfoMessage:new{
-        text = _("This book still uses KOReader's old format. Open it once in KOReader, then try again."),
-    })
-    return true
+    return false
 end
--- Copies the live annotation's style, colour and note back onto the list's note, so the card that
--- is opened afterwards shows them as they now are (the chosen style/colour filled in, not the
--- values the note had while the book was closed).
-function View:syncNoteFromLive(note, item)
-    if not note or type(item) ~= "table" then return end
-    if item.drawer ~= nil then note.drawer = item.drawer end
-    if item.color ~= nil then note.color = item.color end
-    if item.note ~= nil then note.user_note = item.note else note.user_note = "" end
-end
--- The book isn't open: opening it and then doing the edit through KOReader's live annotations is
--- the only way the change holds. A change written straight into a closed book's sidecar was lost:
--- KOReader read its own copy of the annotation back when the book was opened (the style reverted,
--- a new note showed up as a second copy of the highlight).
--- The book is opened where it was left (no jump), then this book's annotation list is opened again
--- on top of it so the reader can carry on with any other annotation once the card is closed.
--- do_edit(ui, index) applies what the reader already asked for (a style, a colour) to the live
--- annotation; it is nil when there is nothing to apply yet.
--- then_sheet(note, list) is only for what still needs the reader's input over the list (editing a
--- note still needs the text). Everything else is done and the reader is left in the list.
--- Returns true when it took over (the caller then does nothing more).
-function View:openBookForEdit(note, sheet, then_sheet, do_edit)
-    if getLiveReader(note.book_path) then return false end
-    local viewer = self
-    viewer:openBookAtNote(note, function()
-        viewer:closeListForEdit(sheet, nil)
-    end, function(ui)
-        local index = findLiveIndex(ui, note)
-        if do_edit and index then pcall(do_edit, ui, index) end
-        if index then viewer:syncNoteFromLive(note, ui.annotation.annotations[index]) end
-        -- The list goes up right here, inside KOReader's after-open callback: the callback runs
-        -- before the reader paints itself, so the book and the list are drawn in one go. Any wait
-        -- put the list after a finished book paint instead, and that showed as a second flash.
-        local list = viewer:showCurrentBookNotes(nil, note)
-        if then_sheet then then_sheet(note, list) end
-    end, true) -- true: open the book, don't jump to the note
-    return true
-end
--- Close the card and the list before the book opens, so the card shown afterwards is the one the
--- reader works in.
--- sheet: the annotation card that holds the Edit link; list: the full-screen list behind it.
+-- Close the card and the list: "Go to highlight" closes both before the book opens.
+-- sheet: the annotation card; list: the full-screen list behind it.
 function View:closeListForEdit(sheet, list)
     if type(sheet) == "table" and type(sheet.onClose) == "function" then
         pcall(sheet.onClose, sheet)
@@ -92,29 +58,31 @@ function View:closeListForEdit(sheet, list)
         pcall(list.onClose, list)
     end
 end
--- Changes a highlight's style or colour. The open book's live annotation is changed in place.
--- For a closed book the book is opened first and the change is then applied to KOReader's live
--- annotation by the plugin itself — the reader already chose ("underline", "blue"), so there is
--- nothing left for them to pick — and the book's list reopens with this note's card over it.
+-- Changes a highlight's style or colour. An open book's live annotation is changed in place; a
+-- closed book's sidecar is written directly and the book stays closed.
 function View:setHighlightField(note, field, value, parent_widget, done_text, sheet)
-    if not note.book_path or self:legacyBlocked(note) then return end
-    local viewer = self
-    if viewer:openBookForEdit(note, sheet, nil, function(ui, index)
-        setLiveHighlightField(ui, index, field, value)
-        viewer:clearBookCache(note.book_path)
-        if done_text then NotesListWidget.showDialog(InfoMessage:new{ text = done_text, timeout = 1 }) end
-    end) then return end
+    if not note.book_path then return end
     local ui = getLiveReader(note.book_path)
     local index = ui and findLiveIndex(ui, note)
+    local updated
     if index then
         setLiveHighlightField(ui, index, field, value)
+        updated = true
+    else
+        updated = editStoredAnnotation(note, function(item)
+            item[field] = value
+            item.datetime_updated = nowStamp()
+        end)
+    end
+    if updated then
+        note[field] = value -- the card is drawn from the note: it has to show the new value
+        if not index and type(sheet) == "table" and type(sheet.rebuild) == "function" then
+            pcall(sheet.rebuild, sheet)
+        end
         self:clearBookCache(note.book_path)
-        -- the note the card is drawn from has to carry the new value too, or the card redrawn by
-        -- the caller still shows the old choice as if nothing had happened
-        note[field] = value
         self:updateListedNote(parent_widget, note, function(n) n[field] = value end)
         if done_text then NotesListWidget.showDialog(InfoMessage:new{ text = done_text, timeout = 1 }) end
-    else
+    elseif ui then -- the book is open but its copy of this annotation is gone
         self:saveFailed()
     end
 end
@@ -134,18 +102,7 @@ function View:updateHighlightColor(note, new_color, parent_widget)
 end
 -- before_delete: runs once Delete is tapped (closes the sheet the card was opened from)
 -- sheet: the annotation card the delete came from (nil from elsewhere)
--- before_delete: runs once Delete is tapped (closes the sheet the card was opened from)
--- sheet: the annotation card the delete came from (nil from elsewhere)
 function View:confirmDelete(note, parent_widget, before_delete, sheet)
-    if self:legacyBlocked(note) then return end
-    local viewer = self
-    -- a closed book: the reader already confirmed, so the book is opened and the delete is made by
-    -- the plugin on KOReader's live annotation. The book's list is reopened so the reader can go on
-    -- with another annotation; no card is shown, since the one it was about is gone.
-    if viewer:openBookForEdit(note, sheet, nil, function(ui, index)
-        if before_delete then pcall(before_delete) end
-        viewer:deleteLiveAnnotation(ui, index, note)
-    end) then return end
     NotesListWidget.States.confirmDelete(note, function()
         if before_delete then before_delete() end
         self:deleteAnnotation(note, parent_widget)
@@ -171,18 +128,34 @@ function View:deleteLiveAnnotation(ui, index, note)
         ui:handleEvent(Event:new("AnnotationsModified", { item, index_modified = -index }))
     end
 end
+-- A closed book: the annotation is taken out of its sidecar and saved, the book stays closed.
+-- A book left without any annotation loses its "has annotations" marker in the file browser.
 function View:deleteAnnotation(note, parent_widget)
-    if not note.book_path or self:legacyBlocked(note) then return end
+    if not note.book_path then return end
     local ui = getLiveReader(note.book_path)
-    if not ui then return end
-    local index = findLiveIndex(ui, note)
+    local index = ui and findLiveIndex(ui, note)
+    local deleted
     if index then
         self:deleteLiveAnnotation(ui, index, note)
-        self:clearBookCache(note.book_path)
-        self:updateListedNote(parent_widget, note, function(_, i)
-            if parent_widget and parent_widget.notes_list then table.remove(parent_widget.notes_list, i) end
-        end)
+        deleted = true
     else
+        local remaining
+        deleted = editStoredAnnotation(note, function(_, list, i)
+            table.remove(list, i)
+            remaining = #list
+        end)
+        if deleted and remaining == 0 then
+            -- keep the file browser's "has annotations" marker in sync
+            local ok_bl, BookList = pcall(require, "ui/widget/booklist")
+            if ok_bl and BookList and BookList.setBookInfoCacheProperty then
+                BookList.setBookInfoCacheProperty(note.book_path, "has_annotations", false)
+            end
+        end
+    end
+    if deleted then
+        self:clearBookCache(note.book_path)
+        self:updateListedNote(parent_widget, note, function(_, i) table.remove(parent_widget.notes_list, i) end)
+    elseif ui then -- the book is open but its copy of this annotation is gone
         self:saveFailed()
     end
 end
@@ -296,16 +269,15 @@ function View:editQuestion(note, on_done)
     NotesListWidget.showDialog(dialog)
     dialog:onShowKeyboard()
 end
+-- The note is edited right where it is: a closed book is not opened, its sidecar is written
+-- directly when Save is tapped (View:saveNoteEdit).
 -- start_text: what the field starts with instead of the saved note (after a failed save).
 -- sheet: the annotation card holding the Edit link (nil when editNote is called from elsewhere).
 function View:editNote(note, parent_widget, on_done, start_text, sheet)
     if self:legacyBlocked(note) then return end
-    -- a closed book: open it, reopen this book's list over it and show the note dialog straight
-    -- away — the reader asked to edit the note, so that is what opens, not the card first
-    local viewer = self
-    if viewer:openBookForEdit(note, sheet, function(edited, list)
-        viewer:editNote(edited, list, nil, start_text, nil)
-    end) then return end
+    if type(sheet) == "table" and type(sheet.onClose) == "function" then
+        pcall(sheet.onClose, sheet) -- the card closes: the list under it stays, refreshed
+    end
     local InputDialog = require("ui/widget/inputdialog")
     local input_dialog
     local has_note = note.user_note and note.user_note:find("%S") ~= nil
@@ -350,48 +322,54 @@ function View:editNote(note, parent_widget, on_done, start_text, sheet)
     NotesListWidget.showDialog(input_dialog)
     input_dialog:onShowKeyboard()
 end
+-- The open book gets the note through KOReader's live annotation (as before); a closed book's
+-- sidecar is written directly, as the original plugin did.
 -- on_fail: run after the "could not save" message is closed (editNote reopens with the text).
 function View:saveNoteEdit(note, new_note_text, parent_widget, on_fail)
     if not note.book_path or self:legacyBlocked(note) then return end
     local value = new_note_text ~= "" and new_note_text or nil -- blank input deletes the note, as in KOReader
     local updated = false
     local ui = getLiveReader(note.book_path)
-    if ui then
-        local index = findLiveIndex(ui, note)
-        if index then
-            -- same steps as ReaderBookmark:setBookmarkNote()
-            local item = ui.annotation.annotations[index]
-            local getType = ui.bookmark and ui.bookmark.getBookmarkType
-            local type_before = getType and getType(item)
-            item.note = value
-            if ui.highlight and ui.highlight.writePdfAnnotation then
-                ui.highlight:writePdfAnnotation("content", item, value or "")
-            end
-            local type_after = getType and getType(item)
-            if type_before == "highlight" and type_after == "note" then
-                ui:handleEvent(Event:new("AnnotationsModified", { item, nb_highlights_added = -1, nb_notes_added = 1 }))
-            elseif type_before == "note" and type_after == "highlight" then
-                ui:handleEvent(Event:new("AnnotationsModified", { item, nb_highlights_added = 1, nb_notes_added = -1 }))
-            else
-                ui:handleEvent(Event:new("AnnotationsModified", { item }))
-            end
-            updated = true
+    local index = ui and findLiveIndex(ui, note)
+    if index then
+        -- same steps as ReaderBookmark:setBookmarkNote()
+        local item = ui.annotation.annotations[index]
+        local getType = ui.bookmark and ui.bookmark.getBookmarkType
+        local type_before = getType and getType(item)
+        item.note = value
+        if ui.highlight and ui.highlight.writePdfAnnotation then
+            ui.highlight:writePdfAnnotation("content", item, value or "")
         end
+        local type_after = getType and getType(item)
+        if type_before == "highlight" and type_after == "note" then
+            ui:handleEvent(Event:new("AnnotationsModified", { item, nb_highlights_added = -1, nb_notes_added = 1 }))
+        elseif type_before == "note" and type_after == "highlight" then
+            ui:handleEvent(Event:new("AnnotationsModified", { item, nb_highlights_added = 1, nb_notes_added = -1 }))
+        else
+            ui:handleEvent(Event:new("AnnotationsModified", { item }))
+        end
+        updated = true
+    else
+        -- a closed book: the sidecar is written directly, as the original plugin did
+        updated = editStoredAnnotation(note, function(item)
+            item.note = value
+            item.datetime_updated = nowStamp()
+        end)
     end
     if updated then
+        -- the note the card is drawn from carries the new text too (the card is rebuilt afterwards)
+        note.user_note = value
         self:clearBookCache(note.book_path)
         self:updateListedNote(parent_widget, note, function(n) n.user_note = value end)
         NotesListWidget.showDialog(InfoMessage:new{ text = _("Note saved."), timeout = 1 })
-    else
+    elseif ui then -- the book is open but its copy of this annotation is gone
         self:saveFailed(on_fail)
     end
 end
--- Opens the note's book. on_ready runs first (the list closes itself there), then after_open(ui)
--- once the book is laid out. Without no_jump the book is also shown at the highlight's place.
--- An edit made while the book is closed is written to the sidecar behind KOReader's back, and
--- opening the book afterwards brought the old data back (the style reverted, a new note showed up
--- as a second copy of the highlight), so every edit opens the book first and is then made through
--- KOReader's own live annotations.
+-- Opens the note's book: "Go to highlight" and reading a card in the book's own list use this.
+-- Editing never does: an edit of a closed book writes its sidecar directly.
+-- on_ready runs first (the card and the list close themselves there), then after_open(ui) once the
+-- book is laid out. Without no_jump the book is also shown at the highlight's place.
 function View:openBookAtNote(note, on_ready, after_open, no_jump)
     local book_path = note.book_path
     if not book_path then
