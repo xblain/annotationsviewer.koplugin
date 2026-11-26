@@ -26,6 +26,11 @@ Key behaviors:
 - Edit note text in-place and save back to the book's settings
 - Change highlight style and color and save back to book settings
 - Delete annotations
+
+Editing a book that is not currently open no longer opens it: the style, colour, note or delete
+is written straight into that book's sidecar, and the book stays closed. An open book is changed
+live, through KOReader's own annotations.
+
 - Go to the highlighted location in the reader
 - **Review mode**: cover annotation text to test your recall (see below)
 - **Custom cover**: per annotation, hide only the words you picked, or replace the text
