@@ -488,7 +488,9 @@ function AnnotationSheet:build()
     local edit_link = TapBox:new{
         decoratedText(link, "underline", BlitBuffer.COLOR_BLACK),
         callback = function()
-            viewer:editNote(note, parent, function() self:rebuild() end, nil, self)
+            -- editNote closes the card itself (the list stays under it); pass no rebuild: the card
+            -- is gone by the time the note is saved
+            viewer:editNote(note, parent, nil, nil, self)
         end,
     }
     table.insert(group, sectionLabel(_("YOUR NOTE"), edit_link))
