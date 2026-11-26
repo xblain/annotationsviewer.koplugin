@@ -439,6 +439,34 @@ function Core.getLiveReader(book_path)
     end
 end
 
+-- The book isn't open: find the annotation for `note` in its sidecar, call fn(item, list, index)
+-- on it and save the sidecar. Returns true if the annotation was found. As in the original plugin.
+function Core.editStoredAnnotation(note, fn)
+    local ok, doc_settings = pcall(DocSettings.open, DocSettings, note.book_path)
+    if not ok or not doc_settings or not doc_settings.data then return false end
+    local data = doc_settings.data
+    local found = false
+    if type(data.annotations) == "table" then
+        for i, item in ipairs(data.annotations) do
+            if Core.itemMatchesNote(item, note) then fn(item, data.annotations, i); found = true; break end
+        end
+    end
+    if not found then -- legacy format (KOReader < 2024)
+        for _, page_highlights in pairs(data.highlight or {}) do
+            if type(page_highlights) == "table" then
+                for i, hl in ipairs(page_highlights) do
+                    if Core.itemMatchesNote(hl, note) then fn(hl, page_highlights, i); found = true; break end
+                end
+            end
+            if found then break end
+        end
+    end
+    if found then doc_settings:flush() end
+    return found
+end
+
+function Core.nowStamp() return os.date("%Y-%m-%d %H:%M:%S") end
+
 function Core.getBookInfoKey(sidecar_key, sidecar)
     local dir = sidecar and sidecar:match("^(.*)/")
     return sidecar_key .. "|" .. ((dir and Core.fileStamp(dir .. "/custom_metadata.lua")) or "")
