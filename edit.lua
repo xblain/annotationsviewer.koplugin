@@ -317,6 +317,9 @@ function View:editNote(note, parent_widget, on_done, start_text, sheet)
         input_hint = note.bookmark and _("Your note on this page") or _("Your note on this passage"),
         input_type = "text",
         text_height = Screen:scaleBySize(120),
+        -- Enter types a new line instead of pressing Save: a note is often more than one line.
+        -- With allow_newline InputDialog drops the Enter-to-save behaviour of is_enter_default.
+        allow_newline = true,
         buttons = { row },
     }
     NotesListWidget.showDialog(input_dialog)
